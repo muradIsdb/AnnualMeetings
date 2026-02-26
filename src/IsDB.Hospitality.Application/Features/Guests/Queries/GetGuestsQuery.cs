@@ -20,7 +20,7 @@ public class GetGuestsQueryHandler : IRequestHandler<GetGuestsQuery, List<GuestS
 
     public async Task<List<GuestSummaryDto>> Handle(GetGuestsQuery request, CancellationToken cancellationToken)
     {
-        var query = _context.Guests.AsQueryable();
+        var query = _context.Guests.Where(g => g.IsActive).AsQueryable();
 
         if (request.Status.HasValue)
             query = query.Where(g => g.Status == request.Status.Value);

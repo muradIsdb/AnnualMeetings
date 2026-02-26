@@ -147,23 +147,75 @@ public class RegistrationTypesController : ApiControllerBase
     }
 
     /// <summary>
-    /// Bulk update sync selection — pass array of IDs that should be selected
+    /// Bulk update sync selection — pass array of IDs that should be selected.
+    /// Automatically deactivates guests whose type is deselected, and reactivates guests whose type is re-selected.
     /// </summary>
     [HttpPost("sync-selection")]
     public async Task<IActionResult> UpdateSyncSelection([FromBody] UpdateSyncSelectionRequest request)
     {
         var allTypes = await _context.RegistrationTypes.ToListAsync();
 
+        var deselectedEventAirIds = new List<string>();
+        var reselectedEventAirIds = new List<string>();
+
         foreach (var regType in allTypes)
         {
-            regType.IsSelectedForSync = request.SelectedIds.Contains(regType.Id);
+            bool wasSelected = regType.IsSelectedForSync;
+            bool nowSelected = request.SelectedIds.Contains(regType.Id);
+
+            if (wasSelected && !nowSelected && !string.IsNullOrEmpty(regType.EventsAirId))
+                deselectedEventAirIds.Add(regType.EventsAirId.ToUpper());
+            else if (!wasSelected && nowSelected && !string.IsNullOrEmpty(regType.EventsAirId))
+                reselectedEventAirIds.Add(regType.EventsAirId.ToUpper());
+
+            regType.IsSelectedForSync = nowSelected;
             regType.UpdatedAt = DateTime.UtcNow;
         }
 
         await _context.SaveChangesAsync();
 
+        // Deactivate guests whose registration type was deselected
+        int deactivated = 0;
+        if (deselectedEventAirIds.Count > 0)
+        {
+            var guestsToDeactivate = await _context.Guests
+                .Where(g => g.IsActive && g.RegistrationTypeId != null &&
+                            deselectedEventAirIds.Contains(g.RegistrationTypeId.ToUpper()))
+                .ToListAsync();
+            foreach (var g in guestsToDeactivate)
+            {
+                g.IsActive = false;
+                g.UpdatedAt = DateTime.UtcNow;
+            }
+            deactivated = guestsToDeactivate.Count;
+            if (deactivated > 0) await _context.SaveChangesAsync();
+        }
+
+        // Reactivate guests whose registration type was re-selected
+        int reactivated = 0;
+        if (reselectedEventAirIds.Count > 0)
+        {
+            var guestsToReactivate = await _context.Guests
+                .Where(g => !g.IsActive && g.RegistrationTypeId != null &&
+                            reselectedEventAirIds.Contains(g.RegistrationTypeId.ToUpper()))
+                .ToListAsync();
+            foreach (var g in guestsToReactivate)
+            {
+                g.IsActive = true;
+                g.UpdatedAt = DateTime.UtcNow;
+            }
+            reactivated = guestsToReactivate.Count;
+            if (reactivated > 0) await _context.SaveChangesAsync();
+        }
+
         var selectedCount = allTypes.Count(r => r.IsSelectedForSync);
-        return Ok(new { message = $"Sync selection updated. {selectedCount} type(s) selected for sync.", selectedCount });
+        return Ok(new
+        {
+            message = $"Sync selection updated. {selectedCount} type(s) selected for sync. {deactivated} participant(s) deactivated, {reactivated} reactivated.",
+            selectedCount,
+            deactivated,
+            reactivated
+        });
     }
 
     /// <summary>

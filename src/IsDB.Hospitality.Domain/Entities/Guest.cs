@@ -32,6 +32,9 @@ public class Guest : BaseEntity
     /// <summary>Human-readable registration type name, e.g. "Governor"</summary>
     public string? RegistrationTypeName { get; set; }
 
+    /// <summary>Whether this guest is active (visible in operations). Set to false when their registration type is deselected from sync.</summary>
+    public bool IsActive { get; set; } = true;
+
     // Navigation properties
     public ICollection<Flight> Flights { get; set; } = new List<Flight>();
     public ICollection<ChecklistCompletion> ChecklistCompletions { get; set; } = new List<ChecklistCompletion>();

@@ -21,6 +21,8 @@ public interface IAppDbContext
     DbSet<PickupDayOption> PickupDayOptions { get; }
     DbSet<PickupHourOption> PickupHourOptions { get; }
     DbSet<RegistrationType> RegistrationTypes { get; }
+    DbSet<SyncFieldMapping> SyncFieldMappings { get; }
+    DbSet<SyncFieldValue> SyncFieldValues { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

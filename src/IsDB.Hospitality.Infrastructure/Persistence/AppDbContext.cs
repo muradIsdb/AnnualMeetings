@@ -24,6 +24,8 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<PickupDayOption> PickupDayOptions => Set<PickupDayOption>();
     public DbSet<PickupHourOption> PickupHourOptions => Set<PickupHourOption>();
     public DbSet<RegistrationType> RegistrationTypes => Set<RegistrationType>();
+    public DbSet<SyncFieldMapping> SyncFieldMappings => Set<SyncFieldMapping>();
+    public DbSet<SyncFieldValue> SyncFieldValues => Set<SyncFieldValue>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

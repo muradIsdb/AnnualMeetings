@@ -12,6 +12,8 @@ import {
   Plug,
   Settings,
   ListChecks,
+  Sliders,
+  UserX,
 } from 'lucide-react'
 
 const navItems = [
@@ -50,8 +52,23 @@ const adminNavItems = [
   },
   {
     to: '/integrations/registration-types',
-    label: 'Registration Types',
+    label: 'Sync Filters',
     icon: ListChecks,
+    roles: [UserRole.Administrator],
+  },
+  {
+    to: '/integrations/field-mappings',
+    label: 'Field Mappings',
+    icon: Sliders,
+    roles: [UserRole.Administrator],
+  },
+]
+
+const dataNavItems = [
+  {
+    to: '/data/inactive-participants',
+    label: 'Inactive Participants',
+    icon: UserX,
     roles: [UserRole.Administrator],
   },
 ]
@@ -121,6 +138,25 @@ export default function AppLayout() {
                 <p className="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Integrations</p>
               </div>
               {adminNavItems.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                      isActive
+                        ? 'bg-isdb-green text-white'
+                        : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                    }`
+                  }
+                >
+                  <item.icon className="w-4 h-4" />
+                  {item.label}
+                </NavLink>
+              ))}
+              <div className="pt-3 pb-1">
+                <p className="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Data Management</p>
+              </div>
+              {dataNavItems.map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}

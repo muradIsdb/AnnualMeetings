@@ -13,6 +13,8 @@ import DepartureFormPage from './pages/departure/DepartureFormPage'
 import AppLayout from './components/layout/AppLayout'
 import EventsAirConfigPage from './pages/integrations/EventsAirConfigPage'
 import RegistrationTypesPage from './pages/integrations/RegistrationTypesPage'
+import FieldMappingsPage from './pages/integrations/FieldMappingsPage'
+import InactiveParticipantsPage from './pages/data/InactiveParticipantsPage'
 import SettingsPage from './pages/settings/SettingsPage'
 
 function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: UserRole[] }) {
@@ -96,10 +98,22 @@ export default function App() {
             </ProtectedRoute>
           } />
 
-          {/* Registration Types — Admin Only */}
           <Route path="integrations/registration-types" element={
             <ProtectedRoute allowedRoles={[UserRole.Administrator]}>
               <RegistrationTypesPage />
+            </ProtectedRoute>
+          } />
+
+          <Route path="integrations/field-mappings" element={
+            <ProtectedRoute allowedRoles={[UserRole.Administrator]}>
+              <FieldMappingsPage />
+            </ProtectedRoute>
+          } />
+
+          {/* Data Management — Admin Only */}
+          <Route path="data/inactive-participants" element={
+            <ProtectedRoute allowedRoles={[UserRole.Administrator]}>
+              <InactiveParticipantsPage />
             </ProtectedRoute>
           } />
 

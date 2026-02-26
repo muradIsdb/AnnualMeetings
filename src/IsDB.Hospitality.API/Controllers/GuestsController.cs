@@ -56,8 +56,62 @@ public class GuestsController : ApiControllerBase
     }
 
     /// <summary>
+    /// GET /api/guests/inactive
+    /// Returns all guests marked as IsActive = false.
+    /// </summary>
+    [HttpGet("inactive")]
+    public async Task<IActionResult> GetInactiveGuests([FromServices] AppDbContext db, CancellationToken ct)
+    {
+        var guests = await db.Guests
+            .Where(g => !g.IsActive)
+            .OrderBy(g => g.LastName).ThenBy(g => g.FirstName)
+            .Select(g => new
+            {
+                g.Id,
+                g.FirstName,
+                g.LastName,
+                g.RegistrationTypeName,
+                g.Organization,
+                g.Email,
+                g.LastSyncedAt
+            })
+            .ToListAsync(ct);
+        return Ok(guests);
+    }
+
+    /// <summary>
+    /// DELETE /api/guests/inactive/all
+    /// Permanently deletes all inactive guests.
+    /// </summary>
+    [HttpDelete("inactive/all")]
+    public async Task<IActionResult> DeleteAllInactiveGuests([FromServices] AppDbContext db, CancellationToken ct)
+    {
+        var inactive = await db.Guests.Where(g => !g.IsActive).ToListAsync(ct);
+        var count = inactive.Count;
+        db.Guests.RemoveRange(inactive);
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = $"{count} inactive participant(s) permanently deleted.", deleted = count });
+    }
+
+    /// <summary>
+    /// DELETE /api/guests/{id}
+    /// Permanently deletes a single guest.
+    /// </summary>
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> DeleteGuest(Guid id, [FromServices] AppDbContext db, CancellationToken ct)
+    {
+        var guest = await db.Guests.FindAsync(new object[] { id }, ct);
+        if (guest == null) return NotFound();
+        db.Guests.Remove(guest);
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Participant permanently deleted." });
+    }
+
+    /// <summary>
     /// POST /api/guests/sync-from-eventsair
-    /// Starts a background sync of participants from EventsAir filtered by selected registration types.
+    /// Starts a background sync of participants from EventsAir.
+    /// Fetches participants whose Registration Type is selected for sync OR whose custom field
+    /// values (e.g. Rank) match the selected values — whichever applies (OR logic).
     /// Returns immediately with a jobId. Poll GET /api/guests/sync-status/{jobId} for progress.
     /// </summary>
     [HttpPost("sync-from-eventsair")]
@@ -84,15 +138,29 @@ public class GuestsController : ApiControllerBase
             .Select(rt => rt.EventsAirId!)
             .ToListAsync(cancellationToken);
 
-        if (selectedTypeIds.Count == 0)
+        // 3. Get selected custom field values per field mapping (e.g. Rank)
+        var fieldFilters = await db.SyncFieldMappings
+            .Include(m => m.SelectedValues)
+            .Where(m => m.SelectedValues.Any(v => v.IsSelectedForSync))
+            .Select(m => new FieldFilter
+            {
+                FieldGuid = m.EventsAirFieldGuid,
+                SelectedValues = m.SelectedValues
+                    .Where(v => v.IsSelectedForSync)
+                    .Select(v => v.Value)
+                    .ToList()
+            })
+            .ToListAsync(cancellationToken);
+
+        if (selectedTypeIds.Count == 0 && fieldFilters.Count == 0)
         {
             return BadRequest(new
             {
-                message = "No registration types are selected for sync. Please select at least one registration type in the Registration Types page."
+                message = "No registration types or custom field values are selected for sync. Please select at least one filter in the Registration Types page."
             });
         }
 
-        // 3. Create job and start background sync
+        // 4. Create job and start background sync
         var jobId = Guid.NewGuid().ToString("N");
         var job = new SyncJobStatus { JobId = jobId, State = "running", StartedAt = DateTime.UtcNow };
         _syncJobs[jobId] = job;
@@ -103,6 +171,7 @@ public class GuestsController : ApiControllerBase
         var eventCode = config.EventCode;
         var apiBaseUrl = config.ApiBaseUrl;
         var typeIds = selectedTypeIds.ToList();
+        var filters = fieldFilters.ToList();
 
         _ = Task.Run(async () =>
         {
@@ -111,17 +180,17 @@ public class GuestsController : ApiControllerBase
                 // Get token
                 var token = await GetEventsAirTokenAsync(clientId, clientSecret, httpClientFactory, cache);
 
-                // Fetch all registrations
-                var allowedIds = new HashSet<string>(typeIds, StringComparer.OrdinalIgnoreCase);
+                // Fetch all registrations with OR filter
+                var allowedTypeIds = new HashSet<string>(typeIds, StringComparer.OrdinalIgnoreCase);
                 var registrations = await FetchRegistrationsFromEventsAirAsync(
-                    apiBaseUrl, eventCode, token, allowedIds, httpClientFactory, CancellationToken.None);
+                    apiBaseUrl, eventCode, token, allowedTypeIds, filters, httpClientFactory, CancellationToken.None);
 
                 job.TotalFetched = registrations.Count;
 
                 if (registrations.Count == 0)
                 {
                     job.State = "done";
-                    job.Message = "No participants found in EventsAir for the selected registration types.";
+                    job.Message = "No participants found in EventsAir matching the selected filters.";
                     job.Added = 0;
                     job.Updated = 0;
                     return;
@@ -152,6 +221,7 @@ public class GuestsController : ApiControllerBase
                             Email = reg.PrimaryEmail,
                             RegistrationTypeId = reg.RegistrationTypeId,
                             RegistrationTypeName = reg.RegistrationTypeName,
+                            IsActive = true,
                             Status = GuestStatus.Expected,
                             LastSyncedAt = DateTime.UtcNow
                         });
@@ -166,6 +236,8 @@ public class GuestsController : ApiControllerBase
                         if (existing.Organization != reg.OrganizationName) { existing.Organization = reg.OrganizationName; changed = true; }
                         if (existing.RegistrationTypeName != reg.RegistrationTypeName) { existing.RegistrationTypeName = reg.RegistrationTypeName; changed = true; }
                         if (existing.RegistrationTypeId != reg.RegistrationTypeId) { existing.RegistrationTypeId = reg.RegistrationTypeId; changed = true; }
+                        // Reactivate if previously deactivated
+                        if (!existing.IsActive) { existing.IsActive = true; changed = true; }
                         if (changed) { existing.LastSyncedAt = DateTime.UtcNow; updated++; }
                     }
                 }
@@ -192,7 +264,8 @@ public class GuestsController : ApiControllerBase
         {
             jobId,
             message = "Sync started in background. Poll /api/guests/sync-status/{jobId} for progress.",
-            selectedTypeCount = typeIds.Count
+            selectedTypeCount = typeIds.Count,
+            fieldFilterCount = filters.Count
         });
     }
 
@@ -263,26 +336,39 @@ public class GuestsController : ApiControllerBase
         return token;
     }
 
+    /// <summary>
+    /// Fetches registrations from EventsAir applying OR logic:
+    /// Include a registration if its type ID is in allowedTypeIds
+    /// OR if any of its contact's custom field values match a configured filter.
+    /// </summary>
     private static async Task<List<EventsAirRegistrationRaw>> FetchRegistrationsFromEventsAirAsync(
         string baseUrl,
         string eventCode,
         string accessToken,
         HashSet<string> allowedTypeIds,
+        List<FieldFilter> fieldFilters,
         IHttpClientFactory httpClientFactory,
         CancellationToken cancellationToken)
     {
         var result = new List<EventsAirRegistrationRaw>();
+        var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
         client.Timeout = TimeSpan.FromMinutes(5);
 
         int offset = 0;
         const int pageSize = 200;
+        bool hasFieldFilters = fieldFilters.Count > 0;
 
         while (true)
         {
+            // Build query — include customFields only if we have field filters to apply
+            string customFieldsFragment = hasFieldFilters
+                ? "customFields { field { id } value }"
+                : string.Empty;
+
             var queryBody = JsonSerializer.Serialize(new
             {
-                query = $"{{ event(id: \"{eventCode}\") {{ registrations(limit: {pageSize}, offset: {offset}) {{ id type {{ id name uniqueCode }} contact {{ id firstName lastName title jobTitle organizationName primaryEmail }} }} }} }}"
+                query = $"{{ event(id: \"{eventCode}\") {{ registrations(limit: {pageSize}, offset: {offset}) {{ id type {{ id name uniqueCode }} contact {{ id firstName lastName title jobTitle organizationName primaryEmail {customFieldsFragment} }} }} }} }}"
             });
 
             var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/graphql")
@@ -317,19 +403,53 @@ public class GuestsController : ApiControllerBase
             {
                 pageCount++;
 
-                if (!reg.TryGetProperty("type", out var typeEl) || typeEl.ValueKind == JsonValueKind.Null)
-                    continue;
-
-                var typeId = typeEl.TryGetProperty("id", out var tidEl) ? tidEl.GetString() ?? string.Empty : string.Empty;
-
-                if (allowedTypeIds.Count > 0 && !allowedTypeIds.Contains(typeId))
-                    continue;
-
                 if (!reg.TryGetProperty("contact", out var contactEl) || contactEl.ValueKind == JsonValueKind.Null)
                     continue;
 
                 var contactId = contactEl.TryGetProperty("id", out var cidEl) ? cidEl.GetString() ?? string.Empty : string.Empty;
-                if (string.IsNullOrEmpty(contactId)) continue;
+                if (string.IsNullOrEmpty(contactId) || !seenContactIds.Add(contactId))
+                    continue;
+
+                // Get registration type
+                string typeId = string.Empty;
+                string typeName = string.Empty;
+                if (reg.TryGetProperty("type", out var typeEl) && typeEl.ValueKind != JsonValueKind.Null)
+                {
+                    typeId = typeEl.TryGetProperty("id", out var tidEl) ? tidEl.GetString() ?? string.Empty : string.Empty;
+                    typeName = typeEl.TryGetProperty("name", out var tn) ? tn.GetString() ?? string.Empty : string.Empty;
+                }
+
+                // OR filter: include if type matches OR if any custom field value matches
+                bool matchesType = allowedTypeIds.Count > 0 && allowedTypeIds.Contains(typeId);
+                bool matchesField = false;
+
+                if (!matchesType && hasFieldFilters)
+                {
+                    // Check custom fields
+                    if (contactEl.TryGetProperty("customFields", out var customFields) && customFields.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var cf in customFields.EnumerateArray())
+                        {
+                            if (!cf.TryGetProperty("field", out var field) || field.ValueKind == JsonValueKind.Null) continue;
+                            var fieldId = field.TryGetProperty("id", out var fid) ? fid.GetString() ?? "" : "";
+                            var value = cf.TryGetProperty("value", out var v) && v.ValueKind != JsonValueKind.Null ? v.GetString() : null;
+                            if (string.IsNullOrWhiteSpace(value)) continue;
+
+                            foreach (var filter in fieldFilters)
+                            {
+                                if (string.Equals(fieldId, filter.FieldGuid, StringComparison.OrdinalIgnoreCase) &&
+                                    filter.SelectedValues.Any(sv => string.Equals(sv, value, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    matchesField = true;
+                                    break;
+                                }
+                            }
+                            if (matchesField) break;
+                        }
+                    }
+                }
+
+                if (!matchesType && !matchesField) continue;
 
                 result.Add(new EventsAirRegistrationRaw(
                     ContactId: contactId,
@@ -340,7 +460,7 @@ public class GuestsController : ApiControllerBase
                     OrganizationName: contactEl.TryGetProperty("organizationName", out var org) && org.ValueKind != JsonValueKind.Null ? org.GetString() : null,
                     PrimaryEmail: contactEl.TryGetProperty("primaryEmail", out var em) && em.ValueKind != JsonValueKind.Null ? em.GetString() : null,
                     RegistrationTypeId: typeId,
-                    RegistrationTypeName: typeEl.TryGetProperty("name", out var tn) ? tn.GetString() ?? string.Empty : string.Empty
+                    RegistrationTypeName: typeName
                 ));
             }
 
@@ -373,6 +493,12 @@ public class GuestsController : ApiControllerBase
         public int TotalFetched { get; set; }
         public DateTime StartedAt { get; set; }
         public DateTime? FinishedAt { get; set; }
+    }
+
+    private class FieldFilter
+    {
+        public string FieldGuid { get; set; } = string.Empty;
+        public List<string> SelectedValues { get; set; } = new();
     }
 }
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import apiClient from '../../api/client';
 
 interface RegistrationType {
@@ -10,159 +11,169 @@ interface RegistrationType {
   isSelectedForSync: boolean;
   isFromEventsAir: boolean;
   sortOrder: number;
+  eventsAirId?: string;
 }
 
-interface ImportResult {
-  message: string;
-  imported: number;
-  skipped: number;
-  total?: number;
+interface SyncFieldValue {
+  id: string;
+  value: string;
+  isSelectedForSync: boolean;
 }
 
-const fetchRegistrationTypes = async (): Promise<RegistrationType[]> => {
-  const res = await apiClient.get('/registration-types');
-  return res.data;
-};
+interface SyncFieldMapping {
+  id: string;
+  displayName: string;
+  eventsAirFieldGuid: string;
+  description?: string;
+  sortOrder: number;
+  selectedValues: SyncFieldValue[];
+}
 
 export default function RegistrationTypesPage() {
   const queryClient = useQueryClient();
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [initialized, setInitialized] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [saveMessage, setSaveMessage] = useState('');
+  const [activeTab, setActiveTab] = useState<'registration-types' | string>('registration-types');
 
-  // Add form state
+  // ── Registration Types state ──────────────────────────────────────────────
+  const [selectedTypeIds, setSelectedTypeIds] = useState<Set<string>>(new Set());
+  const [typesInitialized, setTypesInitialized] = useState(false);
+  const [typesSaveStatus, setTypesSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [typesSaveMsg, setTypesSaveMsg] = useState('');
+  const [importStatus, setImportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [importMsg, setImportMsg] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   const [newName, setNewName] = useState('');
   const [newCode, setNewCode] = useState('');
-  const [newDescription, setNewDescription] = useState('');
-  const [addError, setAddError] = useState('');
+  const [newDesc, setNewDesc] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
-  // Import from EventsAir state
-  const [importStatus, setImportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  // ── Field mapping state ───────────────────────────────────────────────────
+  const [selectedValueIds, setSelectedValueIds] = useState<Record<string, Set<string>>>({});
+  const [fieldSaveStatus, setFieldSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [fieldSaveMsg, setFieldSaveMsg] = useState('');
 
-  const { data: types = [] as RegistrationType[], isLoading, error } = useQuery<RegistrationType[]>({
+  // ── Queries ───────────────────────────────────────────────────────────────
+  const { data: types = [], isLoading: typesLoading } = useQuery<RegistrationType[]>({
     queryKey: ['registration-types'],
-    queryFn: fetchRegistrationTypes,
+    queryFn: () => apiClient.get('/registration-types').then(r => r.data),
   });
 
-  useEffect(() => {
-    if (types.length > 0 && !initialized) {
-      const preSelected = new Set(
-        types.filter((t: RegistrationType) => t.isSelectedForSync).map((t: RegistrationType) => t.id)
-      );
-      setSelectedIds(preSelected);
-      setInitialized(true);
-    }
-  }, [types, initialized]);
+  const { data: fieldMappings = [], isLoading: mappingsLoading } = useQuery<SyncFieldMapping[]>({
+    queryKey: ['sync-field-mappings'],
+    queryFn: () => apiClient.get('/sync-field-mappings').then(r => r.data),
+  });
 
-  const saveMutation = useMutation({
-    mutationFn: async (ids: string[]) => {
-      const res = await apiClient.post('/registration-types/sync-selection', {
-        selectedIds: ids,
+  // Initialise type selections from server
+  useEffect(() => {
+    if (types.length > 0 && !typesInitialized) {
+      setSelectedTypeIds(new Set(types.filter(t => t.isSelectedForSync).map(t => t.id)));
+      setTypesInitialized(true);
+    }
+  }, [types, typesInitialized]);
+
+  // Initialise field value selections from server
+  useEffect(() => {
+    if (fieldMappings.length > 0) {
+      const init: Record<string, Set<string>> = {};
+      fieldMappings.forEach(m => {
+        init[m.id] = new Set(m.selectedValues.filter(v => v.isSelectedForSync).map(v => v.id));
       });
-      return res.data;
-    },
+      setSelectedValueIds(init);
+    }
+  }, [fieldMappings]);
+
+  // ── Mutations ─────────────────────────────────────────────────────────────
+  const saveTypesMutation = useMutation({
+    mutationFn: (ids: string[]) =>
+      apiClient.post('/registration-types/sync-selection', { selectedIds: ids }).then(r => r.data),
     onSuccess: (data) => {
-      setSaveStatus('saved');
-      setSaveMessage(data.message);
+      setTypesSaveStatus('saved');
+      let msg = data.message || 'Selection saved.';
+      if (data.deactivated > 0) msg += ` ${data.deactivated} participant(s) deactivated.`;
+      if (data.reactivated > 0) msg += ` ${data.reactivated} participant(s) reactivated.`;
+      setTypesSaveMsg(msg);
       queryClient.invalidateQueries({ queryKey: ['registration-types'] });
-      setTimeout(() => setSaveStatus('idle'), 3000);
+      setTimeout(() => setTypesSaveStatus('idle'), 4000);
     },
     onError: () => {
-      setSaveStatus('error');
-      setSaveMessage('Failed to save selection. Please try again.');
+      setTypesSaveStatus('error');
+      setTypesSaveMsg('Failed to save selection. Please try again.');
     },
   });
 
-  const addMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiClient.post('/registration-types', {
-        name: newName,
-        code: newCode || undefined,
-        description: newDescription || undefined,
-        isSelectedForSync: false,
-        sortOrder: types.length,
-      });
-      return res.data;
-    },
+  const addTypeMutation = useMutation({
+    mutationFn: () =>
+      apiClient.post('/registration-types', { name: newName, code: newCode || undefined, description: newDesc || undefined, isSelectedForSync: false, sortOrder: types.length }),
     onSuccess: () => {
-      setNewName('');
-      setNewCode('');
-      setNewDescription('');
-      setAddError('');
+      setNewName(''); setNewCode(''); setNewDesc('');
       setShowAddForm(false);
       queryClient.invalidateQueries({ queryKey: ['registration-types'] });
     },
-    onError: (err: any) => {
-      setAddError(err?.response?.data?.message || 'Failed to add registration type.');
-    },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      await apiClient.delete(`/registration-types/${id}`);
-    },
+  const deleteTypeMutation = useMutation({
+    mutationFn: (id: string) => apiClient.delete(`/registration-types/${id}`),
     onSuccess: (_, id) => {
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
+      setSelectedTypeIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+      setDeleteConfirm(null);
       queryClient.invalidateQueries({ queryKey: ['registration-types'] });
     },
   });
 
-  const handleImportFromEventsAir = async () => {
+  const saveFieldSelectionMutation = useMutation({
+    mutationFn: ({ mappingId, ids }: { mappingId: string; ids: string[] }) =>
+      apiClient.post(`/sync-field-mappings/${mappingId}/value-selection`, { selectedValueIds: ids }).then(r => r.data),
+    onSuccess: (data) => {
+      setFieldSaveStatus('saved');
+      setFieldSaveMsg(data.message || 'Selection saved.');
+      queryClient.invalidateQueries({ queryKey: ['sync-field-mappings'] });
+      setTimeout(() => setFieldSaveStatus('idle'), 4000);
+    },
+    onError: () => {
+      setFieldSaveStatus('error');
+      setFieldSaveMsg('Failed to save selection.');
+    },
+  });
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const toggleType = (id: string) => {
+    setSelectedTypeIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setTypesSaveStatus('idle');
+  };
+
+  const toggleFieldValue = (mappingId: string, valueId: string) => {
+    setSelectedValueIds(prev => {
+      const cur = new Set(prev[mappingId] || []);
+      cur.has(valueId) ? cur.delete(valueId) : cur.add(valueId);
+      return { ...prev, [mappingId]: cur };
+    });
+    setFieldSaveStatus('idle');
+  };
+
+  const handleImport = async () => {
     setImportStatus('loading');
-    setImportResult(null);
+    setImportMsg('');
     try {
       const res = await apiClient.post('/registration-types/import-from-eventsair');
-      setImportResult(res.data);
+      setImportMsg(res.data.message);
       setImportStatus('success');
-      // Refresh the list
+      setTypesInitialized(false);
       queryClient.invalidateQueries({ queryKey: ['registration-types'] });
-      // Reset initialized so new items get their sync state loaded
-      setInitialized(false);
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ||
-        'Failed to import from EventsAir. Please check your connection settings.';
-      setImportResult({ message: msg, imported: 0, skipped: 0 });
+      setImportMsg(err?.response?.data?.message || 'Failed to import from EventsAir.');
       setImportStatus('error');
     }
   };
 
-  const toggleSelect = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-    setSaveStatus('idle');
-  };
+  // ── Tabs ──────────────────────────────────────────────────────────────────
+  const tabs = [
+    { id: 'registration-types', label: 'Registration Types' },
+    ...fieldMappings.map(m => ({ id: m.id, label: m.displayName })),
+  ];
 
-  const selectAll = () => {
-    setSelectedIds(new Set(types.map((t) => t.id)));
-    setSaveStatus('idle');
-  };
+  const isLoading = typesLoading || mappingsLoading;
+  const hasTypeChanges = typesInitialized && types.some(t => t.isSelectedForSync !== selectedTypeIds.has(t.id));
 
-  const clearAll = () => {
-    setSelectedIds(new Set());
-    setSaveStatus('idle');
-  };
-
-  const handleSave = () => {
-    setSaveStatus('saving');
-    saveMutation.mutate(Array.from(selectedIds));
-  };
-
-  const hasChanges = initialized && types.some(
-    (t) => t.isSelectedForSync !== selectedIds.has(t.id)
-  );
-
+  // ── Render ────────────────────────────────────────────────────────────────
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -171,320 +182,265 @@ export default function RegistrationTypesPage() {
     );
   }
 
-  if (error) {
-    return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700">
-        Failed to load registration types. Please refresh the page.
-      </div>
-    );
-  }
-
-  const eventsAirCount = types.filter((t) => t.isFromEventsAir).length;
-  const manualCount = types.filter((t) => !t.isFromEventsAir).length;
-
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6 p-6">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Registration Types</h1>
-          <p className="text-gray-500 mt-1">
-            Select which registration types should be synchronised from EventsAir. Only guests with selected types will be imported.
+          <h1 className="text-2xl font-bold text-gray-900">Sync Filters</h1>
+          <p className="text-gray-500 mt-1 text-sm">
+            Select which registration types and custom field values to include in the EventsAir participant sync.
+            Participants matching <strong>any</strong> selected filter will be synced (OR logic).
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* Load from EventsAir — primary action */}
-          <button
-            onClick={handleImportFromEventsAir}
-            disabled={importStatus === 'loading'}
-            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors text-sm font-medium shadow-sm"
-          >
-            {importStatus === 'loading' ? (
-              <>
-                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                </svg>
-                Loading from EventsAir…
-              </>
-            ) : (
-              <>
-                {/* Cloud download icon */}
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
-                </svg>
-                Load from EventsAir
-              </>
-            )}
-          </button>
-
-          {/* Add manually */}
-          <button
-            onClick={() => setShowAddForm(!showAddForm)}
-            className="flex items-center gap-2 bg-green-700 text-white px-4 py-2 rounded-lg hover:bg-green-800 transition-colors text-sm font-medium"
-          >
-            <span>+</span> Add Manually
-          </button>
-        </div>
-      </div>
-
-      {/* Import result banner */}
-      {importResult && importStatus !== 'idle' && (
-        <div
-          className={`rounded-xl p-4 text-sm flex items-start gap-3 ${
-            importStatus === 'success'
-              ? 'bg-blue-50 border border-blue-200 text-blue-800'
-              : 'bg-red-50 border border-red-200 text-red-700'
-          }`}
+        <Link
+          to="/integrations/field-mappings"
+          className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 whitespace-nowrap"
         >
-          <span className="text-lg leading-none mt-0.5">
-            {importStatus === 'success' ? '✓' : '✗'}
-          </span>
-          <div>
-            <p className="font-medium">{importResult.message}</p>
-            {importStatus === 'success' && importResult.total !== undefined && (
-              <p className="mt-1 text-blue-600">
-                {importResult.imported} new type(s) added · {importResult.skipped} already existed · {importResult.total} total in EventsAir
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          Field Mappings
+        </Link>
+      </div>
+
+      {/* Tabs */}
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex gap-4 overflow-x-auto">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`whitespace-nowrap border-b-2 px-1 py-3 text-sm font-medium transition-colors ${
+                activeTab === tab.id
+                  ? 'border-green-600 text-green-700'
+                  : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+              }`}
+            >
+              {tab.label}
+              {tab.id === 'registration-types' && (
+                <span className="ml-1.5 rounded-full bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
+                  {selectedTypeIds.size}/{types.length}
+                </span>
+              )}
+              {tab.id !== 'registration-types' && (() => {
+                const m = fieldMappings.find(fm => fm.id === tab.id);
+                if (!m) return null;
+                const sel = (selectedValueIds[m.id] || new Set()).size;
+                return (
+                  <span className="ml-1.5 rounded-full bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">
+                    {sel}/{m.selectedValues.length}
+                  </span>
+                );
+              })()}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {/* ── Registration Types Tab ── */}
+      {activeTab === 'registration-types' && (
+        <div className="space-y-4">
+          {/* Actions row */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleImport}
+              disabled={importStatus === 'loading'}
+              className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+            >
+              {importStatus === 'loading' ? (
+                <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg> Loading…</>
+              ) : (
+                <><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"/></svg> Load from EventsAir</>
+              )}
+            </button>
+            <button onClick={() => setSelectedTypeIds(new Set(types.map(t => t.id)))} className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">Select All</button>
+            <button onClick={() => setSelectedTypeIds(new Set())} className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">Clear All</button>
+            <button onClick={() => setShowAddForm(v => !v)} className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">
+              <span>+</span> Add Manually
+            </button>
+            <div className="ml-auto">
+              <button
+                onClick={() => { setTypesSaveStatus('saving'); saveTypesMutation.mutate(Array.from(selectedTypeIds)); }}
+                disabled={!hasTypeChanges || typesSaveStatus === 'saving'}
+                className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${hasTypeChanges ? 'bg-green-700 text-white hover:bg-green-800' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+              >
+                {typesSaveStatus === 'saving' ? 'Saving…' : 'Save Selection'}
+              </button>
+            </div>
+          </div>
+
+          {/* Import feedback */}
+          {importStatus !== 'idle' && importMsg && (
+            <div className={`rounded-lg p-3 text-sm flex items-center gap-2 ${importStatus === 'success' ? 'bg-blue-50 border border-blue-200 text-blue-800' : 'bg-red-50 border border-red-200 text-red-700'}`}>
+              <span>{importStatus === 'success' ? '✓' : '✗'}</span>
+              {importMsg}
+              <button onClick={() => { setImportStatus('idle'); setImportMsg(''); }} className="ml-auto opacity-50 hover:opacity-100">✕</button>
+            </div>
+          )}
+
+          {/* Save feedback */}
+          {typesSaveStatus === 'saved' && (
+            <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-sm text-green-800">✓ {typesSaveMsg}</div>
+          )}
+          {typesSaveStatus === 'error' && (
+            <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">✗ {typesSaveMsg}</div>
+          )}
+
+          {/* Add form */}
+          {showAddForm && (
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+              <h3 className="font-semibold text-gray-800 mb-4">Add New Registration Type</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+                  <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. VIP Delegate" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Code</label>
+                  <input type="text" value={newCode} onChange={e => setNewCode(e.target.value.toUpperCase())} placeholder="e.g. VIP" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-green-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                  <input type="text" value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Optional" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500" />
+                </div>
+              </div>
+              <div className="flex gap-3 mt-4">
+                <button onClick={() => addTypeMutation.mutate()} disabled={!newName.trim() || addTypeMutation.isPending} className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50">
+                  {addTypeMutation.isPending ? 'Adding…' : 'Add'}
+                </button>
+                <button onClick={() => setShowAddForm(false)} className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {/* Types list */}
+          {types.length === 0 ? (
+            <div className="rounded-xl border-2 border-dashed border-gray-200 p-16 text-center">
+              <div className="text-4xl mb-3">📋</div>
+              <p className="font-medium text-gray-500">No registration types yet</p>
+              <p className="text-sm mt-1 text-gray-400">Click <strong>Load from EventsAir</strong> to import them automatically.</p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="w-10 px-4 py-3"></th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Name</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Code</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Source</th>
+                    <th className="w-24 px-4 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {types.map(type => {
+                    const isSelected = selectedTypeIds.has(type.id);
+                    return (
+                      <tr key={type.id} className={`cursor-pointer hover:bg-gray-50 ${isSelected ? 'bg-green-50' : ''}`} onClick={() => toggleType(type.id)}>
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                          <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${isSelected ? 'bg-green-600 border-green-600' : 'border-gray-300 bg-white'}`} onClick={() => toggleType(type.id)}>
+                            {isSelected && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 font-medium text-gray-900">{type.name}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-gray-500">{type.code}</td>
+                        <td className="px-4 py-3">
+                          {type.isFromEventsAir
+                            ? <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">EventsAir</span>
+                            : <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">Manual</span>}
+                        </td>
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                          {deleteConfirm === type.id ? (
+                            <div className="flex items-center gap-1">
+                              <button onClick={() => deleteTypeMutation.mutate(type.id)} className="rounded bg-red-600 px-2 py-0.5 text-xs text-white hover:bg-red-700">Confirm</button>
+                              <button onClick={() => setDeleteConfirm(null)} className="rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600">Cancel</button>
+                            </div>
+                          ) : (
+                            <button onClick={() => setDeleteConfirm(type.id)} className="rounded p-1 text-gray-300 hover:bg-red-50 hover:text-red-500">
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Custom Field Tabs (e.g. Rank) ── */}
+      {activeTab !== 'registration-types' && (() => {
+        const mapping = fieldMappings.find(m => m.id === activeTab);
+        if (!mapping) return null;
+        const curSelected = selectedValueIds[mapping.id] || new Set<string>();
+        const hasFieldChanges = mapping.selectedValues.some(v => v.isSelectedForSync !== curSelected.has(v.id));
+
+        return (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm text-gray-500 flex-1">
+                {mapping.description || `Select which "${mapping.displayName}" values to include in the participant sync.`}
               </p>
+              <button onClick={() => setSelectedValueIds(prev => ({ ...prev, [mapping.id]: new Set(mapping.selectedValues.map(v => v.id)) }))} className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">Select All</button>
+              <button onClick={() => setSelectedValueIds(prev => ({ ...prev, [mapping.id]: new Set() }))} className="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">Clear All</button>
+              <button
+                onClick={() => { setFieldSaveStatus('saving'); saveFieldSelectionMutation.mutate({ mappingId: mapping.id, ids: Array.from(curSelected) }); }}
+                disabled={!hasFieldChanges || fieldSaveStatus === 'saving'}
+                className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${hasFieldChanges ? 'bg-green-700 text-white hover:bg-green-800' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+              >
+                {fieldSaveStatus === 'saving' ? 'Saving…' : 'Save Selection'}
+              </button>
+            </div>
+
+            {fieldSaveStatus === 'saved' && <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-sm text-green-800">✓ {fieldSaveMsg}</div>}
+            {fieldSaveStatus === 'error' && <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">✗ {fieldSaveMsg}</div>}
+
+            {mapping.selectedValues.length === 0 ? (
+              <div className="rounded-xl border-2 border-dashed border-gray-200 p-16 text-center">
+                <p className="text-gray-500">No values loaded yet for "{mapping.displayName}".</p>
+                <p className="mt-1 text-sm text-gray-400">
+                  Go to{' '}
+                  <Link to="/integrations/field-mappings" className="text-blue-600 hover:underline">Field Mappings</Link>
+                  {' '}and click "Load Values" to discover values from EventsAir.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="w-10 px-4 py-3"></th>
+                      <th className="px-4 py-3 text-left font-medium text-gray-600">{mapping.displayName}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {mapping.selectedValues
+                      .sort((a, b) => a.value.localeCompare(b.value))
+                      .map(val => {
+                        const isSelected = curSelected.has(val.id);
+                        return (
+                          <tr key={val.id} className={`cursor-pointer hover:bg-gray-50 ${isSelected ? 'bg-green-50' : ''}`} onClick={() => toggleFieldValue(mapping.id, val.id)}>
+                            <td className="px-4 py-3">
+                              <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${isSelected ? 'bg-green-600 border-green-600' : 'border-gray-300 bg-white'}`}>
+                                {isSelected && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 font-medium text-gray-900">{val.value}</td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
-          <button
-            onClick={() => { setImportStatus('idle'); setImportResult(null); }}
-            className="ml-auto text-current opacity-50 hover:opacity-100"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* Stats row */}
-      {types.length > 0 && (
-        <div className="flex gap-4 text-sm text-gray-500">
-          <span>
-            <span className="font-semibold text-blue-600">{eventsAirCount}</span> from EventsAir
-          </span>
-          <span className="text-gray-300">|</span>
-          <span>
-            <span className="font-semibold text-gray-700">{manualCount}</span> added manually
-          </span>
-        </div>
-      )}
-
-      {/* Add Form */}
-      {showAddForm && (
-        <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-          <h3 className="font-semibold text-gray-800 mb-4">Add New Registration Type</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Name <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g. VIP Delegate"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Code <span className="text-gray-400 text-xs">(auto-generated if blank)</span>
-              </label>
-              <input
-                type="text"
-                value={newCode}
-                onChange={(e) => setNewCode(e.target.value.toUpperCase())}
-                placeholder="e.g. VIP_DELEGATE"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 font-mono"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-              <input
-                type="text"
-                value={newDescription}
-                onChange={(e) => setNewDescription(e.target.value)}
-                placeholder="Optional description"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
-            </div>
-          </div>
-          {addError && (
-            <p className="text-red-600 text-sm mt-2">{addError}</p>
-          )}
-          <div className="flex gap-3 mt-4">
-            <button
-              onClick={() => addMutation.mutate()}
-              disabled={!newName.trim() || addMutation.isPending}
-              className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {addMutation.isPending ? 'Adding...' : 'Add Registration Type'}
-            </button>
-            <button
-              onClick={() => { setShowAddForm(false); setAddError(''); }}
-              className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Selection Controls + List */}
-      <div className="bg-white border border-gray-200 rounded-xl shadow-sm">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-600">
-              <span className="font-semibold text-green-700">{selectedIds.size}</span> of{' '}
-              <span className="font-semibold">{types.length}</span> types selected for sync
-            </span>
-            <div className="flex gap-2">
-              <button
-                onClick={selectAll}
-                className="text-xs text-green-700 hover:text-green-900 font-medium underline"
-              >
-                Select All
-              </button>
-              <span className="text-gray-300">|</span>
-              <button
-                onClick={clearAll}
-                className="text-xs text-gray-500 hover:text-gray-700 font-medium underline"
-              >
-                Clear All
-              </button>
-            </div>
-          </div>
-          <button
-            onClick={handleSave}
-            disabled={!hasChanges || saveStatus === 'saving'}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              hasChanges
-                ? 'bg-green-700 text-white hover:bg-green-800'
-                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-            }`}
-          >
-            {saveStatus === 'saving' ? 'Saving...' : 'Save Selection'}
-          </button>
-        </div>
-
-        {/* Save status banner */}
-        {saveStatus === 'saved' && (
-          <div className="bg-green-50 border-b border-green-100 px-5 py-2 text-green-700 text-sm flex items-center gap-2">
-            <span>✓</span> {saveMessage}
-          </div>
-        )}
-        {saveStatus === 'error' && (
-          <div className="bg-red-50 border-b border-red-100 px-5 py-2 text-red-700 text-sm flex items-center gap-2">
-            <span>✗</span> {saveMessage}
-          </div>
-        )}
-
-        {/* Types list */}
-        {types.length === 0 ? (
-          <div className="text-center py-16 text-gray-400">
-            <div className="text-4xl mb-3">📋</div>
-            <p className="font-medium text-gray-500">No registration types added yet</p>
-            <p className="text-sm mt-1">
-              Click <strong>Load from EventsAir</strong> to import types automatically, or{' '}
-              <strong>Add Manually</strong> to create them one by one.
-            </p>
-          </div>
-        ) : (
-          <ul className="divide-y divide-gray-50">
-            {types.map((type) => {
-              const isSelected = selectedIds.has(type.id);
-              return (
-                <li
-                  key={type.id}
-                  className={`flex items-center gap-4 px-5 py-4 hover:bg-gray-50 transition-colors cursor-pointer ${
-                    isSelected ? 'bg-green-50' : ''
-                  }`}
-                  onClick={() => toggleSelect(type.id)}
-                >
-                  {/* Checkbox */}
-                  <div
-                    className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
-                      isSelected
-                        ? 'bg-green-600 border-green-600'
-                        : 'border-gray-300 bg-white'
-                    }`}
-                  >
-                    {isSelected && (
-                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
-                  </div>
-
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-gray-900">{type.name}</span>
-                      <span className="text-xs font-mono bg-gray-100 text-gray-500 px-2 py-0.5 rounded">
-                        {type.code}
-                      </span>
-                      {type.isFromEventsAir && (
-                        <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">
-                          EventsAir
-                        </span>
-                      )}
-                    </div>
-                    {type.description && (
-                      <p className="text-sm text-gray-500 mt-0.5 truncate">{type.description}</p>
-                    )}
-                  </div>
-
-                  {/* Sync badge */}
-                  <div className="flex items-center gap-3 flex-shrink-0">
-                    {isSelected ? (
-                      <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">
-                        ✓ Will Sync
-                      </span>
-                    ) : (
-                      <span className="text-xs bg-gray-100 text-gray-400 px-2 py-1 rounded-full">
-                        Not synced
-                      </span>
-                    )}
-
-                    {/* Delete button */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (confirm(`Delete "${type.name}"?`)) {
-                          deleteMutation.mutate(type.id);
-                        }
-                      }}
-                      className="text-gray-300 hover:text-red-500 transition-colors p-1 rounded"
-                      title="Delete"
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-
-      {/* Info box */}
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-800">
-        <p className="font-semibold mb-1">ℹ️ How Sync Selection Works</p>
-        <p>
-          When EventsAir synchronisation runs, only guests whose registration type matches one of the
-          selected types above will be imported into the Hospitality Platform. Guests with unselected
-          registration types will be ignored. This allows you to focus on VIPs, ministers, and
-          specific delegations while excluding general attendees.
-        </p>
-        <p className="mt-2">
-          Use <strong>Load from EventsAir</strong> to automatically populate this list with all registration
-          types defined in your EventsAir event. Requires a valid EventsAir configuration on the{' '}
-          <a href="/integrations/eventsair" className="underline hover:text-blue-900">EventsAir Config</a> page.
-        </p>
-      </div>
+        );
+      })()}
     </div>
   );
 }
