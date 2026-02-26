@@ -30,6 +30,11 @@ public class RegistrationType : BaseEntity
     public bool IsFromEventsAir { get; set; } = false;
 
     /// <summary>
+    /// The EventsAir internal GUID for this registration type (used for filtering registrations by type)
+    /// </summary>
+    public string? EventsAirId { get; set; }
+
+    /// <summary>
     /// Display order in the selection list
     /// </summary>
     public int SortOrder { get; set; } = 0;

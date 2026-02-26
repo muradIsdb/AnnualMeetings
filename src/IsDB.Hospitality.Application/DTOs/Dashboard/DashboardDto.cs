@@ -36,4 +36,5 @@ public class GuestSummaryDto
     public string StatusLabel { get; set; } = string.Empty;
     public string? ActiveVehiclePlate { get; set; }
     public string? Notes { get; set; }
+    public string? RegistrationTypeName { get; set; }
 }

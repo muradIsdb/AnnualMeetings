@@ -57,6 +57,7 @@ export interface GuestSummary {
   statusLabel: string
   activeVehiclePlate?: string
   notes?: string
+  registrationTypeName?: string
 }
 
 export interface FlightSummary {

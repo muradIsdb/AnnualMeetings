@@ -1,6 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
 import apiClient from '../../api/client';
 
 interface RegistrationType {
@@ -11,6 +10,13 @@ interface RegistrationType {
   isSelectedForSync: boolean;
   isFromEventsAir: boolean;
   sortOrder: number;
+}
+
+interface ImportResult {
+  message: string;
+  imported: number;
+  skipped: number;
+  total?: number;
 }
 
 const fetchRegistrationTypes = async (): Promise<RegistrationType[]> => {
@@ -31,6 +37,10 @@ export default function RegistrationTypesPage() {
   const [newCode, setNewCode] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [addError, setAddError] = useState('');
+
+  // Import from EventsAir state
+  const [importStatus, setImportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
   const { data: types = [] as RegistrationType[], isLoading, error } = useQuery<RegistrationType[]>({
     queryKey: ['registration-types'],
@@ -104,6 +114,26 @@ export default function RegistrationTypesPage() {
     },
   });
 
+  const handleImportFromEventsAir = async () => {
+    setImportStatus('loading');
+    setImportResult(null);
+    try {
+      const res = await apiClient.post('/registration-types/import-from-eventsair');
+      setImportResult(res.data);
+      setImportStatus('success');
+      // Refresh the list
+      queryClient.invalidateQueries({ queryKey: ['registration-types'] });
+      // Reset initialized so new items get their sync state loaded
+      setInitialized(false);
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.message ||
+        'Failed to import from EventsAir. Please check your connection settings.';
+      setImportResult({ message: msg, imported: 0, skipped: 0 });
+      setImportStatus('error');
+    }
+  };
+
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -149,23 +179,96 @@ export default function RegistrationTypesPage() {
     );
   }
 
+  const eventsAirCount = types.filter((t) => t.isFromEventsAir).length;
+  const manualCount = types.filter((t) => !t.isFromEventsAir).length;
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Registration Types</h1>
           <p className="text-gray-500 mt-1">
             Select which registration types should be synchronised from EventsAir. Only guests with selected types will be imported.
           </p>
         </div>
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="flex items-center gap-2 bg-green-700 text-white px-4 py-2 rounded-lg hover:bg-green-800 transition-colors text-sm font-medium"
-        >
-          <span>+</span> Add Type
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Load from EventsAir — primary action */}
+          <button
+            onClick={handleImportFromEventsAir}
+            disabled={importStatus === 'loading'}
+            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors text-sm font-medium shadow-sm"
+          >
+            {importStatus === 'loading' ? (
+              <>
+                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+                Loading from EventsAir…
+              </>
+            ) : (
+              <>
+                {/* Cloud download icon */}
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+                </svg>
+                Load from EventsAir
+              </>
+            )}
+          </button>
+
+          {/* Add manually */}
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="flex items-center gap-2 bg-green-700 text-white px-4 py-2 rounded-lg hover:bg-green-800 transition-colors text-sm font-medium"
+          >
+            <span>+</span> Add Manually
+          </button>
+        </div>
       </div>
+
+      {/* Import result banner */}
+      {importResult && importStatus !== 'idle' && (
+        <div
+          className={`rounded-xl p-4 text-sm flex items-start gap-3 ${
+            importStatus === 'success'
+              ? 'bg-blue-50 border border-blue-200 text-blue-800'
+              : 'bg-red-50 border border-red-200 text-red-700'
+          }`}
+        >
+          <span className="text-lg leading-none mt-0.5">
+            {importStatus === 'success' ? '✓' : '✗'}
+          </span>
+          <div>
+            <p className="font-medium">{importResult.message}</p>
+            {importStatus === 'success' && importResult.total !== undefined && (
+              <p className="mt-1 text-blue-600">
+                {importResult.imported} new type(s) added · {importResult.skipped} already existed · {importResult.total} total in EventsAir
+              </p>
+            )}
+          </div>
+          <button
+            onClick={() => { setImportStatus('idle'); setImportResult(null); }}
+            className="ml-auto text-current opacity-50 hover:opacity-100"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Stats row */}
+      {types.length > 0 && (
+        <div className="flex gap-4 text-sm text-gray-500">
+          <span>
+            <span className="font-semibold text-blue-600">{eventsAirCount}</span> from EventsAir
+          </span>
+          <span className="text-gray-300">|</span>
+          <span>
+            <span className="font-semibold text-gray-700">{manualCount}</span> added manually
+          </span>
+        </div>
+      )}
 
       {/* Add Form */}
       {showAddForm && (
@@ -228,7 +331,7 @@ export default function RegistrationTypesPage() {
         </div>
       )}
 
-      {/* Selection Controls */}
+      {/* Selection Controls + List */}
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div className="flex items-center gap-4">
@@ -282,7 +385,10 @@ export default function RegistrationTypesPage() {
           <div className="text-center py-16 text-gray-400">
             <div className="text-4xl mb-3">📋</div>
             <p className="font-medium text-gray-500">No registration types added yet</p>
-            <p className="text-sm mt-1">Click "Add Type" to add registration types manually.</p>
+            <p className="text-sm mt-1">
+              Click <strong>Load from EventsAir</strong> to import types automatically, or{' '}
+              <strong>Add Manually</strong> to create them one by one.
+            </p>
           </div>
         ) : (
           <ul className="divide-y divide-gray-50">
@@ -313,7 +419,7 @@ export default function RegistrationTypesPage() {
 
                   {/* Info */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-gray-900">{type.name}</span>
                       <span className="text-xs font-mono bg-gray-100 text-gray-500 px-2 py-0.5 rounded">
                         {type.code}
@@ -372,6 +478,11 @@ export default function RegistrationTypesPage() {
           selected types above will be imported into the Hospitality Platform. Guests with unselected
           registration types will be ignored. This allows you to focus on VIPs, ministers, and
           specific delegations while excluding general attendees.
+        </p>
+        <p className="mt-2">
+          Use <strong>Load from EventsAir</strong> to automatically populate this list with all registration
+          types defined in your EventsAir event. Requires a valid EventsAir configuration on the{' '}
+          <a href="/integrations/eventsair" className="underline hover:text-blue-900">EventsAir Config</a> page.
         </p>
       </div>
     </div>

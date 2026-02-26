@@ -41,7 +41,8 @@ public class GetGuestsQueryHandler : IRequestHandler<GetGuestsQuery, List<GuestS
                 IsCritical = g.IsCritical,
                 RequiresAccessibility = g.RequiresAccessibility,
                 StatusLabel = g.Status.ToString(),
-                Notes = g.Notes
+                Notes = g.Notes,
+                RegistrationTypeName = g.RegistrationTypeName
             })
             .ToListAsync(cancellationToken);
     }

@@ -152,21 +152,26 @@ public class EventsAirController : ApiControllerBase
             });
         }
 
+        // EventsAir uses Microsoft Azure AD for OAuth2 — the stored TokenEndpoint (auth.eventsair.com)
+        // does not resolve; always use the correct Azure AD endpoint and scope.
+        const string azureAdTokenEndpoint = "https://login.microsoftonline.com/dff76352-1ded-46e8-96a4-1a83718b2d3a/oauth2/v2.0/token";
+        const string eventsAirScope = "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
+
         var sw = Stopwatch.StartNew();
         try
         {
             var client = _httpClientFactory.CreateClient();
-            client.Timeout = TimeSpan.FromSeconds(10);
+            client.Timeout = TimeSpan.FromSeconds(15);
 
             var tokenRequest = new FormUrlEncodedContent(new[]
             {
                 new KeyValuePair<string, string>("grant_type", "client_credentials"),
                 new KeyValuePair<string, string>("client_id", effectiveClientId),
                 new KeyValuePair<string, string>("client_secret", effectiveSecret),
-                new KeyValuePair<string, string>("scope", "api")
+                new KeyValuePair<string, string>("scope", eventsAirScope)
             });
 
-            var response = await client.PostAsync(request.TokenEndpoint, tokenRequest);
+            var response = await client.PostAsync(azureAdTokenEndpoint, tokenRequest);
             sw.Stop();
 
             if (response.IsSuccessStatusCode)
@@ -180,7 +185,7 @@ public class EventsAirController : ApiControllerBase
                 return Ok(new TestConnectionResult
                 {
                     Success = true,
-                    Message = "Connection successful. OAuth2 token retrieved from EventsAir.",
+                    Message = "Connection successful. OAuth2 token retrieved via Microsoft Azure AD for EventsAir.",
                     ResponseTimeMs = (int)sw.ElapsedMilliseconds,
                     TokenPreview = tokenPreview
                 });

@@ -272,6 +272,7 @@ public class RegistrationTypesController : ApiControllerBase
                 Code = code,
                 Name = ea.Name,
                 Description = $"Imported from EventsAir (ID: {ea.Id})",
+                EventsAirId = ea.Id,
                 IsSelectedForSync = false,
                 IsFromEventsAir = true,
                 SortOrder = sortOrder++,

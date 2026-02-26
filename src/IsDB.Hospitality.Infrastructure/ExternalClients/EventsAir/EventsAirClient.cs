@@ -321,4 +321,120 @@ public class EventsAirClient : IEventsAirClient
         catch { /* Return empty list on parse error */ }
         return result;
     }
+
+    /// <summary>
+    /// Fetches all registrations for the configured event, filtered to only those whose
+    /// registration type ID is in <paramref name="registrationTypeIds"/>.
+    /// When the list is empty, ALL registrations are returned.
+    /// Uses event.registrations[].contact + type fields.
+    /// </summary>
+    public async Task<List<EventsAirRegistrationDto>> GetRegistrationsByTypeAsync(
+        IEnumerable<string> registrationTypeIds,
+        CancellationToken cancellationToken = default)
+    {
+        var allowedIds = new HashSet<string>(registrationTypeIds, StringComparer.OrdinalIgnoreCase);
+        _logger.LogInformation(
+            "Fetching registrations from EventsAir for event {EventCode}. Filtering by {Count} registration type(s).",
+            _options.EventCode, allowedIds.Count);
+
+        var allRegistrations = new List<EventsAirRegistrationDto>();
+        int offset = 0;
+        const int pageSize = 2000;
+
+        while (true)
+        {
+            var queryBody = JsonSerializer.Serialize(new
+            {
+                query = "query GetRegs($eventId: ID!, $limit: Int!, $offset: Int!) { event(id: $eventId) { registrations(limit: $limit, offset: $offset) { id type { id name uniqueCode } contact { id firstName lastName title jobTitle organizationName primaryEmail } } } }",
+                variables = new { eventId = _options.EventCode, limit = pageSize, offset }
+            });
+
+            HttpResponseMessage response;
+            try
+            {
+                var token = await GetAccessTokenAsync();
+                response = await _retryPolicy.ExecuteAsync(() =>
+                {
+                    var req = new HttpRequestMessage(HttpMethod.Post, $"{_options.BaseUrl}/graphql")
+                    {
+                        Headers = { Authorization = new AuthenticationHeaderValue("Bearer", token) },
+                        Content = new StringContent(queryBody, Encoding.UTF8, "application/json")
+                    };
+                    return _httpClient.SendAsync(req, cancellationToken);
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to fetch registrations page (offset={Offset}) from EventsAir", offset);
+                break;
+            }
+
+            if (!response.IsSuccessStatusCode) break;
+
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var page = ParseRegistrationsResponse(json, allowedIds);
+
+            allRegistrations.AddRange(page);
+
+            // If we got fewer than a full page, we've reached the end
+            if (page.Count < pageSize) break;
+            offset += pageSize;
+        }
+
+        _logger.LogInformation("Fetched {Count} registrations from EventsAir after type filtering.", allRegistrations.Count);
+        return allRegistrations;
+    }
+
+    private static List<EventsAirRegistrationDto> ParseRegistrationsResponse(
+        string json,
+        HashSet<string> allowedTypeIds)
+    {
+        var result = new List<EventsAirRegistrationDto>();
+        try
+        {
+            var doc = JsonSerializer.Deserialize<JsonElement>(json);
+            if (doc.TryGetProperty("errors", out var errs) && errs.GetArrayLength() > 0)
+                return result;
+
+            var registrations = doc
+                .GetProperty("data")
+                .GetProperty("event")
+                .GetProperty("registrations");
+
+            foreach (var reg in registrations.EnumerateArray())
+            {
+                if (!reg.TryGetProperty("type", out var typeEl) || typeEl.ValueKind == JsonValueKind.Null)
+                    continue;
+
+                var typeId = typeEl.TryGetProperty("id", out var tidEl) ? tidEl.GetString() ?? string.Empty : string.Empty;
+
+                // Filter: skip if we have a whitelist and this type is not in it
+                if (allowedTypeIds.Count > 0 && !allowedTypeIds.Contains(typeId))
+                    continue;
+
+                if (!reg.TryGetProperty("contact", out var contactEl) || contactEl.ValueKind == JsonValueKind.Null)
+                    continue;
+
+                var contactId = contactEl.TryGetProperty("id", out var cidEl) ? cidEl.GetString() ?? string.Empty : string.Empty;
+                if (string.IsNullOrEmpty(contactId)) continue;
+
+                result.Add(new EventsAirRegistrationDto
+                {
+                    RegistrationId = reg.TryGetProperty("id", out var ridEl) ? ridEl.GetString() ?? string.Empty : string.Empty,
+                    ContactId = contactId,
+                    FirstName = contactEl.TryGetProperty("firstName", out var fnEl) && fnEl.ValueKind != JsonValueKind.Null ? fnEl.GetString() ?? string.Empty : string.Empty,
+                    LastName = contactEl.TryGetProperty("lastName", out var lnEl) && lnEl.ValueKind != JsonValueKind.Null ? lnEl.GetString() ?? string.Empty : string.Empty,
+                    Title = contactEl.TryGetProperty("title", out var titEl) && titEl.ValueKind != JsonValueKind.Null ? titEl.GetString() : null,
+                    JobTitle = contactEl.TryGetProperty("jobTitle", out var jtEl) && jtEl.ValueKind != JsonValueKind.Null ? jtEl.GetString() : null,
+                    OrganizationName = contactEl.TryGetProperty("organizationName", out var orgEl) && orgEl.ValueKind != JsonValueKind.Null ? orgEl.GetString() : null,
+                    PrimaryEmail = contactEl.TryGetProperty("primaryEmail", out var emailEl) && emailEl.ValueKind != JsonValueKind.Null ? emailEl.GetString() : null,
+                    RegistrationTypeId = typeId,
+                    RegistrationTypeName = typeEl.TryGetProperty("name", out var tnEl) && tnEl.ValueKind != JsonValueKind.Null ? tnEl.GetString() ?? string.Empty : string.Empty,
+                    RegistrationTypeCode = typeEl.TryGetProperty("uniqueCode", out var tcEl) && tcEl.ValueKind != JsonValueKind.Null ? tcEl.GetString() : null,
+                });
+            }
+        }
+        catch { /* Return empty list on parse error */ }
+        return result;
+    }
 }

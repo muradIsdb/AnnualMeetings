@@ -26,6 +26,12 @@ public class Guest : BaseEntity
     public string? Notes { get; set; }
     public DateTime? LastSyncedAt { get; set; }
 
+    /// <summary>EventsAir registration type ID (GUID) this guest registered under</summary>
+    public string? RegistrationTypeId { get; set; }
+
+    /// <summary>Human-readable registration type name, e.g. "Governor"</summary>
+    public string? RegistrationTypeName { get; set; }
+
     // Navigation properties
     public ICollection<Flight> Flights { get; set; } = new List<Flight>();
     public ICollection<ChecklistCompletion> ChecklistCompletions { get; set; } = new List<ChecklistCompletion>();
