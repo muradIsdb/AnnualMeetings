@@ -11,6 +11,7 @@ import {
   Bell,
   Plug,
   Settings,
+  ListChecks,
 } from 'lucide-react'
 
 const navItems = [
@@ -43,8 +44,14 @@ const navItems = [
 const adminNavItems = [
   {
     to: '/integrations/eventsair',
-    label: 'EventsAir',
+    label: 'EventsAir Config',
     icon: Plug,
+    roles: [UserRole.Administrator],
+  },
+  {
+    to: '/integrations/registration-types',
+    label: 'Registration Types',
+    icon: ListChecks,
     roles: [UserRole.Administrator],
   },
 ]

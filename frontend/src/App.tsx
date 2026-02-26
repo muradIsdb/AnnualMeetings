@@ -12,6 +12,7 @@ import ControlRoomDashboard from './pages/controlroom/ControlRoomDashboard'
 import DepartureFormPage from './pages/departure/DepartureFormPage'
 import AppLayout from './components/layout/AppLayout'
 import EventsAirConfigPage from './pages/integrations/EventsAirConfigPage'
+import RegistrationTypesPage from './pages/integrations/RegistrationTypesPage'
 import SettingsPage from './pages/settings/SettingsPage'
 
 function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode; allowedRoles?: UserRole[] }) {
@@ -92,6 +93,13 @@ export default function App() {
           <Route path="integrations/eventsair" element={
             <ProtectedRoute allowedRoles={[UserRole.Administrator]}>
               <EventsAirConfigPage />
+            </ProtectedRoute>
+          } />
+
+          {/* Registration Types — Admin Only */}
+          <Route path="integrations/registration-types" element={
+            <ProtectedRoute allowedRoles={[UserRole.Administrator]}>
+              <RegistrationTypesPage />
             </ProtectedRoute>
           } />
 

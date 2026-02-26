@@ -53,7 +53,12 @@ builder.Services.AddCors(options =>
     });
 });
 
-builder.Services.AddControllers();
+builder.Services.AddControllers(options =>
+{
+    options.Conventions.Add(new Microsoft.AspNetCore.Mvc.ApplicationModels.RouteTokenTransformerConvention(
+        new SlugifyParameterTransformer()));
+});
+builder.Services.AddRouting(options => options.LowercaseUrls = true);
 builder.Services.AddEndpointsApiExplorer();
 
 // Swagger with JWT support
@@ -104,3 +109,9 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+public class SlugifyParameterTransformer : Microsoft.AspNetCore.Routing.IOutboundParameterTransformer
+{
+    public string? TransformOutbound(object? value)
+        => value?.ToString()?.ToLowerInvariant();
+}

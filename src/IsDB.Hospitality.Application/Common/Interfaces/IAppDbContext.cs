@@ -20,6 +20,7 @@ public interface IAppDbContext
     DbSet<HotelOption> HotelOptions { get; }
     DbSet<PickupDayOption> PickupDayOptions { get; }
     DbSet<PickupHourOption> PickupHourOptions { get; }
+    DbSet<RegistrationType> RegistrationTypes { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

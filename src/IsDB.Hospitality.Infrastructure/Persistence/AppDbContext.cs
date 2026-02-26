@@ -23,6 +23,7 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<HotelOption> HotelOptions => Set<HotelOption>();
     public DbSet<PickupDayOption> PickupDayOptions => Set<PickupDayOption>();
     public DbSet<PickupHourOption> PickupHourOptions => Set<PickupHourOption>();
+    public DbSet<RegistrationType> RegistrationTypes => Set<RegistrationType>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
