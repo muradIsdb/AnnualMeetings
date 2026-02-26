@@ -1,0 +1,41 @@
+# .NET Build artifacts
+**/bin/
+**/obj/
+*.user
+*.suo
+.vs/
+*.db
+*.db-shm
+*.db-wal
+
+# .NET publish output
+/publish/
+
+# ASP.NET Core
+appsettings.Development.json
+
+# Rider / JetBrains
+.idea/
+*.sln.iml
+
+# Visual Studio Code
+.vscode/
+
+# Node / React frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.pnpm-store/
+frontend/.env
+frontend/.env.local
+frontend/.env.production
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets — never commit
+**/appsettings.Production.json

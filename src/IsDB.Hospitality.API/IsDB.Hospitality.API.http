@@ -1,0 +1,6 @@
+@IsDB.Hospitality.API_HostAddress = http://localhost:5242
+
+GET {{IsDB.Hospitality.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
