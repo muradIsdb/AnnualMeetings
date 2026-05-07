@@ -160,6 +160,40 @@ using (var scope = app.Services.CreateScope())
                 logger.LogInformation("PostgreSQL detected (fresh database). Running all migrations from scratch...");
             else
                 logger.LogInformation("PostgreSQL detected (EF Core-created database). Running pending migrations only...");
+
+            // Fix broken migration chain: AddSettingsOptions (3rd migration) creates HotelOptions/PickupDayOptions/PickupHourOptions,
+            // but AddGuestRegistrationTypeFields (4th migration) also tries to create the same tables.
+            // If AddSettingsOptions is already applied, mark AddGuestRegistrationTypeFields as applied too
+            // so MigrateAsync() skips the duplicate table creation.
+            if (!isFreshDatabase)
+            {
+                await context.Database.ExecuteSqlRawAsync(@"
+                    INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+                    SELECT '20260226074906_AddGuestRegistrationTypeFields', '9.0.0'
+                    WHERE EXISTS (
+                        SELECT 1 FROM ""__EFMigrationsHistory""
+                        WHERE ""MigrationId"" = '20260225120057_AddSettingsOptions'
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM ""__EFMigrationsHistory""
+                        WHERE ""MigrationId"" = '20260226074906_AddGuestRegistrationTypeFields'
+                    );
+                    -- Also ensure RegistrationTypes table exists (it's part of AddGuestRegistrationTypeFields)
+                    CREATE TABLE IF NOT EXISTS ""RegistrationTypes"" (
+                        ""Id""                   text        NOT NULL PRIMARY KEY,
+                        ""Code""                 text        NOT NULL,
+                        ""Name""                 text        NOT NULL,
+                        ""Description""          text        NULL,
+                        ""IsSelectedForSync""    boolean     NOT NULL DEFAULT false,
+                        ""IsFromEventsAir""       boolean     NOT NULL DEFAULT false,
+                        ""SortOrder""            integer     NOT NULL DEFAULT 0,
+                        ""CreatedAt""            text        NOT NULL,
+                        ""UpdatedAt""            text        NOT NULL
+                    );
+                ");
+                logger.LogInformation("Migration chain fix applied.");
+            }
+
             await context.Database.MigrateAsync();
             logger.LogInformation("All migrations applied successfully.");
         }
