@@ -1,0 +1,6 @@
+const LiaisonGuestDetailPage = () => (
+  <div className="p-6">
+    <h1 className="text-2xl font-bold text-gray-900">Liaison Guest Detail</h1>
+  </div>
+);
+export default LiaisonGuestDetailPage;

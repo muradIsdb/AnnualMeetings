@@ -1,0 +1,6 @@
+const GuestDetailPage = () => (
+  <div className="p-6">
+    <h1 className="text-2xl font-bold text-gray-900">Guest Detail</h1>
+  </div>
+);
+export default GuestDetailPage;
