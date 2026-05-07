@@ -122,32 +122,46 @@ using (var scope = app.Services.CreateScope())
         // we let MigrateAsync() run all migrations from scratch in the correct order.
         var dbConn = context.Database.GetDbConnection();
         await dbConn.OpenAsync();
+        // Determine database type:
+        // - Fresh DB: __EFMigrationsHistory doesn't exist or is empty → let MigrateAsync() run all migrations
+        // - EF Core DB: __EFMigrationsHistory has the InitialCreate migration → DB was created by EF Core, skip pre-creation block
+        // - Legacy production DB: __EFMigrationsHistory has rows but NOT InitialCreate → old SQLite-style migration, needs pre-creation block
         bool isFreshDatabase;
+        bool isEfCoreCreatedDb = false;
         using (var checkCmd = dbConn.CreateCommand())
         {
-            // Check if __EFMigrationsHistory table exists AND has rows.
-            // If it doesn't exist or is empty, this is a fresh database — let MigrateAsync() run everything.
-            // If it has rows, this is an existing production database that needs the pre-creation block.
-            // Two-step check: first see if the table exists, then count rows only if it does.
-            // This avoids a SQL parse error when the table doesn't exist at all.
+            // Step 1: Check if __EFMigrationsHistory table exists
             checkCmd.CommandText = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '__EFMigrationsHistory'";
             var tableExists = Convert.ToInt64(await checkCmd.ExecuteScalarAsync()) > 0;
             long migrationCount = 0;
             if (tableExists)
             {
+                // Step 2: Count total migrations
                 checkCmd.CommandText = @"SELECT COUNT(*) FROM ""__EFMigrationsHistory""";
                 migrationCount = Convert.ToInt64(await checkCmd.ExecuteScalarAsync());
+
+                if (migrationCount > 0)
+                {
+                    // Step 3: Check if InitialCreate migration exists (means DB was created by EF Core, not legacy)
+                    checkCmd.CommandText = @"SELECT COUNT(*) FROM ""__EFMigrationsHistory"" WHERE ""MigrationId"" LIKE '%InitialCreate%'";
+                    var initialCreateCount = Convert.ToInt64(await checkCmd.ExecuteScalarAsync());
+                    isEfCoreCreatedDb = initialCreateCount > 0;
+                }
             }
             isFreshDatabase = migrationCount == 0;
         }
         await dbConn.CloseAsync();
 
-        if (isFreshDatabase)
+        if (isFreshDatabase || isEfCoreCreatedDb)
         {
-            // Fresh database — run all EF Core migrations from scratch, no pre-creation needed.
-            logger.LogInformation("PostgreSQL detected (fresh database). Running all migrations from scratch...");
+            // Fresh database OR EF Core-created database — run MigrateAsync() only, no pre-creation block needed.
+            // The pre-creation block is only for legacy production databases created with SQLite-style migrations.
+            if (isFreshDatabase)
+                logger.LogInformation("PostgreSQL detected (fresh database). Running all migrations from scratch...");
+            else
+                logger.LogInformation("PostgreSQL detected (EF Core-created database). Running pending migrations only...");
             await context.Database.MigrateAsync();
-            logger.LogInformation("All migrations applied successfully on fresh database.");
+            logger.LogInformation("All migrations applied successfully.");
         }
         else
         {
