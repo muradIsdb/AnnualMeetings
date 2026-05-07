@@ -11,10 +11,17 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.RenameColumn(
+            // PostgreSQL fix: cannot rename CompletedAt (timestamptz) to UnassignedByStaffId (uuid FK)
+            // Must drop and re-add with correct type
+            migrationBuilder.DropColumn(
                 name: "CompletedAt",
+                table: "VehicleAssignments");
+
+            migrationBuilder.AddColumn<Guid>(
+                name: "UnassignedByStaffId",
                 table: "VehicleAssignments",
-                newName: "UnassignedByStaffId");
+                type: "uuid",
+                nullable: true);
 
             migrationBuilder.AddColumn<int>(
                 name: "CurrentAssignmentType",
@@ -231,10 +238,16 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                 name: "LastSyncDeactivatedCount",
                 table: "EventsAirConfigs");
 
-            migrationBuilder.RenameColumn(
+            // Reverse: drop UnassignedByStaffId (uuid) and restore CompletedAt (timestamptz)
+            migrationBuilder.DropColumn(
                 name: "UnassignedByStaffId",
+                table: "VehicleAssignments");
+
+            migrationBuilder.AddColumn<DateTime>(
+                name: "CompletedAt",
                 table: "VehicleAssignments",
-                newName: "CompletedAt");
+                type: "timestamp with time zone",
+                nullable: true);
         }
     }
 }
