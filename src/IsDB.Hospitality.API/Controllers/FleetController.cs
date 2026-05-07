@@ -142,6 +142,25 @@ public class FleetController : ApiControllerBase
         if (guest.InboundStatus >= InboundStatus.Arrived && guest.InboundStatus < InboundStatus.AtHotel)
             guest.InboundStatus = InboundStatus.VehicleAssigned;
 
+        // Write vehicle activity history entry
+        var staffUser = await _db.StaffUsers.FindAsync(CurrentUserId);
+        var vehicleLabel = isReassignment
+            ? $"Vehicle Reassigned — {vehicle.Make} {vehicle.Model} ({vehicle.LicensePlate})"
+            : $"Vehicle Assigned — {vehicle.Make} {vehicle.Model} ({vehicle.LicensePlate})";
+        _db.GuestStatusHistories.Add(new GuestStatusHistory
+        {
+            Id = Guid.NewGuid(),
+            GuestId = guest.Id,
+            Track = StatusTrack.Vehicle,
+            StatusValue = 0,
+            StatusLabel = vehicleLabel,
+            ChangedByStaffId = CurrentUserId,
+            ChangedByName = staffUser?.FullName,
+            ChangedByRole = staffUser?.Role,
+            IsSystemGenerated = false,
+            Notes = req.Notes
+        });
+
         await _db.SaveChangesAsync();
         return CreatedAtAction(nameof(GetAssignments), new { }, new { assignment.Id });
     }
@@ -239,6 +258,27 @@ public class FleetController : ApiControllerBase
         if (guest.InboundStatus >= InboundStatus.Arrived && guest.InboundStatus < InboundStatus.AtHotel)
             guest.InboundStatus = InboundStatus.VehicleAssigned;
 
+        // Write vehicle activity history entry
+        var staffUserForce = await _db.StaffUsers.FindAsync(CurrentUserId);
+        var forceLabel = isReassignment
+            ? $"Vehicle Force-Reassigned — {vehicle.Make} {vehicle.Model} ({vehicle.LicensePlate})"
+            : $"Vehicle Force-Assigned — {vehicle.Make} {vehicle.Model} ({vehicle.LicensePlate})";
+        if (displacedGuestName != null)
+            forceLabel += $" (displaced from {displacedGuestName})";
+        _db.GuestStatusHistories.Add(new GuestStatusHistory
+        {
+            Id = Guid.NewGuid(),
+            GuestId = guest.Id,
+            Track = StatusTrack.Vehicle,
+            StatusValue = 0,
+            StatusLabel = forceLabel,
+            ChangedByStaffId = CurrentUserId,
+            ChangedByName = staffUserForce?.FullName,
+            ChangedByRole = staffUserForce?.Role,
+            IsSystemGenerated = false,
+            Notes = req.Notes
+        });
+
         await _db.SaveChangesAsync();
         return Ok(new { displacedGuestName });
     }
@@ -277,6 +317,25 @@ public class FleetController : ApiControllerBase
                 CurrentUserId,
                 vehicle?.LicensePlate, vehicle?.Make, vehicle?.Model);
             _db.Notifications.AddRange(notifs);
+        }
+
+        // Write vehicle unassignment history entry
+        if (assignment.Guest != null)
+        {
+            var staffUserUnassign = await _db.StaffUsers.FindAsync(CurrentUserId);
+            var unassignLabel = $"Vehicle Unassigned — {vehicle?.Make} {vehicle?.Model} ({vehicle?.LicensePlate ?? "unknown"})";
+            _db.GuestStatusHistories.Add(new GuestStatusHistory
+            {
+                Id = Guid.NewGuid(),
+                GuestId = assignment.Guest.Id,
+                Track = StatusTrack.Vehicle,
+                StatusValue = 0,
+                StatusLabel = unassignLabel,
+                ChangedByStaffId = CurrentUserId,
+                ChangedByName = staffUserUnassign?.FullName,
+                ChangedByRole = staffUserUnassign?.Role,
+                IsSystemGenerated = false
+            });
         }
 
         await _db.SaveChangesAsync();

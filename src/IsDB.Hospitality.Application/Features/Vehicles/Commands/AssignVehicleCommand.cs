@@ -183,6 +183,24 @@ internal static class AssignVehicleHelper
             };
             context.GuestStatusHistories.Add(historyEntry);
 
+            // Vehicle activity history entry
+            var vehicleHistoryEntry = new GuestStatusHistory
+            {
+                Id = Guid.NewGuid(),
+                GuestId = guest.Id,
+                Track = StatusTrack.Vehicle,
+                StatusValue = 0,
+                StatusLabel = $"Vehicle Assigned \u2014 {vehicle.Make} {vehicle.Model} ({vehicle.LicensePlate})",
+                ChangedByStaffId = staffUserId,
+                ChangedByName = "Transport",
+                ChangedByRole = UserRole.Transport,
+                IsSystemGenerated = false,
+                Notes = notes,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            context.GuestStatusHistories.Add(vehicleHistoryEntry);
+
             // Alert (Control Room panel) — High priority
             var alertNotification = new Alert
             {
