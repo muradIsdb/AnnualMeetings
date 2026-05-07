@@ -167,9 +167,12 @@ public static class DatabaseSeeder
 
         var classes = new List<CarClass>
         {
-            new() { Id = Guid.NewGuid(), Name = "Luxury Car",   Description = "High-end luxury vehicles for VIP and VVIP guests",     Color = "#7C3AED", SortOrder = 1 },
-            new() { Id = Guid.NewGuid(), Name = "AMOC Car",     Description = "AMOC-designated vehicles for organizing committee",    Color = "#0369A1", SortOrder = 2 },
-            new() { Id = Guid.NewGuid(), Name = "Standard Car", Description = "Standard vehicles for general participants",           Color = "#059669", SortOrder = 3 },
+            new() { Id = Guid.NewGuid(), Name = "VVIP Luxury",       Description = "Reserved for VVIP guests — heads of state, ministers, and senior dignitaries",           Color = "#7C3AED", SortOrder = 1 },
+            new() { Id = Guid.NewGuid(), Name = "Executive Luxury",  Description = "Premium luxury sedans for senior executives and VIP guests",                          Color = "#B45309", SortOrder = 2 },
+            new() { Id = Guid.NewGuid(), Name = "Executive SUV",     Description = "Executive-class SUVs for senior officials and delegations",                          Color = "#0E7490", SortOrder = 3 },
+            new() { Id = Guid.NewGuid(), Name = "Board & DG Class",  Description = "Dedicated vehicles for Board of Governors members and the Director General",          Color = "#DC2626", SortOrder = 4 },
+            new() { Id = Guid.NewGuid(), Name = "AMOC",              Description = "AMOC-designated vehicles for the organizing committee",                               Color = "#0369A1", SortOrder = 5 },
+            new() { Id = Guid.NewGuid(), Name = "General Pool",      Description = "General pool vehicles for standard participants and staff",                          Color = "#059669", SortOrder = 6 },
         };
 
         await context.CarClasses.AddRangeAsync(classes);
