@@ -15,15 +15,15 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                 name: "NotificationTemplates",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    EventKey = table.Column<string>(type: "TEXT", nullable: false),
-                    EventLabel = table.Column<string>(type: "TEXT", nullable: false),
-                    MessageTemplate = table.Column<string>(type: "TEXT", nullable: false),
-                    TargetRoles = table.Column<string>(type: "TEXT", nullable: false),
-                    Priority = table.Column<int>(type: "INTEGER", nullable: false),
-                    Description = table.Column<string>(type: "TEXT", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    EventKey = table.Column<string>(type: "text", nullable: false),
+                    EventLabel = table.Column<string>(type: "text", nullable: false),
+                    MessageTemplate = table.Column<string>(type: "text", nullable: false),
+                    TargetRoles = table.Column<string>(type: "text", nullable: false),
+                    Priority = table.Column<int>(type: "integer", nullable: false),
+                    Description = table.Column<string>(type: "text", nullable: false),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {

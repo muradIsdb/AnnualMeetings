@@ -19,57 +19,57 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.AddColumn<int>(
                 name: "CurrentAssignmentType",
                 table: "Vehicles",
-                type: "INTEGER",
+                type: "integer",
                 nullable: true);
 
             migrationBuilder.AddColumn<Guid>(
                 name: "CurrentGuestId",
                 table: "Vehicles",
-                type: "TEXT",
+                type: "uuid",
                 nullable: true);
 
             migrationBuilder.AddColumn<Guid>(
                 name: "DriverId",
                 table: "Vehicles",
-                type: "TEXT",
+                type: "uuid",
                 nullable: true);
 
             migrationBuilder.AddColumn<bool>(
                 name: "IsActive",
                 table: "Vehicles",
-                type: "INTEGER",
+                type: "boolean",
                 nullable: false,
                 defaultValue: false);
 
             migrationBuilder.AddColumn<int>(
                 name: "AssignmentType",
                 table: "VehicleAssignments",
-                type: "INTEGER",
+                type: "integer",
                 nullable: false,
                 defaultValue: 0);
 
             migrationBuilder.AddColumn<Guid>(
                 name: "DriverId",
                 table: "VehicleAssignments",
-                type: "TEXT",
+                type: "uuid",
                 nullable: true);
 
             migrationBuilder.AddColumn<DateTime>(
                 name: "UnassignedAt",
                 table: "VehicleAssignments",
-                type: "TEXT",
+                type: "timestamp with time zone",
                 nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "Country",
                 table: "Guests",
-                type: "TEXT",
+                type: "text",
                 nullable: true);
 
             migrationBuilder.AddColumn<int>(
                 name: "LastSyncDeactivatedCount",
                 table: "EventsAirConfigs",
-                type: "INTEGER",
+                type: "integer",
                 nullable: false,
                 defaultValue: 0);
 
@@ -77,14 +77,14 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                 name: "Drivers",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    FullName = table.Column<string>(type: "TEXT", nullable: false),
-                    Phone = table.Column<string>(type: "TEXT", nullable: false),
-                    Status = table.Column<int>(type: "INTEGER", nullable: false),
-                    VehicleId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    IsActive = table.Column<bool>(type: "INTEGER", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    FullName = table.Column<string>(type: "text", nullable: false),
+                    Phone = table.Column<string>(type: "text", nullable: false),
+                    Status = table.Column<int>(type: "integer", nullable: false),
+                    VehicleId = table.Column<Guid>(type: "uuid", nullable: true),
+                    IsActive = table.Column<bool>(type: "boolean", nullable: false),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -101,9 +101,9 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                 name: "StaffUserRoles",
                 columns: table => new
                 {
-                    StaffUserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Role = table.Column<int>(type: "INTEGER", nullable: false),
-                    AssignedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    StaffUserId = table.Column<Guid>(type: "uuid", nullable: false),
+                    Role = table.Column<int>(type: "integer", nullable: false),
+                    AssignedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {

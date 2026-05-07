@@ -13,13 +13,13 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.AddColumn<string>(
                 name: "EventLogoUrl",
                 table: "AppConfigs",
-                type: "TEXT",
+                type: "text",
                 nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "PlaCardTheme",
                 table: "AppConfigs",
-                type: "TEXT",
+                type: "text",
                 nullable: false,
                 defaultValue: "");
 
