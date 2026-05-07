@@ -1,0 +1,38 @@
+# Node.js
+frontend/node_modules/
+node_modules/
+
+# Build artifacts (keep wwwroot - it has the compiled frontend)
+frontend/dist/
+
+# .NET build output
+bin/
+obj/
+*.user
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln.docstates
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# SQLite local DB
+*.db
+*.db-shm
+*.db-wal
