@@ -1,0 +1,1515 @@
+using System.Collections.Concurrent;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using IsDB.Hospitality.Application.Common.Interfaces;
+using IsDB.Hospitality.Application.Common.Models;
+using IsDB.Hospitality.Application.DTOs.Dashboard;
+using IsDB.Hospitality.Application.DTOs.Guests;
+using IsDB.Hospitality.Application.Features.Guests.Commands;
+using IsDB.Hospitality.Application.Features.Guests.Queries;
+using IsDB.Hospitality.Domain.Entities;
+using IsDB.Hospitality.Domain.Enums;
+using IsDB.Hospitality.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
+
+namespace IsDB.Hospitality.API.Controllers;
+
+[Authorize]
+public class GuestsController : ApiControllerBase
+{
+    // In-memory store for background sync job status
+    private static readonly ConcurrentDictionary<string, SyncJobStatus> _syncJobs = new();
+
+    // Well-known custom field GUIDs
+    private const string DEDICATED_CAR_FIELD_GUID = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+    private const string RANK_FIELD_GUID = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+
+    [HttpGet("arrival-flights")]
+    public async Task<ActionResult<List<ArrivalFlightGroupDto>>> GetArrivalFlights()
+    {
+        var result = await Mediator.Send(new GetArrivalFlightsQuery());
+        return Ok(result);
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<List<GuestSummaryDto>>> GetGuests(
+        [FromQuery] GuestStatus? status = null,
+        [FromQuery] bool? isCritical = null)
+    {
+        var result = await Mediator.Send(new GetGuestsQuery(status, isCritical));
+        return Ok(result);
+    }
+
+    [HttpGet("{id:guid}")]
+    public async Task<ActionResult<GuestDto>> GetGuest(Guid id)
+    {
+        var result = await Mediator.Send(new GetGuestByIdQuery(id));
+        if (result == null) return NotFound();
+        return Ok(result);
+    }
+
+    [HttpPatch("{id:guid}/status")]
+    public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UpdateStatusRequest request)
+    {
+        var success = await Mediator.Send(new UpdateGuestStatusCommand(id, request.Status, request.Notes));
+        if (!success) return NotFound();
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/checklist/{checklistItemId:guid}")]
+    public async Task<IActionResult> CompleteChecklistItem(Guid id, Guid checklistItemId, [FromBody] CompleteChecklistRequest? request = null)
+    {
+        var success = await Mediator.Send(new CompleteChecklistItemCommand(id, checklistItemId, CurrentUserId, request?.Notes));
+        if (!success) return NotFound();
+        return NoContent();
+    }
+
+    [HttpGet("inactive")]
+    public async Task<IActionResult> GetInactiveGuests([FromServices] AppDbContext db, CancellationToken ct)
+    {
+        var guests = await db.Guests
+            .Where(g => !g.IsActive)
+            .OrderBy(g => g.LastName).ThenBy(g => g.FirstName)
+            .Select(g => new
+            {
+                g.Id,
+                g.FirstName,
+                g.LastName,
+                g.RegistrationTypeName,
+                g.Organization,
+                g.Email,
+                g.LastSyncedAt
+            })
+            .ToListAsync(ct);
+        return Ok(guests);
+    }
+
+    [HttpDelete("inactive/all")]
+    public async Task<IActionResult> DeleteAllInactiveGuests([FromServices] AppDbContext db, CancellationToken ct)
+    {
+        var inactive = await db.Guests.Where(g => !g.IsActive).ToListAsync(ct);
+        var count = inactive.Count;
+        db.Guests.RemoveRange(inactive);
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = $"{count} inactive participant(s) permanently deleted.", deleted = count });
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> DeleteGuest(Guid id, [FromServices] AppDbContext db, CancellationToken ct)
+    {
+        var guest = await db.Guests.FindAsync(new object[] { id }, ct);
+        if (guest == null) return NotFound();
+        db.Guests.Remove(guest);
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Participant permanently deleted." });
+    }
+
+    /// <summary>
+    /// Bulk-assign a car class to multiple guests at once.
+    /// If a guest already has a vehicle assigned from a different class, a warning is included.
+    /// </summary>
+    [HttpPost("bulk-assign-car-class")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> BulkAssignCarClass(
+        [FromBody] BulkAssignCarClassRequest req,
+        [FromServices] AppDbContext db,
+        CancellationToken ct)
+    {
+        if (req.GuestIds == null || req.GuestIds.Count == 0)
+            return BadRequest(new { message = "No guests specified." });
+
+        // Validate car class exists (null = remove class)
+        if (req.CarClassId.HasValue)
+        {
+            var classExists = await db.CarClasses.AnyAsync(c => c.Id == req.CarClassId.Value, ct);
+            if (!classExists) return BadRequest(new { message = "Car class not found." });
+        }
+
+        var guests = await db.Guests
+            .Include(g => g.VehicleAssignments.Where(va => va.IsActive))
+                .ThenInclude(va => va.Vehicle)
+                    .ThenInclude(v => v.CarClass)
+            .Where(g => req.GuestIds.Contains(g.Id) && g.IsActive)
+            .ToListAsync(ct);
+
+        var warnings = new List<string>();
+        int updated = 0;
+
+        foreach (var guest in guests)
+        {
+            var activeAssignment = guest.VehicleAssignments.FirstOrDefault(va => va.IsActive);
+            if (activeAssignment != null && req.CarClassId.HasValue)
+            {
+                var vehicleClassId = activeAssignment.Vehicle?.CarClassId;
+                if (vehicleClassId.HasValue && vehicleClassId != req.CarClassId)
+                {
+                    warnings.Add($"{guest.FirstName} {guest.LastName} already has a vehicle assigned from a different class.");
+                }
+            }
+            guest.DeservedCarClassId = req.CarClassId;
+            updated++;
+        }
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new { updated, warnings });
+    }
+
+    /// <summary>
+    /// Optimized sync flow:
+    /// Pass 1: Fetch contacts with DedicatedCar=True from EventsAir using checkboxCustomFieldFilters.
+    ///         This returns only contacts who have the Dedicated Car checkbox checked.
+    ///         Rank is fetched inline via customFields in the same query.
+    /// Pass 2: Deactivate guests not in the fetched set (unless they have active vehicle assignments).
+    /// Pass 3: Fetch and sync travel bookings for active guests.
+    /// </summary>
+    [HttpPost("sync-from-eventsair")]
+    public async Task<IActionResult> SyncFromEventsAir(
+        [FromServices] AppDbContext db,
+        [FromServices] IHttpClientFactory httpClientFactory,
+        [FromServices] IMemoryCache cache,
+        [FromServices] IServiceScopeFactory scopeFactory,
+        CancellationToken cancellationToken)
+    {
+        var config = await db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive || string.IsNullOrWhiteSpace(config.ClientId))
+        {
+            return BadRequest(new { message = "EventsAir integration is not configured or inactive." });
+        }
+
+        var jobId = Guid.NewGuid().ToString("N");
+        var job = new SyncJobStatus { JobId = jobId, State = "running", StartedAt = DateTime.UtcNow };
+        _syncJobs[jobId] = job;
+
+        var clientId = config.ClientId;
+        var clientSecret = config.ClientSecret;
+        var eventCode = config.EventCode;
+        var apiBaseUrl = config.ApiBaseUrl;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var token = await GetEventsAirTokenAsync(clientId, clientSecret, httpClientFactory, cache);
+                Console.WriteLine($"[SYNC] Token acquired. Starting optimized sync...");
+
+                // ═══════════════════════════════════════════════════════════════
+                // PASS 1: Fetch contacts with DedicatedCar=True (includes Rank)
+                // ═══════════════════════════════════════════════════════════════
+                var contacts = await FetchContactsWithDedicatedCarAsync(
+                    apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None);
+
+                job.TotalFetched = contacts.Count;
+                Console.WriteLine($"[SYNC] Pass 1 complete: {contacts.Count} contacts with DedicatedCar=True fetched.");
+
+                using var scope = scopeFactory.CreateScope();
+                var bgDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                int added = 0, updated = 0, deactivated = 0;
+                var syncedContactIds = new HashSet<string>(contacts.Select(c => c.ContactId), StringComparer.OrdinalIgnoreCase);
+
+                // Upsert guests
+                foreach (var contact in contacts)
+                {
+                    if (string.IsNullOrEmpty(contact.ContactId)) continue;
+                    var existing = await bgDb.Guests.FirstOrDefaultAsync(g => g.EventsAirContactId == contact.ContactId);
+                    if (existing == null)
+                    {
+                        bgDb.Guests.Add(new Guest
+                        {
+                            EventsAirContactId = contact.ContactId,
+                            FirstName = contact.FirstName,
+                            LastName = contact.LastName,
+                            Title = contact.Title,
+                            Designation = contact.JobTitle,
+                            Organization = contact.OrganizationName,
+                            Email = contact.PrimaryEmail,
+                            Country = contact.Country,
+                            PhotoUrl = contact.PhotoUrl,
+                            RegistrationTypeId = contact.RegistrationTypeId,
+                            RegistrationTypeName = contact.RegistrationTypeName,
+                            DedicatedCar = "True",
+                            RankValue = contact.RankValue,
+                            IsActive = true,
+                            Status = GuestStatus.Expected,
+                            LastSyncedAt = DateTime.UtcNow
+                        });
+                        added++;
+                    }
+                    else
+                    {
+                        bool changed = false;
+                        if (existing.FirstName != contact.FirstName) { existing.FirstName = contact.FirstName; changed = true; }
+                        if (existing.LastName != contact.LastName) { existing.LastName = contact.LastName; changed = true; }
+                        if (existing.Designation != contact.JobTitle) { existing.Designation = contact.JobTitle; changed = true; }
+                        if (existing.Organization != contact.OrganizationName) { existing.Organization = contact.OrganizationName; changed = true; }
+                        if (existing.RegistrationTypeName != contact.RegistrationTypeName) { existing.RegistrationTypeName = contact.RegistrationTypeName; changed = true; }
+                        if (existing.RegistrationTypeId != contact.RegistrationTypeId) { existing.RegistrationTypeId = contact.RegistrationTypeId; changed = true; }
+                        if (existing.Email != contact.PrimaryEmail) { existing.Email = contact.PrimaryEmail; changed = true; }
+                        if (existing.Country != contact.Country) { existing.Country = contact.Country; changed = true; }
+                        if (existing.PhotoUrl != contact.PhotoUrl) { existing.PhotoUrl = contact.PhotoUrl; changed = true; }
+                        if (existing.RankValue != contact.RankValue) { existing.RankValue = contact.RankValue; changed = true; }
+                        if (existing.DedicatedCar != "True") { existing.DedicatedCar = "True"; changed = true; }
+                        if (!existing.IsActive) { existing.IsActive = true; changed = true; }
+                        if (changed) { existing.LastSyncedAt = DateTime.UtcNow; updated++; }
+                    }
+                }
+                await bgDb.SaveChangesAsync();
+                Console.WriteLine($"[SYNC] Upsert complete: {added} new, {updated} updated.");
+
+                // ═══════════════════════════════════════════════════════════════
+                // PASS 2: Deactivate guests not in the fetched set
+                // ═══════════════════════════════════════════════════════════════
+                var activeGuestsInDb = await bgDb.Guests
+                    .Where(g => g.IsActive)
+                    .Include(g => g.VehicleAssignments)
+                    .Select(g => new { g.Id, g.EventsAirContactId, HasActiveVehicle = g.VehicleAssignments.Any(va => va.IsActive) })
+                    .ToListAsync();
+
+                foreach (var dbGuest in activeGuestsInDb)
+                {
+                    if (!string.IsNullOrEmpty(dbGuest.EventsAirContactId) && !syncedContactIds.Contains(dbGuest.EventsAirContactId))
+                    {
+                        // Guest is no longer in the DedicatedCar=True list
+                        // Only deactivate if they don't have an active vehicle assignment
+                        if (!dbGuest.HasActiveVehicle)
+                        {
+                            var guestToDeactivate = await bgDb.Guests.FindAsync(dbGuest.Id);
+                            if (guestToDeactivate != null)
+                            {
+                                guestToDeactivate.IsActive = false;
+                                guestToDeactivate.DedicatedCar = null;
+                                guestToDeactivate.LastSyncedAt = DateTime.UtcNow;
+                                deactivated++;
+                            }
+                        }
+                    }
+                }
+                await bgDb.SaveChangesAsync();
+                Console.WriteLine($"[SYNC] Pass 2 complete: {deactivated} deactivated.");
+
+                // ═══════════════════════════════════════════════════════════════
+                // PASS 3: Travel Sync (replace-on-rebooking with history)
+                // Each guest has at most ONE arrival booking and ONE departure booking.
+                // If the flight number changes, the old booking is saved to history
+                // and the booking is updated to point to the new flight.
+                // Scheduled flight fields are ALWAYS overwritten from EventsAir.
+                // ═══════════════════════════════════════════════════════════════
+                try
+                {
+                    var travelBookings = await FetchTravelBookingsFromEventsAirAsync(apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None);
+                    int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0, savedNew = 0, updatedExisting = 0, rebooked = 0;
+                    Console.WriteLine($"[TRAVEL-SYNC] Processing {travelBookings.Count} travel bookings...");
+                    foreach (var sample in travelBookings.Take(5))
+                        Console.WriteLine($"[TRAVEL-SYNC] Sample: ContactId={sample.ContactId}, FlightNumber={sample.FlightNumber}, TravelType={sample.TravelTypeName}, ArrivalDate={sample.ArrivalDate}");
+                    int errorCount = 0;
+                    foreach (var tbDto in travelBookings)
+                    {
+                      try
+                      {
+                        if (string.IsNullOrEmpty(tbDto.FlightNumber)) { skippedNoFlight++; continue; }
+                        if (string.IsNullOrEmpty(tbDto.ContactId)) { skippedNoContact++; continue; }
+                        var guest = await bgDb.Guests
+                            .Include(g => g.TravelBookings)
+                                .ThenInclude(tb => tb.Flight)
+                            .FirstOrDefaultAsync(g => g.EventsAirContactId == tbDto.ContactId && g.IsActive);
+                        if (guest == null) { skippedNoGuest++; continue; }
+
+                        bool isArrival = tbDto.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
+
+                        // Parse scheduled times from EventsAir
+                        DateTime? scheduledArrival = null;
+                        DateTime? scheduledDeparture = null;
+                        if (isArrival && !string.IsNullOrEmpty(tbDto.ArrivalDate))
+                        {
+                            if (DateTime.TryParse(tbDto.ArrivalDate, out var arrDate))
+                            {
+                                arrDate = DateTime.SpecifyKind(arrDate, DateTimeKind.Utc);
+                                scheduledArrival = !string.IsNullOrEmpty(tbDto.Eta) && TimeSpan.TryParse(tbDto.Eta, out var etaTime)
+                                    ? arrDate.Add(etaTime) : arrDate;
+                            }
+                        }
+                        if (!isArrival && !string.IsNullOrEmpty(tbDto.DepartureDate))
+                        {
+                            if (DateTime.TryParse(tbDto.DepartureDate, out var depDate))
+                            {
+                                depDate = DateTime.SpecifyKind(depDate, DateTimeKind.Utc);
+                                scheduledDeparture = !string.IsNullOrEmpty(tbDto.Etd) && TimeSpan.TryParse(tbDto.Etd, out var etdTime)
+                                    ? depDate.Add(etdTime) : depDate;
+                            }
+                        }
+
+                        // Find or create the Flight record.
+                        // ALWAYS overwrite scheduled fields from EventsAir (no write-once guard).
+                        var flight = await bgDb.Flights.FirstOrDefaultAsync(f => f.FlightNumber == tbDto.FlightNumber);
+                        if (flight == null)
+                        {
+                            flight = new Flight
+                            {
+                                FlightNumber = tbDto.FlightNumber,
+                                AirlineName = tbDto.CarrierName ?? "Unknown",
+                                ScheduledArrival = scheduledArrival ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc),
+                                ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc),
+                                ArrivalPortName = tbDto.ArrivalPortName,
+                                ArrivalPortIataCode = tbDto.ArrivalPortCode,
+                                DeparturePortName = tbDto.DeparturePortName,
+                                DeparturePortIataCode = tbDto.DeparturePortCode,
+                                Status = FlightStatus.Scheduled
+                            };
+                            bgDb.Flights.Add(flight);
+                            await bgDb.SaveChangesAsync();
+                        }
+                        else
+                        {
+                            // Always overwrite scheduled (EventsAir-owned) fields
+                            if (scheduledArrival.HasValue) flight.ScheduledArrival = scheduledArrival.Value;
+                            if (scheduledDeparture.HasValue) flight.ScheduledDeparture = scheduledDeparture.Value;
+                            if (!string.IsNullOrEmpty(tbDto.ArrivalPortName)) flight.ArrivalPortName = tbDto.ArrivalPortName;
+                            if (!string.IsNullOrEmpty(tbDto.ArrivalPortCode)) flight.ArrivalPortIataCode = tbDto.ArrivalPortCode;
+                            if (!string.IsNullOrEmpty(tbDto.DeparturePortName)) flight.DeparturePortName = tbDto.DeparturePortName;
+                            if (!string.IsNullOrEmpty(tbDto.DeparturePortCode)) flight.DeparturePortIataCode = tbDto.DeparturePortCode;
+                            if (!string.IsNullOrEmpty(tbDto.CarrierName)) flight.AirlineName = tbDto.CarrierName;
+                            // NOTE: ActualTerminal, ActualGate, Status are Aviationstack-owned — never overwrite here
+                        }
+
+                        var notes = tbDto.BookingNotes ?? tbDto.Comment;
+
+                        // Find the existing booking for this guest+direction (arrival OR departure)
+                        // A guest has at most ONE arrival and ONE departure booking.
+                        var existingBooking = guest.TravelBookings.FirstOrDefault(b => b.IsArrival == isArrival);
+
+                        if (existingBooking == null)
+                        {
+                            // No booking yet for this direction — create new
+                            bgDb.TravelBookings.Add(new TravelBooking
+                            {
+                                GuestId = guest.Id,
+                                FlightId = flight.Id,
+                                IsArrival = isArrival,
+                                SeatClass = tbDto.SeatClass,
+                                BookingNotes = notes,
+                                LastSyncedAt = DateTime.UtcNow
+                            });
+                            savedNew++;
+                        }
+                        else if (existingBooking.FlightId != flight.Id)
+                        {
+                            // Flight number changed — save history, update booking, flag as changed
+                            bgDb.TravelBookingHistories.Add(new TravelBookingHistory
+                            {
+                                TravelBookingId = existingBooking.Id,
+                                GuestId = guest.Id,
+                                PreviousFlightNumber = existingBooking.Flight?.FlightNumber ?? "Unknown",
+                                PreviousAirlineName = existingBooking.Flight?.AirlineName,
+                                PreviousScheduledArrival = existingBooking.Flight?.ScheduledArrival,
+                                PreviousScheduledDeparture = existingBooking.Flight?.ScheduledDeparture,
+                                PreviousDeparturePort = existingBooking.Flight?.DeparturePortName,
+                                PreviousArrivalPort = existingBooking.Flight?.ArrivalPortName,
+                                PreviousSeatClass = existingBooking.SeatClass,
+                                ChangedAt = DateTime.UtcNow
+                            });
+                            existingBooking.PreviousFlightNumber = existingBooking.Flight?.FlightNumber;
+                            existingBooking.FlightId = flight.Id;
+                            existingBooking.SeatClass = tbDto.SeatClass;
+                            existingBooking.BookingNotes = notes;
+                            existingBooking.ChangedSinceLastView = true;
+                            existingBooking.ChangedAt = DateTime.UtcNow;
+                            existingBooking.LastSyncedAt = DateTime.UtcNow;
+                            rebooked++;
+                        }
+                        else
+                        {
+                            // Same flight — just update mutable fields
+                            existingBooking.SeatClass = tbDto.SeatClass;
+                            existingBooking.BookingNotes = notes;
+                            existingBooking.LastSyncedAt = DateTime.UtcNow;
+                            updatedExisting++;
+                        }
+                        await bgDb.SaveChangesAsync();
+                      }
+                      catch (Exception bookingEx)
+                      {
+                        errorCount++;
+                        if (errorCount <= 5) Console.WriteLine($"[TRAVEL-SYNC] Error processing booking {tbDto.Id}: {bookingEx.Message}");
+                        foreach (var entry in bgDb.ChangeTracker.Entries().Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added || e.State == Microsoft.EntityFrameworkCore.EntityState.Modified))
+                            entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                      }
+                    }
+                    Console.WriteLine($"[TRAVEL-SYNC] Results: {savedNew} new, {updatedExisting} updated, {rebooked} rebooked (history saved), {errorCount} errors, skipped: {skippedNoFlight} no flight, {skippedNoContact} no contact, {skippedNoGuest} no guest match");
+                }
+                catch (Exception ex) { Console.WriteLine($"Travel sync error: {ex.Message}\n{ex.StackTrace}"); }
+
+                job.Added = added; job.Updated = updated; job.Deactivated = deactivated;
+                job.State = "done"; job.FinishedAt = DateTime.UtcNow;
+                job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated.";
+                Console.WriteLine($"[SYNC] All passes complete. {added} new, {updated} updated, {deactivated} deactivated.");
+            }
+            catch (Exception ex)
+            {
+                job.State = "error"; job.Message = ex.Message; job.FinishedAt = DateTime.UtcNow;
+                Console.WriteLine($"[SYNC] Error: {ex.Message}\n{ex.StackTrace}");
+            }
+        });
+
+        return Ok(new { jobId });
+    }
+
+    [HttpGet("sync-status/{jobId}")]
+    public IActionResult GetSyncStatus(string jobId)
+    {
+        if (!_syncJobs.TryGetValue(jobId, out var job)) return NotFound();
+        return Ok(job);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Helper: Get OAuth2 token for EventsAir API
+    // ═══════════════════════════════════════════════════════════════════════════
+    private static async Task<string> GetEventsAirTokenAsync(string clientId, string clientSecret, IHttpClientFactory httpClientFactory, IMemoryCache cache)
+    {
+        var cacheKey = $"eventsair_token_{clientId}";
+        if (cache.TryGetValue(cacheKey, out string? cachedToken) && cachedToken != null) return cachedToken;
+        var client = httpClientFactory.CreateClient();
+        var tokenUrl = "https://login.microsoftonline.com/dff76352-1ded-46e8-96a4-1a83718b2d3a/oauth2/v2.0/token";
+        var tokenRequest = new FormUrlEncodedContent(new[] {
+            new KeyValuePair<string, string>("grant_type", "client_credentials"),
+            new KeyValuePair<string, string>("client_id", clientId),
+            new KeyValuePair<string, string>("client_secret", clientSecret),
+            new KeyValuePair<string, string>("scope", "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default")
+        });
+        var response = await client.PostAsync(tokenUrl, tokenRequest);
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync();
+        var doc = JsonSerializer.Deserialize<JsonElement>(json);
+        var token = doc.GetProperty("access_token").GetString()!;
+        var expiresIn = doc.TryGetProperty("expires_in", out var exp) ? exp.GetInt32() : 3600;
+        cache.Set(cacheKey, token, TimeSpan.FromSeconds(expiresIn - 60));
+        return token;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // OPTIMIZED: Fetch contacts with DedicatedCar=True using checkboxCustomFieldFilters
+    // Returns contacts with their Rank value included (from customFields inline)
+    // Only 2-3 API calls needed for ~200 contacts
+    // ═══════════════════════════════════════════════════════════════════════════
+    private static async Task<List<EventsAirContactDto>> FetchContactsWithDedicatedCarAsync(
+        string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+    {
+        var fetched = new List<EventsAirContactDto>();
+        var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var client = httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromMinutes(5);
+        int offset = 0;
+        const int pageSize = 25; // Must be ≤25 to stay under EventsAir's 10000 cost limit with customFields+registrations
+
+        while (true)
+        {
+            // Use checkboxCustomFieldFilters to only get contacts with DedicatedCar=True
+            // Include customFields to get Rank value inline (no separate per-contact query needed)
+            var graphqlQuery = $@"{{
+              event(id: ""{eventCode}"") {{
+                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{DEDICATED_CAR_FIELD_GUID}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
+                  id
+                  firstName
+                  lastName
+                  title
+                  jobTitle
+                  organizationName
+                  primaryEmail
+                  primaryAddress {{ country }}
+                  photo {{ url }}
+                  customFields {{ definitionId value }}
+                  registrations {{ type {{ id name }} }}
+                }}
+              }}
+            }}";
+
+            var queryBody = JsonSerializer.Serialize(new { query = graphqlQuery });
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/graphql")
+            {
+                Headers = { Authorization = new AuthenticationHeaderValue("Bearer", accessToken) },
+                Content = new StringContent(queryBody, Encoding.UTF8, "application/json")
+            };
+
+            var response = await client.SendAsync(req, cancellationToken);
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"[SYNC] HTTP {(int)response.StatusCode} at offset {offset}: {json[..Math.Min(json.Length, 500)]}");
+                throw new InvalidOperationException($"EventsAir API returned HTTP {(int)response.StatusCode}");
+            }
+
+            var doc = JsonSerializer.Deserialize<JsonElement>(json);
+            if (doc.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
+            {
+                var errorMsg = errors[0].GetProperty("message").GetString() ?? "Unknown GraphQL error";
+                Console.WriteLine($"[SYNC] GraphQL error at offset {offset}: {errorMsg}");
+
+                // If cost limit exceeded, retry with fewer fields
+                if (errorMsg.Contains("cost", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine("[SYNC] Cost limit hit — retrying with lighter query (no customFields/photo)...");
+                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken);
+                }
+                throw new InvalidOperationException($"GraphQL error: {errorMsg}");
+            }
+
+            var contacts = doc.GetProperty("data").GetProperty("event").GetProperty("contacts");
+            int pageCount = 0;
+
+            foreach (var contact in contacts.EnumerateArray())
+            {
+                pageCount++;
+                var contactId = contact.TryGetProperty("id", out var cidEl) ? cidEl.GetString() ?? "" : "";
+                if (string.IsNullOrEmpty(contactId) || !seenContactIds.Add(contactId)) continue;
+
+                // Extract Rank from customFields
+                string? rankValue = null;
+                if (contact.TryGetProperty("customFields", out var cfArray) && cfArray.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var cf in cfArray.EnumerateArray())
+                    {
+                        var defId = cf.TryGetProperty("definitionId", out var did) ? did.GetString() ?? "" : "";
+                        if (string.Equals(defId, RANK_FIELD_GUID, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (cf.TryGetProperty("value", out var v) && v.ValueKind != JsonValueKind.Null)
+                            {
+                                rankValue = v.ValueKind == JsonValueKind.String ? v.GetString() : v.GetRawText().Trim('"');
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Extract registration type from first registration
+                string regTypeId = "", regTypeName = "";
+                if (contact.TryGetProperty("registrations", out var regsEl) && regsEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var reg in regsEl.EnumerateArray())
+                    {
+                        if (reg.TryGetProperty("type", out var typeEl) && typeEl.ValueKind == JsonValueKind.Object)
+                        {
+                            regTypeId = typeEl.TryGetProperty("id", out var tidEl) ? tidEl.GetString() ?? "" : "";
+                            regTypeName = typeEl.TryGetProperty("name", out var tn) ? tn.GetString() ?? "" : "";
+                            break; // Use first registration type
+                        }
+                    }
+                }
+
+                // Extract other fields
+                string? country = null;
+                if (contact.TryGetProperty("primaryAddress", out var addrEl) && addrEl.ValueKind == JsonValueKind.Object)
+                    country = addrEl.TryGetProperty("country", out var cEl) && cEl.ValueKind != JsonValueKind.Null ? cEl.GetString() : null;
+
+                string? photoUrl = null;
+                if (contact.TryGetProperty("photo", out var photoEl) && photoEl.ValueKind == JsonValueKind.Object)
+                    photoUrl = photoEl.TryGetProperty("url", out var urlEl) && urlEl.ValueKind != JsonValueKind.Null ? urlEl.GetString() : null;
+
+                fetched.Add(new EventsAirContactDto(
+                    ContactId: contactId,
+                    FirstName: contact.TryGetProperty("firstName", out var fn) ? fn.GetString() ?? "" : "",
+                    LastName: contact.TryGetProperty("lastName", out var ln) ? ln.GetString() ?? "" : "",
+                    Title: contact.TryGetProperty("title", out var t) ? t.GetString() : null,
+                    JobTitle: contact.TryGetProperty("jobTitle", out var jt) ? jt.GetString() : null,
+                    OrganizationName: contact.TryGetProperty("organizationName", out var org) ? org.GetString() : null,
+                    PrimaryEmail: contact.TryGetProperty("primaryEmail", out var em) ? em.GetString() : null,
+                    RegistrationTypeId: regTypeId,
+                    RegistrationTypeName: regTypeName,
+                    Country: country,
+                    PhotoUrl: photoUrl,
+                    RankValue: rankValue
+                ));
+            }
+
+            Console.WriteLine($"[SYNC] Page offset={offset}: {pageCount} contacts (total: {fetched.Count})");
+            if (pageCount < pageSize) break;
+            offset += pageSize;
+        }
+
+        return fetched;
+    }
+
+    /// <summary>
+    /// Fallback: lighter query without customFields/photo if cost limit is exceeded.
+    /// Rank will be fetched separately per-contact in this case.
+    /// </summary>
+    private static async Task<List<EventsAirContactDto>> FetchContactsWithDedicatedCarLightAsync(
+        string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+    {
+        var fetched = new List<EventsAirContactDto>();
+        var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var client = httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromMinutes(5);
+        int offset = 0;
+        const int pageSize = 50; // 50 is safe without customFields/photo
+
+        while (true)
+        {
+            var graphqlQuery = $@"{{
+              event(id: ""{eventCode}"") {{
+                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{DEDICATED_CAR_FIELD_GUID}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
+                  id
+                  firstName
+                  lastName
+                  title
+                  jobTitle
+                  organizationName
+                  primaryEmail
+                  primaryAddress {{ country }}
+                }}
+              }}
+            }}";
+
+            var queryBody = JsonSerializer.Serialize(new { query = graphqlQuery });
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/graphql")
+            {
+                Headers = { Authorization = new AuthenticationHeaderValue("Bearer", accessToken) },
+                Content = new StringContent(queryBody, Encoding.UTF8, "application/json")
+            };
+
+            var response = await client.SendAsync(req, cancellationToken);
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"HTTP {(int)response.StatusCode}");
+
+            var doc = JsonSerializer.Deserialize<JsonElement>(json);
+            if (doc.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
+                throw new InvalidOperationException("GraphQL error in light query");
+
+            var contacts = doc.GetProperty("data").GetProperty("event").GetProperty("contacts");
+            int pageCount = 0;
+
+            foreach (var contact in contacts.EnumerateArray())
+            {
+                pageCount++;
+                var contactId = contact.TryGetProperty("id", out var cidEl) ? cidEl.GetString() ?? "" : "";
+                if (string.IsNullOrEmpty(contactId) || !seenContactIds.Add(contactId)) continue;
+
+                string? country = null;
+                if (contact.TryGetProperty("primaryAddress", out var addrEl) && addrEl.ValueKind == JsonValueKind.Object)
+                    country = addrEl.TryGetProperty("country", out var cEl) && cEl.ValueKind != JsonValueKind.Null ? cEl.GetString() : null;
+
+                fetched.Add(new EventsAirContactDto(
+                    ContactId: contactId,
+                    FirstName: contact.TryGetProperty("firstName", out var fn) ? fn.GetString() ?? "" : "",
+                    LastName: contact.TryGetProperty("lastName", out var ln) ? ln.GetString() ?? "" : "",
+                    Title: contact.TryGetProperty("title", out var t) ? t.GetString() : null,
+                    JobTitle: contact.TryGetProperty("jobTitle", out var jt) ? jt.GetString() : null,
+                    OrganizationName: contact.TryGetProperty("organizationName", out var org) ? org.GetString() : null,
+                    PrimaryEmail: contact.TryGetProperty("primaryEmail", out var em) ? em.GetString() : null,
+                    RegistrationTypeId: "",
+                    RegistrationTypeName: "",
+                    Country: country,
+                    PhotoUrl: null,
+                    RankValue: null // Will need separate fetch
+                ));
+            }
+
+            Console.WriteLine($"[SYNC] Light page offset={offset}: {pageCount} contacts (total: {fetched.Count})");
+            if (pageCount < pageSize) break;
+            offset += pageSize;
+        }
+
+        // Fetch Rank values separately for the light path
+        if (fetched.Count > 0)
+        {
+            Console.WriteLine($"[SYNC] Light path: fetching Rank values for {fetched.Count} contacts...");
+            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, RANK_FIELD_GUID, fetched.Select(c => c.ContactId), httpClientFactory, cancellationToken);
+            for (int i = 0; i < fetched.Count; i++)
+            {
+                if (rankValues.TryGetValue(fetched[i].ContactId, out var rank))
+                    fetched[i] = fetched[i] with { RankValue = rank };
+            }
+        }
+
+        return fetched;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Helper: Fetch custom field values per-contact (fallback only)
+    // ═══════════════════════════════════════════════════════════════════════════
+    private static async Task<Dictionary<string, string>> FetchCustomFieldValuesAsync(string baseUrl, string eventCode, string accessToken, string fieldDefinitionId, IEnumerable<string> contactIds, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+    {
+        var result = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var allContactIds = contactIds.Where(id => !string.IsNullOrWhiteSpace(id)).ToList();
+        var client = httpClientFactory.CreateClient();
+        const int concurrency = 15;
+        for (int i = 0; i < allContactIds.Count; i += concurrency)
+        {
+            var batch = allContactIds.Skip(i).Take(concurrency).ToList();
+            var tasks = batch.Select(async contactId => {
+                try {
+                    var queryBody = JsonSerializer.Serialize(new { query = $"{{ event(id: \"{eventCode}\") {{ contact(id: \"{contactId}\") {{ id customFields {{ definitionId value }} }} }} }}" });
+                    var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/graphql") { Headers = { Authorization = new AuthenticationHeaderValue("Bearer", accessToken) }, Content = new StringContent(queryBody, Encoding.UTF8, "application/json") };
+                    var response = await client.SendAsync(req, cancellationToken);
+                    var json = await response.Content.ReadAsStringAsync(cancellationToken);
+                    if (!response.IsSuccessStatusCode) return;
+                    var doc = JsonSerializer.Deserialize<JsonElement>(json);
+                    if (doc.TryGetProperty("errors", out _) || !doc.TryGetProperty("data", out var data)) return;
+                    var contactEl = data.GetProperty("event").GetProperty("contact");
+                    if (contactEl.ValueKind == JsonValueKind.Null) return;
+                    foreach (var cf in contactEl.GetProperty("customFields").EnumerateArray()) {
+                        var defId = cf.GetProperty("definitionId").GetString() ?? "";
+                        if (!string.Equals(defId, fieldDefinitionId, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (cf.TryGetProperty("value", out var v) && v.ValueKind != JsonValueKind.Null) {
+                            var val = v.ValueKind == JsonValueKind.Object ? (v.TryGetProperty("value", out var nv) ? nv.GetString() : v.TryGetProperty("text", out var tv) ? tv.GetString() : v.GetRawText()) : v.GetRawText();
+                            if (!string.IsNullOrEmpty(val)) result[contactId] = val.Trim('"');
+                        }
+                    }
+                } catch { }
+            });
+            await Task.WhenAll(tasks);
+        }
+        return new Dictionary<string, string>(result, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Helper: Fetch travel bookings (unchanged)
+    // ═══════════════════════════════════════════════════════════════════════════
+    private static async Task<List<EventsAirTravelDto>> FetchTravelBookingsFromEventsAirAsync(string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+    {
+        var result = new List<EventsAirTravelDto>();
+        var client = httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromMinutes(5);
+        const int pageSize = 100;
+        int offset = 0;
+        bool hasMore = true;
+
+        while (hasMore)
+        {
+            var queryBody = JsonSerializer.Serialize(new { query = $"{{ event(id: \"{eventCode}\") {{ travelBookings(input: {{}}, limit: {pageSize}, offset: {offset}) {{ id contact {{ id }} travelType {{ name }} flightNumber carrier {{ name }} arrivalDate departureDate eta etd departurePort {{ name }} arrivalPort {{ name }} class bookingNotes comment }} }} }}" });
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/graphql")
+            {
+                Headers = { Authorization = new AuthenticationHeaderValue("Bearer", accessToken) },
+                Content = new StringContent(queryBody, Encoding.UTF8, "application/json")
+            };
+            var response = await client.SendAsync(req, cancellationToken);
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            Console.WriteLine($"[TRAVEL-SYNC] Page offset={offset}: status={response.StatusCode}, responseLength={json.Length}");
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"[TRAVEL-SYNC] Error response: {json[..Math.Min(json.Length, 1000)]}");
+                break;
+            }
+            var doc = JsonSerializer.Deserialize<JsonElement>(json);
+            if (doc.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
+            {
+                Console.WriteLine($"[TRAVEL-SYNC] GraphQL errors: {errors}");
+                break;
+            }
+            int pageCount = 0;
+            if (doc.TryGetProperty("data", out var data) && data.TryGetProperty("event", out var eventObj) && eventObj.TryGetProperty("travelBookings", out var bookings))
+            {
+                foreach (var booking in bookings.EnumerateArray())
+                {
+                    var dto = new EventsAirTravelDto
+                    {
+                        Id = booking.GetProperty("id").GetString() ?? string.Empty,
+                        ContactId = booking.TryGetProperty("contact", out var contact) && contact.ValueKind == JsonValueKind.Object ? (contact.TryGetProperty("id", out var cid) ? cid.GetString() ?? string.Empty : string.Empty) : string.Empty,
+                        TravelTypeName = booking.TryGetProperty("travelType", out var tt) && tt.ValueKind == JsonValueKind.Object ? (tt.TryGetProperty("name", out var ttn) ? ttn.GetString() : null) : null,
+                        FlightNumber = booking.TryGetProperty("flightNumber", out var fn) && fn.ValueKind != JsonValueKind.Null ? fn.GetString() : null,
+                        CarrierName = booking.TryGetProperty("carrier", out var cr) && cr.ValueKind == JsonValueKind.Object ? (cr.TryGetProperty("name", out var crn) ? crn.GetString() : null) : null,
+                        ArrivalDate = booking.TryGetProperty("arrivalDate", out var ad) && ad.ValueKind != JsonValueKind.Null ? ad.GetString() : null,
+                        DepartureDate = booking.TryGetProperty("departureDate", out var dd) && dd.ValueKind != JsonValueKind.Null ? dd.GetString() : null,
+                        Eta = booking.TryGetProperty("eta", out var eta) && eta.ValueKind != JsonValueKind.Null ? eta.GetString() : null,
+                        Etd = booking.TryGetProperty("etd", out var etd) && etd.ValueKind != JsonValueKind.Null ? etd.GetString() : null,
+                        DeparturePortName = booking.TryGetProperty("departurePort", out var dp) && dp.ValueKind == JsonValueKind.Object ? (dp.TryGetProperty("name", out var dpn) ? dpn.GetString() : null) : null,
+                        DeparturePortCode = null,
+                        ArrivalPortName = booking.TryGetProperty("arrivalPort", out var ap) && ap.ValueKind == JsonValueKind.Object ? (ap.TryGetProperty("name", out var apn) ? apn.GetString() : null) : null,
+                        ArrivalPortCode = null,
+                        Terminal = null,
+                        SeatClass = booking.TryGetProperty("class", out var sc) && sc.ValueKind != JsonValueKind.Null ? sc.GetString() : null,
+                        BookingNotes = booking.TryGetProperty("bookingNotes", out var bn) && bn.ValueKind != JsonValueKind.Null ? bn.GetString() : null,
+                        Comment = booking.TryGetProperty("comment", out var cmt) && cmt.ValueKind != JsonValueKind.Null ? cmt.GetString() : null
+                    };
+                    result.Add(dto);
+                    pageCount++;
+                }
+            }
+            Console.WriteLine($"[TRAVEL-SYNC] Page offset={offset}: fetched {pageCount} bookings (total so far: {result.Count})");
+            hasMore = pageCount >= pageSize;
+            offset += pageSize;
+        }
+        Console.WriteLine($"[TRAVEL-SYNC] Completed: total {result.Count} travel bookings fetched");
+        return result;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DTOs and helper records
+    // ═══════════════════════════════════════════════════════════════════════════
+    private record EventsAirContactDto(
+        string ContactId, string FirstName, string LastName, string? Title,
+        string? JobTitle, string? OrganizationName, string? PrimaryEmail,
+        string RegistrationTypeId, string RegistrationTypeName,
+        string? Country = null, string? PhotoUrl = null, string? RankValue = null);
+
+    private record EventsAirRegistrationRaw(string ContactId, string FirstName, string LastName, string? Title, string? JobTitle, string? OrganizationName, string? PrimaryEmail, string RegistrationTypeId, string RegistrationTypeName, string? Country = null, string? PhotoUrl = null);
+    private class SyncJobStatus { public string JobId { get; set; } = string.Empty; public string State { get; set; } = "pending"; public string Message { get; set; } = string.Empty; public int Added { get; set; } public int Updated { get; set; } public int Deactivated { get; set; } public int TotalFetched { get; set; } public DateTime StartedAt { get; set; } public DateTime? FinishedAt { get; set; } }
+    private class FieldFilter { public string FieldGuid { get; set; } = string.Empty; public List<string> SelectedValues { get; set; } = new(); }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // JOURNEY STATUS FLOW ENDPOINTS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Get full journey status (inbound + outbound + history) for a guest.</summary>
+    [HttpGet("{id:guid}/journey-status")]
+    public async Task<IActionResult> GetJourneyStatus(Guid id, [FromServices] AppDbContext db, CancellationToken ct)
+    {
+        var guest = await db.Guests
+            .Include(g => g.StatusHistory.Where(h => !h.IsRolledBack).OrderBy(h => h.CreatedAt))
+            .Include(g => g.VehicleAssignments.Where(va => va.IsActive))
+            .FirstOrDefaultAsync(g => g.Id == id, ct);
+        if (guest == null) return NotFound();
+
+        var activeAssignment = guest.VehicleAssignments.FirstOrDefault(va => va.IsActive);
+
+        return Ok(new
+        {
+            inboundStatus = guest.InboundStatus,
+            inboundStatusLabel = GetInboundLabel(guest.InboundStatus),
+            receivedByEmbassyTeam = guest.ReceivedByEmbassyTeam,
+            vehicleAssigned = activeAssignment != null,
+            outboundStatus = guest.OutboundStatus,
+            outboundStatusLabel = guest.OutboundStatus.HasValue ? GetOutboundLabel(guest.OutboundStatus.Value) : null,
+            outboundUnlocked = guest.InboundStatus == InboundStatus.AtHotel,
+            history = guest.StatusHistory
+                .OrderBy(h => h.CreatedAt)
+                .Select(h => new
+                {
+                    h.Id,
+                    h.Track,
+                    h.StatusValue,
+                    h.StatusLabel,
+                    h.ChangedByName,
+                    h.ChangedByRole,
+                    h.IsSystemGenerated,
+                    h.Notes,
+                    h.IsRolledBack,
+                    h.CreatedAt
+                })
+        });
+    }
+
+    /// <summary>Set inbound status for a guest. Role-validated.</summary>
+    [HttpPost("{id:guid}/inbound-status")]
+    public async Task<IActionResult> SetInboundStatus(
+        Guid id,
+        [FromBody] SetStatusRequest req,
+        [FromServices] AppDbContext db,
+        [FromServices] IsDB.Hospitality.API.Services.NotificationTemplateService templateSvc,
+        CancellationToken ct)
+    {
+        var guest = await db.Guests
+            .Include(g => g.VehicleAssignments.Where(va => va.IsActive))
+            .FirstOrDefaultAsync(g => g.Id == id, ct);
+        if (guest == null) return NotFound();
+
+        var callerRole = GetCallerRole();
+        var isAdmin = callerRole == UserRole.Admin;
+
+        // Role permission check
+        var allowed = req.Status switch
+        {
+            InboundStatus.Arrived => callerRole == UserRole.Airport || isAdmin,
+            InboundStatus.ReceivedByEmbassyTeam => callerRole == UserRole.Airport || isAdmin,
+            InboundStatus.AtHotel => callerRole == UserRole.Hotel || isAdmin,
+            _ => isAdmin
+        };
+        if (!allowed) return Forbid();
+
+        // Progression rules
+        if (req.Status == InboundStatus.ReceivedByEmbassyTeam || req.Status == InboundStatus.AtHotel)
+        {
+            // Both require "Arrived" as a prerequisite
+            if (guest.InboundStatus == InboundStatus.ArrivalScheduled)
+                return BadRequest(new { message = "Guest must be marked as 'Arrived' first." });
+        }
+
+        if (req.Status == InboundStatus.AtHotel)
+        {
+            var vehicleAssigned = guest.VehicleAssignments.Any(va => va.IsActive);
+            if (!guest.ReceivedByEmbassyTeam && !vehicleAssigned)
+                return BadRequest(new { message = "At least one of 'Received by Embassy Team' or 'Vehicle Assigned' must be completed first." });
+        }
+
+        // Apply the status
+        if (req.Status == InboundStatus.ReceivedByEmbassyTeam)
+        {
+            guest.ReceivedByEmbassyTeam = true;
+            // Don't change InboundStatus enum — this is an independent flag
+            // But if current status is still ArrivalScheduled, advance to Arrived first (shouldn't happen due to check above)
+        }
+        else
+        {
+            guest.InboundStatus = req.Status;
+        }
+
+        // Save hotel name and room number when checking in
+        if (req.Status == InboundStatus.AtHotel)
+        {
+            if (!string.IsNullOrWhiteSpace(req.HotelName))
+                guest.HotelName = req.HotelName.Trim();
+            if (!string.IsNullOrWhiteSpace(req.RoomNumber))
+                guest.RoomNumber = req.RoomNumber.Trim();
+        }
+
+        // Auto-unlock outbound when AtHotel
+        if (req.Status == InboundStatus.AtHotel && !guest.OutboundStatus.HasValue)
+        {
+            guest.OutboundStatus = OutboundStatus.AtHotel;
+            await AddHistoryEntry(db, guest.Id, StatusTrack.Outbound, (int)OutboundStatus.AtHotel,
+                GetOutboundLabel(OutboundStatus.AtHotel), null, null, null, true, null);
+
+            // Notify Hotel team that outbound is now active
+            await CreateBellNotification(db, "Hotel",
+                $"[Inbound] {guest.FirstName} {guest.LastName} has arrived at the hotel. Outbound journey tracking is now active.",
+                AlertSeverity.High, ct);
+        }
+
+        // Log history
+        var statusLabel = req.Status == InboundStatus.ReceivedByEmbassyTeam
+            ? "Received by Embassy Team"
+            : GetInboundLabel(req.Status);
+        await AddHistoryEntry(db, guest.Id, StatusTrack.Inbound,
+            req.Status == InboundStatus.ReceivedByEmbassyTeam ? (int)InboundStatus.ReceivedByEmbassyTeam : (int)req.Status,
+            statusLabel, CurrentUserId, GetCallerName(), callerRole, false, req.Notes);
+
+        await db.SaveChangesAsync(ct);
+
+        // Send notifications (adds Notification rows, then saves)
+        await SendStatusNotifications(db, guest, StatusTrack.Inbound, req.Status, callerRole, ct, templateSvc);
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { message = $"Inbound status updated to '{statusLabel}'." });
+    }
+
+    /// <summary>Undo the last inbound status change (if allowed by role and no subsequent changes).</summary>
+    [HttpPost("{id:guid}/inbound-status/undo")]
+    public async Task<IActionResult> UndoInboundStatus(
+        Guid id,
+        [FromServices] AppDbContext db,
+        [FromServices] IsDB.Hospitality.API.Services.NotificationTemplateService templateSvc,
+        CancellationToken ct)
+    {
+        var guest = await db.Guests
+            .Include(g => g.StatusHistory.OrderByDescending(h => h.CreatedAt))
+            .FirstOrDefaultAsync(g => g.Id == id, ct);
+        if (guest == null) return NotFound();
+
+        var callerRole = GetCallerRole();
+        var isAdmin = callerRole == UserRole.Admin;
+
+        // Find the last non-rolled-back inbound entry
+        var lastEntry = guest.StatusHistory
+            .Where(h => h.Track == StatusTrack.Inbound && !h.IsRolledBack)
+            .OrderByDescending(h => h.CreatedAt)
+            .FirstOrDefault();
+
+        if (lastEntry == null)
+            return BadRequest(new { message = "No inbound status to undo." });
+
+        // Check if a subsequent status was set by someone else (blocks rollback)
+        var subsequentEntry = guest.StatusHistory
+            .Where(h => h.Track == StatusTrack.Inbound && !h.IsRolledBack && h.CreatedAt > lastEntry.CreatedAt)
+            .Any();
+        if (subsequentEntry && !isAdmin)
+            return BadRequest(new { message = "Cannot undo: a subsequent status has already been set." });
+
+        // Only the same role (or Admin) can undo
+        if (!isAdmin && lastEntry.ChangedByRole != callerRole)
+            return Forbid();
+
+        // Mark as rolled back
+        lastEntry.IsRolledBack = true;
+        lastEntry.UpdatedAt = DateTime.UtcNow;
+
+        // Revert the guest status
+        if (lastEntry.StatusValue == (int)InboundStatus.ReceivedByEmbassyTeam)
+        {
+            guest.ReceivedByEmbassyTeam = false;
+        }
+        else
+        {
+            // Find the previous status
+            var previousEntry = guest.StatusHistory
+                .Where(h => h.Track == StatusTrack.Inbound && !h.IsRolledBack && h.CreatedAt < lastEntry.CreatedAt)
+                .OrderByDescending(h => h.CreatedAt)
+                .FirstOrDefault();
+            guest.InboundStatus = previousEntry != null
+                ? (InboundStatus)previousEntry.StatusValue
+                : InboundStatus.ArrivalScheduled;
+        }
+
+        await db.SaveChangesAsync(ct);
+        await SendUndoInboundNotification(db, guest, lastEntry.StatusValue, ct);
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Inbound status rolled back." });
+    }
+
+    /// <summary>Set outbound status for a guest. Role-validated. Requires inbound AtHotel.</summary>
+    [HttpPost("{id:guid}/outbound-status")]
+    public async Task<IActionResult> SetOutboundStatus(
+        Guid id,
+        [FromBody] SetOutboundStatusRequest req,
+        [FromServices] AppDbContext db,
+        [FromServices] IsDB.Hospitality.API.Services.NotificationTemplateService templateSvc,
+        CancellationToken ct)
+    {
+        var guest = await db.Guests.FirstOrDefaultAsync(g => g.Id == id, ct);
+        if (guest == null) return NotFound();
+
+        if (guest.InboundStatus != InboundStatus.AtHotel)
+            return BadRequest(new { message = "Outbound tracking is only available after the guest has arrived at the hotel." });
+
+        var callerRole = GetCallerRole();
+        var isAdmin = callerRole == UserRole.Admin;
+
+        var allowed = req.Status switch
+        {
+            OutboundStatus.InTransferToAirport => callerRole == UserRole.Hotel || isAdmin,
+            OutboundStatus.AtAirport => callerRole == UserRole.Airport || callerRole == UserRole.Transport || isAdmin,
+            OutboundStatus.BoardingCompleted => callerRole == UserRole.Airport || isAdmin,
+            _ => isAdmin
+        };
+        if (!allowed) return Forbid();
+
+        // Sequential progression check
+        var currentOutbound = guest.OutboundStatus ?? OutboundStatus.AtHotel;
+        if ((int)req.Status != (int)currentOutbound + 1 && !isAdmin)
+            return BadRequest(new { message = "Outbound status must progress sequentially." });
+
+        guest.OutboundStatus = req.Status;
+
+        await AddHistoryEntry(db, guest.Id, StatusTrack.Outbound, (int)req.Status,
+            GetOutboundLabel(req.Status), CurrentUserId, GetCallerName(), callerRole, false, req.Notes);
+
+        await db.SaveChangesAsync(ct);
+
+        await SendOutboundNotifications(db, guest, req.Status, callerRole, ct, templateSvc);
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { message = $"Outbound status updated to '{GetOutboundLabel(req.Status)}'." });
+    }
+
+    /// <summary>Undo the last outbound status change.</summary>
+    [HttpPost("{id:guid}/outbound-status/undo")]
+    public async Task<IActionResult> UndoOutboundStatus(
+        Guid id,
+        [FromServices] AppDbContext db,
+        [FromServices] IsDB.Hospitality.API.Services.NotificationTemplateService templateSvc,
+        CancellationToken ct)
+    {
+        var guest = await db.Guests
+            .Include(g => g.StatusHistory.OrderByDescending(h => h.CreatedAt))
+            .FirstOrDefaultAsync(g => g.Id == id, ct);
+        if (guest == null) return NotFound();
+
+        var callerRole = GetCallerRole();
+        var isAdmin = callerRole == UserRole.Admin;
+
+        var lastEntry = guest.StatusHistory
+            .Where(h => h.Track == StatusTrack.Outbound && !h.IsRolledBack)
+            .OrderByDescending(h => h.CreatedAt)
+            .FirstOrDefault();
+
+        if (lastEntry == null || lastEntry.StatusValue == (int)OutboundStatus.AtHotel)
+            return BadRequest(new { message = "No outbound status to undo." });
+
+        var subsequentEntry = guest.StatusHistory
+            .Where(h => h.Track == StatusTrack.Outbound && !h.IsRolledBack && h.CreatedAt > lastEntry.CreatedAt)
+            .Any();
+        if (subsequentEntry && !isAdmin)
+            return BadRequest(new { message = "Cannot undo: a subsequent status has already been set." });
+
+        if (!isAdmin && lastEntry.ChangedByRole != callerRole)
+            return Forbid();
+
+        lastEntry.IsRolledBack = true;
+        lastEntry.UpdatedAt = DateTime.UtcNow;
+
+        var previousEntry = guest.StatusHistory
+            .Where(h => h.Track == StatusTrack.Outbound && !h.IsRolledBack && h.CreatedAt < lastEntry.CreatedAt)
+            .OrderByDescending(h => h.CreatedAt)
+            .FirstOrDefault();
+        guest.OutboundStatus = previousEntry != null
+            ? (OutboundStatus)previousEntry.StatusValue
+            : OutboundStatus.AtHotel;
+
+        await db.SaveChangesAsync(ct);
+        await SendUndoOutboundNotification(db, guest, lastEntry.StatusValue, ct);
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Outbound status rolled back." });
+    }
+
+    /// <summary>Admin-only: force any inbound or outbound status.</summary>
+    [HttpPost("{id:guid}/status/force")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> ForceStatus(
+        Guid id,
+        [FromBody] ForceStatusRequest req,
+        [FromServices] AppDbContext db,
+        CancellationToken ct)
+    {
+        var guest = await db.Guests.FirstOrDefaultAsync(g => g.Id == id, ct);
+        if (guest == null) return NotFound();
+
+        if (req.Track == StatusTrack.Inbound)
+        {
+            if (!Enum.IsDefined(typeof(InboundStatus), req.StatusValue))
+                return BadRequest(new { message = "Invalid inbound status value." });
+            var status = (InboundStatus)req.StatusValue;
+            if (status == InboundStatus.ReceivedByEmbassyTeam)
+                guest.ReceivedByEmbassyTeam = true;
+            else
+                guest.InboundStatus = status;
+
+            if (status == InboundStatus.AtHotel && !guest.OutboundStatus.HasValue)
+            {
+                guest.OutboundStatus = OutboundStatus.AtHotel;
+                await AddHistoryEntry(db, guest.Id, StatusTrack.Outbound, (int)OutboundStatus.AtHotel,
+                    GetOutboundLabel(OutboundStatus.AtHotel), CurrentUserId, GetCallerName(), UserRole.Admin, false, "Auto-set by Admin force");
+            }
+        }
+        else
+        {
+            if (!Enum.IsDefined(typeof(OutboundStatus), req.StatusValue))
+                return BadRequest(new { message = "Invalid outbound status value." });
+            guest.OutboundStatus = (OutboundStatus)req.StatusValue;
+        }
+
+        await AddHistoryEntry(db, guest.Id, req.Track, req.StatusValue,
+            req.Track == StatusTrack.Inbound ? GetInboundLabel((InboundStatus)req.StatusValue) : GetOutboundLabel((OutboundStatus)req.StatusValue),
+            CurrentUserId, GetCallerName(), UserRole.Admin, false, req.Notes ?? "Force-set by Admin");
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Status force-set successfully." });
+    }
+
+    /// <summary>Admin-only: reset all journey statuses for a guest.</summary>
+    [HttpPost("{id:guid}/status/reset")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> ResetStatus(
+        Guid id,
+        [FromServices] AppDbContext db,
+        CancellationToken ct)
+    {
+        var guest = await db.Guests
+            .Include(g => g.StatusHistory)
+            .FirstOrDefaultAsync(g => g.Id == id, ct);
+        if (guest == null) return NotFound();
+
+        guest.InboundStatus = InboundStatus.ArrivalScheduled;
+        guest.ReceivedByEmbassyTeam = false;
+        guest.OutboundStatus = null;
+
+        foreach (var h in guest.StatusHistory)
+            h.IsRolledBack = true;
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Journey status reset to initial state." });
+    }
+
+    // ─── Private helpers ────────────────────────────────────────────────────────
+
+    private UserRole GetCallerRole()
+    {
+        var roleClaim = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value
+                     ?? User.FindFirst("role")?.Value
+                     ?? "Admin";
+        return Enum.TryParse<UserRole>(roleClaim, out var role) ? role : UserRole.Admin;
+    }
+
+    private string GetCallerName()
+        => User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value ?? "Unknown";
+
+    private static string GetInboundLabel(InboundStatus status) => status switch
+    {
+        InboundStatus.ArrivalScheduled => "Arrival Scheduled",
+        InboundStatus.Arrived => "Arrived",
+        InboundStatus.ReceivedByEmbassyTeam => "Received by Embassy Team",
+        InboundStatus.VehicleAssigned => "Vehicle Assigned",
+        InboundStatus.AtHotel => "At Hotel",
+        _ => status.ToString()
+    };
+
+    private static string GetOutboundLabel(OutboundStatus status) => status switch
+    {
+        OutboundStatus.AtHotel => "At Hotel",
+        OutboundStatus.InTransferToAirport => "In Transfer to Airport",
+        OutboundStatus.AtAirport => "At Airport",
+        OutboundStatus.BoardingCompleted => "Boarding Completed",
+        _ => status.ToString()
+    };
+
+    private static async Task AddHistoryEntry(
+        AppDbContext db, Guid guestId, StatusTrack track, int statusValue, string statusLabel,
+        Guid? changedByStaffId, string? changedByName, UserRole? changedByRole,
+        bool isSystemGenerated, string? notes)
+    {
+        var entry = new GuestStatusHistory
+        {
+            Id = Guid.NewGuid(),
+            GuestId = guestId,
+            Track = track,
+            StatusValue = statusValue,
+            StatusLabel = statusLabel,
+            ChangedByStaffId = changedByStaffId == Guid.Empty ? null : changedByStaffId,
+            ChangedByName = changedByName,
+            ChangedByRole = changedByRole,
+            IsSystemGenerated = isSystemGenerated,
+            Notes = notes,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+        await db.GuestStatusHistories.AddAsync(entry);
+    }
+
+    // ─── Notification helpers ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates a bell Notification targeting the given role(s), plus a separate Admin copy.
+    /// If a templateSvc and eventKey are provided, the message and priority are resolved from
+    /// the database template (allowing Admin to customize them). Falls back to hardcoded values.
+    /// </summary>
+    private async Task CreateBellNotification(
+        AppDbContext db,
+        string targetRoles,
+        string message,
+        AlertSeverity priority,
+        CancellationToken ct,
+        IsDB.Hospitality.API.Services.NotificationTemplateService? templateSvc = null,
+        string? eventKey = null,
+        string? guestName = null,
+        bool suppressAdminCopy = false)
+    {
+        // Resolve from template if available
+        if (templateSvc != null && eventKey != null)
+        {
+            var template = await templateSvc.GetTemplateAsync(eventKey);
+            if (template != null)
+            {
+                message  = template.MessageTemplate.Replace("{GuestName}", guestName ?? "");
+                priority = template.Priority;
+                // TargetRoles is system-defined — not overridable by Admin
+            }
+        }
+
+        // Notification for the target team
+        db.Notifications.Add(new Notification
+        {
+            Message = message,
+            TargetRoles = targetRoles,
+            Priority = priority,
+            CreatedByStaffId = CurrentUserId
+        });
+
+        // Explicit Admin copy — only when Admin is not already the target and not suppressed
+        if (!suppressAdminCopy
+            && !targetRoles.Equals("Admin", StringComparison.OrdinalIgnoreCase)
+            && !targetRoles.Equals("All", StringComparison.OrdinalIgnoreCase))
+        {
+            // Use admin-specific template if available
+            string adminMessage  = message;
+            AlertSeverity adminPriority = priority;
+            if (templateSvc != null && eventKey != null)
+            {
+                var adminTemplate = await templateSvc.GetTemplateAsync(eventKey + ".admin_copy");
+                if (adminTemplate != null)
+                {
+                    adminMessage  = adminTemplate.MessageTemplate.Replace("{GuestName}", guestName ?? "");
+                    adminPriority = adminTemplate.Priority;
+                }
+            }
+            db.Notifications.Add(new Notification
+            {
+                Message = adminMessage,
+                TargetRoles = "Admin",
+                Priority = adminPriority,
+                CreatedByStaffId = CurrentUserId
+            });
+        }
+
+        await Task.CompletedTask; // notifications are saved by the caller's SaveChangesAsync
+    }
+
+    // ─── Inbound status notifications ────────────────────────────────────────────
+
+    private async Task SendStatusNotifications(
+        AppDbContext db, Guest guest, StatusTrack track, InboundStatus status, UserRole callerRole, CancellationToken ct,
+        IsDB.Hospitality.API.Services.NotificationTemplateService? templateSvc = null)
+    {
+        var name = $"{guest.FirstName} {guest.LastName}";
+
+        switch (status)
+        {
+            case InboundStatus.Arrived:
+                // Transport: Critical — guest arrived, vehicle dispatch needed
+                await CreateBellNotification(db, "Transport",
+                    $"[Inbound] {name} has arrived at the airport.",
+                    AlertSeverity.Critical, ct, templateSvc, "inbound.arrived", name);
+                // Hotel: High — guest arrived, prepare for check-in (no admin copy — already sent above)
+                await CreateBellNotification(db, "Hotel",
+                    $"[Inbound] {name} has arrived at the airport.",
+                    AlertSeverity.High, ct, templateSvc, "inbound.arrived.hotel_copy", name, suppressAdminCopy: true);
+                break;
+
+            case InboundStatus.ReceivedByEmbassyTeam:
+                // Transport: High — embassy handover complete
+                await CreateBellNotification(db, "Transport",
+                    $"[Inbound] {name} has been received by the Embassy team.",
+                    AlertSeverity.High, ct, templateSvc, "inbound.received_by_embassy", name);
+                // Hotel: High — guest received by embassy team (no admin copy — already sent above)
+                await CreateBellNotification(db, "Hotel",
+                    $"[Inbound] {name} has been received by the Embassy team.",
+                    AlertSeverity.High, ct, templateSvc, "inbound.received_by_embassy", name, suppressAdminCopy: true);
+                break;
+
+            case InboundStatus.VehicleAssigned:
+                // Hotel: Critical — vehicle dispatched, guest on the way (status auto-set path)
+                await CreateBellNotification(db, "Hotel",
+                    $"[Inbound] {name}'s vehicle was assigned (dispatched from Airport).",
+                    AlertSeverity.Critical, ct, templateSvc, "inbound.vehicle_status_changed", name);
+                break;
+
+            case InboundStatus.AtHotel:
+                // Admin: High — check-in confirmed
+                await CreateBellNotification(db, "Admin",
+                    $"[Inbound] {name} has checked in at the hotel.",
+                    AlertSeverity.High, ct);
+                break;
+        }
+    }
+
+    // ─── Outbound status notifications ───────────────────────────────────────────
+
+    private async Task SendOutboundNotifications(
+        AppDbContext db, Guest guest, OutboundStatus status, UserRole callerRole, CancellationToken ct,
+        IsDB.Hospitality.API.Services.NotificationTemplateService? templateSvc = null)
+    {
+        var name = $"{guest.FirstName} {guest.LastName}";
+
+        switch (status)
+        {
+            case OutboundStatus.InTransferToAirport:
+                await CreateBellNotification(db, "Transport",
+                    $"[Outbound] {name} is in transfer to the airport — prepare for arrival.",
+                    AlertSeverity.High, ct, templateSvc, "outbound.in_transfer", name);
+                break;
+
+            case OutboundStatus.AtAirport:
+                await CreateBellNotification(db, "Airport",
+                    $"[Outbound] {name} has arrived at the departure terminal.",
+                    AlertSeverity.Critical, ct, templateSvc, "outbound.at_airport", name);
+                break;
+
+            case OutboundStatus.BoardingCompleted:
+                await CreateBellNotification(db, "Admin",
+                    $"[Outbound] {name} has completed boarding.",
+                    AlertSeverity.Medium, ct);
+                break;
+        }
+    }
+
+    // ─── Undo notifications ───────────────────────────────────────────────────────
+
+    private async Task SendUndoInboundNotification(
+        AppDbContext db, Guest guest, int undoneStatusValue, CancellationToken ct)
+    {
+        var name = $"{guest.FirstName} {guest.LastName}";
+
+        switch ((InboundStatus)undoneStatusValue)
+        {
+            case InboundStatus.Arrived:
+                // Mirror of forward: Transport (Critical) + Hotel (High) were notified on Arrived
+                await CreateBellNotification(db, "Transport",
+                    $"[Undo] {name}'s 'Arrived' status has been reversed.",
+                    AlertSeverity.High, ct);
+                await CreateBellNotification(db, "Hotel",
+                    $"[Undo] {name}'s 'Arrived' status has been reversed.",
+                    AlertSeverity.High, ct);
+                break;
+
+            case InboundStatus.ReceivedByEmbassyTeam:
+                await CreateBellNotification(db, "Transport",
+                    $"[Undo] {name}'s 'Received by Embassy Team' status has been reversed.",
+                    AlertSeverity.Medium, ct);
+                await CreateBellNotification(db, "Hotel",
+                    $"[Undo] {name}'s 'Received by Embassy Team' status has been reversed.",
+                    AlertSeverity.Medium, ct);
+                break;
+
+            case InboundStatus.VehicleAssigned:
+                // Mirror of forward: Hotel was notified on VehicleAssigned
+                await CreateBellNotification(db, "Hotel",
+                    $"[Undo] {name}'s 'Vehicle Assigned' status has been reversed.",
+                    AlertSeverity.High, ct);
+                break;
+
+            case InboundStatus.AtHotel:
+                await CreateBellNotification(db, "Admin",
+                    $"[Undo] {name}'s 'At Hotel' check-in has been reversed.",
+                    AlertSeverity.High, ct);
+                break;
+        }
+    }
+
+    // ─── Flight change acknowledgement ──────────────────────────────────────────
+
+    /// <summary>
+    /// Clears the ChangedSinceLastView flag on all travel bookings for a guest.
+    /// Called automatically when the user opens the guest detail page.
+    /// </summary>
+    [HttpPost("{id:guid}/acknowledge-flight-changes")]
+    [Authorize]
+    public async Task<IActionResult> AcknowledgeFlightChanges(
+        Guid id,
+        [FromServices] AppDbContext db,
+        CancellationToken ct)
+    {
+        var bookings = await db.TravelBookings
+            .Where(tb => tb.GuestId == id && tb.ChangedSinceLastView)
+            .ToListAsync(ct);
+
+        if (!bookings.Any()) return Ok(new { acknowledged = 0 });
+
+        foreach (var b in bookings)
+            b.ChangedSinceLastView = false;
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new { acknowledged = bookings.Count });
+    }
+
+    private async Task SendUndoOutboundNotification(
+        AppDbContext db, Guest guest, int undoneStatusValue, CancellationToken ct)
+    {
+        var name = $"{guest.FirstName} {guest.LastName}";
+
+        switch ((OutboundStatus)undoneStatusValue)
+        {
+            case OutboundStatus.InTransferToAirport:
+                await CreateBellNotification(db, "Transport",
+                    $"[Undo] {name}'s 'In Transfer to Airport' status has been reversed.",
+                    AlertSeverity.Medium, ct);
+                break;
+
+            case OutboundStatus.AtAirport:
+                await CreateBellNotification(db, "Airport",
+                    $"[Undo] {name}'s 'At Airport' status has been reversed.",
+                    AlertSeverity.High, ct);
+                break;
+
+            case OutboundStatus.BoardingCompleted:
+                await CreateBellNotification(db, "Admin",
+                    $"[Undo] {name}'s 'Boarding Completed' status has been reversed.",
+                    AlertSeverity.Medium, ct);
+                break;
+        }
+    }
+}
+public record UpdateStatusRequest(GuestStatus Status, string? Notes = null);
+public record CompleteChecklistRequest(string? Notes = null);
+public record BulkAssignCarClassRequest(List<Guid> GuestIds, Guid? CarClassId);
+public record SetStatusRequest(InboundStatus Status, string? Notes = null, string? HotelName = null, string? RoomNumber = null);
+public record SetOutboundStatusRequest(OutboundStatus Status, string? Notes = null);
+public record ForceStatusRequest(StatusTrack Track, int StatusValue, string? Notes = null);
