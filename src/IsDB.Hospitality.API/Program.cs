@@ -125,9 +125,20 @@ using (var scope = app.Services.CreateScope())
         bool isFreshDatabase;
         using (var checkCmd = dbConn.CreateCommand())
         {
-            checkCmd.CommandText = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'Guests'";
+            // Check if __EFMigrationsHistory table exists AND has rows.
+            // If it doesn't exist or is empty, this is a fresh database — let MigrateAsync() run everything.
+            // If it has rows, this is an existing production database that needs the pre-creation block.
+            checkCmd.CommandText = @"
+                SELECT COALESCE(
+                    (SELECT COUNT(*) FROM \""__EFMigrationsHistory\""),
+                    0
+                )
+                WHERE EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_name = '__EFMigrationsHistory'
+                )";
             var checkResult = await checkCmd.ExecuteScalarAsync();
-            isFreshDatabase = Convert.ToInt64(checkResult) == 0;
+            isFreshDatabase = checkResult == null || Convert.ToInt64(checkResult) == 0;
         }
         await dbConn.CloseAsync();
 
