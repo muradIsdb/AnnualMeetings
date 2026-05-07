@@ -23,55 +23,37 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                 type: "TEXT",
                 nullable: true);
 
-            migrationBuilder.CreateTable(
-                name: "HotelOptions",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Name = table.Column<string>(type: "TEXT", nullable: false),
-                    IsActive = table.Column<bool>(type: "INTEGER", nullable: false),
-                    DisplayOrder = table.Column<int>(type: "INTEGER", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_HotelOptions", x => x.Id);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "PickupDayOptions",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Label = table.Column<string>(type: "TEXT", nullable: false),
-                    Value = table.Column<string>(type: "TEXT", nullable: false),
-                    IsActive = table.Column<bool>(type: "INTEGER", nullable: false),
-                    DisplayOrder = table.Column<int>(type: "INTEGER", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_PickupDayOptions", x => x.Id);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "PickupHourOptions",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Label = table.Column<string>(type: "TEXT", nullable: false),
-                    Value = table.Column<string>(type: "TEXT", nullable: false),
-                    IsActive = table.Column<bool>(type: "INTEGER", nullable: false),
-                    DisplayOrder = table.Column<int>(type: "INTEGER", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_PickupHourOptions", x => x.Id);
-                });
+            // HotelOptions, PickupDayOptions, PickupHourOptions may already exist
+            // (created by the AddSettingsOptions migration that was added later in the chain).
+            // Use raw SQL with IF NOT EXISTS to make this migration idempotent on fresh databases.
+            migrationBuilder.Sql(@"
+                CREATE TABLE IF NOT EXISTS ""HotelOptions"" (
+                    ""Id""           TEXT    NOT NULL PRIMARY KEY,
+                    ""Name""         TEXT    NOT NULL,
+                    ""IsActive""     INTEGER NOT NULL DEFAULT 1,
+                    ""DisplayOrder"" INTEGER NOT NULL DEFAULT 0,
+                    ""CreatedAt""    TEXT    NOT NULL,
+                    ""UpdatedAt""    TEXT    NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS ""PickupDayOptions"" (
+                    ""Id""           TEXT    NOT NULL PRIMARY KEY,
+                    ""Label""        TEXT    NOT NULL,
+                    ""Value""        TEXT    NOT NULL DEFAULT '',
+                    ""IsActive""     INTEGER NOT NULL DEFAULT 1,
+                    ""DisplayOrder"" INTEGER NOT NULL DEFAULT 0,
+                    ""CreatedAt""    TEXT    NOT NULL,
+                    ""UpdatedAt""    TEXT    NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS ""PickupHourOptions"" (
+                    ""Id""           TEXT    NOT NULL PRIMARY KEY,
+                    ""Label""        TEXT    NOT NULL,
+                    ""Value""        TEXT    NOT NULL DEFAULT '',
+                    ""IsActive""     INTEGER NOT NULL DEFAULT 1,
+                    ""DisplayOrder"" INTEGER NOT NULL DEFAULT 0,
+                    ""CreatedAt""    TEXT    NOT NULL,
+                    ""UpdatedAt""    TEXT    NOT NULL
+                );
+            ");
 
             migrationBuilder.CreateTable(
                 name: "RegistrationTypes",

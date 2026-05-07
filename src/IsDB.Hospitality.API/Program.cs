@@ -116,36 +116,26 @@ using (var scope = app.Services.CreateScope())
     var isPostgres = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DATABASE_URL"));
     if (isPostgres)
     {
-        // Detect whether this is a fresh (empty) database or an existing one.
-        // The pre-creation block below is only needed for existing production databases that were
-        // originally migrated with SQLite-style migrations. On a fresh database (e.g. new UAT),
-        // we let MigrateAsync() run all migrations from scratch in the correct order.
+        // Detect whether this is a fresh database or an existing legacy production database.
+        // Fresh DB → run MigrateAsync() directly (migration chain is now idempotent).
+        // Legacy production DB (has rows in __EFMigrationsHistory without InitialCreate) → run pre-creation block.
         var dbConn = context.Database.GetDbConnection();
         await dbConn.OpenAsync();
-        // Determine database type:
-        // - Fresh DB: __EFMigrationsHistory doesn't exist or is empty → let MigrateAsync() run all migrations
-        // - EF Core DB: __EFMigrationsHistory has the InitialCreate migration → DB was created by EF Core, skip pre-creation block
-        // - Legacy production DB: __EFMigrationsHistory has rows but NOT InitialCreate → old SQLite-style migration, needs pre-creation block
         bool isFreshDatabase;
         bool isEfCoreCreatedDb = false;
         using (var checkCmd = dbConn.CreateCommand())
         {
-            // Step 1: Check if __EFMigrationsHistory table exists
             checkCmd.CommandText = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '__EFMigrationsHistory'";
             var tableExists = Convert.ToInt64(await checkCmd.ExecuteScalarAsync()) > 0;
             long migrationCount = 0;
             if (tableExists)
             {
-                // Step 2: Count total migrations
                 checkCmd.CommandText = @"SELECT COUNT(*) FROM ""__EFMigrationsHistory""";
                 migrationCount = Convert.ToInt64(await checkCmd.ExecuteScalarAsync());
-
                 if (migrationCount > 0)
                 {
-                    // Step 3: Check if InitialCreate migration exists (means DB was created by EF Core, not legacy)
                     checkCmd.CommandText = @"SELECT COUNT(*) FROM ""__EFMigrationsHistory"" WHERE ""MigrationId"" LIKE '%InitialCreate%'";
-                    var initialCreateCount = Convert.ToInt64(await checkCmd.ExecuteScalarAsync());
-                    isEfCoreCreatedDb = initialCreateCount > 0;
+                    isEfCoreCreatedDb = Convert.ToInt64(await checkCmd.ExecuteScalarAsync()) > 0;
                 }
             }
             isFreshDatabase = migrationCount == 0;
@@ -154,46 +144,11 @@ using (var scope = app.Services.CreateScope())
 
         if (isFreshDatabase || isEfCoreCreatedDb)
         {
-            // Fresh database OR EF Core-created database — run MigrateAsync() only, no pre-creation block needed.
-            // The pre-creation block is only for legacy production databases created with SQLite-style migrations.
-            if (isFreshDatabase)
-                logger.LogInformation("PostgreSQL detected (fresh database). Running all migrations from scratch...");
-            else
-                logger.LogInformation("PostgreSQL detected (EF Core-created database). Running pending migrations only...");
-
-            // Fix broken migration chain: AddSettingsOptions (3rd migration) creates HotelOptions/PickupDayOptions/PickupHourOptions,
-            // but AddGuestRegistrationTypeFields (4th migration) also tries to create the same tables.
-            // If AddSettingsOptions is already applied, mark AddGuestRegistrationTypeFields as applied too
-            // so MigrateAsync() skips the duplicate table creation.
-            if (!isFreshDatabase)
-            {
-                await context.Database.ExecuteSqlRawAsync(@"
-                    INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
-                    SELECT '20260226074906_AddGuestRegistrationTypeFields', '9.0.0'
-                    WHERE EXISTS (
-                        SELECT 1 FROM ""__EFMigrationsHistory""
-                        WHERE ""MigrationId"" = '20260225120057_AddSettingsOptions'
-                    )
-                    AND NOT EXISTS (
-                        SELECT 1 FROM ""__EFMigrationsHistory""
-                        WHERE ""MigrationId"" = '20260226074906_AddGuestRegistrationTypeFields'
-                    );
-                    -- Also ensure RegistrationTypes table exists (it's part of AddGuestRegistrationTypeFields)
-                    CREATE TABLE IF NOT EXISTS ""RegistrationTypes"" (
-                        ""Id""                   text        NOT NULL PRIMARY KEY,
-                        ""Code""                 text        NOT NULL,
-                        ""Name""                 text        NOT NULL,
-                        ""Description""          text        NULL,
-                        ""IsSelectedForSync""    boolean     NOT NULL DEFAULT false,
-                        ""IsFromEventsAir""       boolean     NOT NULL DEFAULT false,
-                        ""SortOrder""            integer     NOT NULL DEFAULT 0,
-                        ""CreatedAt""            text        NOT NULL,
-                        ""UpdatedAt""            text        NOT NULL
-                    );
-                ");
-                logger.LogInformation("Migration chain fix applied.");
-            }
-
+            // Fresh or EF Core-managed database: run MigrateAsync() directly.
+            // The migration chain is now idempotent (IF NOT EXISTS for duplicate tables).
+            logger.LogInformation(isFreshDatabase
+                ? "PostgreSQL detected (fresh database). Running all migrations from scratch..."
+                : "PostgreSQL detected (EF Core-created database). Running pending migrations only...");
             await context.Database.MigrateAsync();
             logger.LogInformation("All migrations applied successfully.");
         }
