@@ -1,36 +1,47 @@
 /* ============================================================
    IsDB Hospitality Platform — Mobile & Tablet UI Enhancements
    Applies responsive improvements on top of the compiled bundle
+   Version 2.0 — Updated for production bundle (index-CymXeUZW.js)
    ============================================================ */
 
-/* ── 1. TABLET SIDEBAR: Hide sidebar below lg (1024px), show hamburger ── */
+/* ── 1. TABLET SIDEBAR: Hide desktop sidebar on tablet (768px–1023px) ── */
+/*
+   New bundle structure:
+     - aside.hidden.md:flex.w-64      → desktop sidebar (shown at md=768px+)
+     - aside.fixed...w-72.md:hidden   → mobile drawer (hidden at md=768px+)
+     - button.md:hidden[aria-label]   → hamburger (hidden at md=768px+)
 
-/* On tablet (768px–1023px): hide the persistent sidebar */
-@media (max-width: 1023px) {
-  /* Hide the always-visible desktop sidebar */
-  .flex.h-screen.bg-gray-50 > aside.w-64 {
+   We override to keep hamburger visible and sidebar hidden up to lg (1024px).
+*/
+@media (min-width: 768px) and (max-width: 1023px) {
+  /* Hide the desktop sidebar on tablet */
+  aside.hidden,
+  aside[class*="w-64"][class*="bg-white"][class*="border-r"] {
     display: none !important;
   }
+}
 
-  /* Show the hamburger button in the top bar */
-  .flex.h-screen.bg-gray-50 > main > div:first-child {
-    justify-content: space-between !important;
+/* ── 2. HAMBURGER BUTTON: Show on tablet (override md:hidden up to 1023px) ── */
+@media (max-width: 1023px) {
+  button[aria-label="Open menu"] {
+    display: flex !important;
   }
 }
 
-/* ── 2. HAMBURGER BUTTON: Show on both mobile and tablet ── */
-/* The existing hamburger button has md:hidden — override to show on tablet too */
-button[aria-label="Open menu"] {
-  display: flex !important;
-}
-
-/* ── 3. TABLET TOP BAR: Add hamburger space ── */
+/* ── 3. MOBILE DRAWER: Allow on tablet (override md:hidden) ── */
+/*
+   The mobile drawer and overlay both have md:hidden which hides them at 768px+.
+   We override to allow them to appear on tablet (768px–1023px) when React opens them.
+   The drawer uses translate-x for animation, so we just need display:flex to be allowed.
+*/
 @media (min-width: 768px) and (max-width: 1023px) {
-  /* Ensure top bar has space for hamburger on tablet */
-  .flex.h-screen.bg-gray-50 > main > div:first-child {
+  /* Allow the mobile drawer to show on tablet */
+  aside[class*="w-72"][class*="fixed"][class*="inset-y-0"] {
     display: flex !important;
-    align-items: center !important;
-    justify-content: space-between !important;
+  }
+  /* Allow the mobile overlay to show on tablet (uses z-40 as discriminator) */
+  div.fixed.inset-0.z-40 {
+    display: block !important;
   }
 }
 
