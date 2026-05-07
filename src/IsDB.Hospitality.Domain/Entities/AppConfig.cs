@@ -30,9 +30,19 @@ public class AppConfig
 
     /// <summary>
     /// URL of the uploaded event logo shown on the placard.
-    /// Null means use the default IsDB logo.
+    /// Kept for backwards compatibility but superseded by EventLogoBase64.
     /// </summary>
     public string? EventLogoUrl { get; set; }
+
+    /// <summary>
+    /// Base64-encoded event logo image stored directly in the database.
+    /// Persists across Railway redeployments (no filesystem dependency).
+    /// When set, the API returns a data URI (data:image/png;base64,...) as EventLogoUrl.
+    /// </summary>
+    public string? EventLogoBase64 { get; set; }
+
+    /// <summary>MIME type of the base64 logo (e.g. "image/png").</summary>
+    public string? EventLogoMimeType { get; set; }
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
