@@ -116,10 +116,34 @@ using (var scope = app.Services.CreateScope())
     var isPostgres = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DATABASE_URL"));
     if (isPostgres)
     {
+        // Detect whether this is a fresh (empty) database or an existing one.
+        // The pre-creation block below is only needed for existing production databases that were
+        // originally migrated with SQLite-style migrations. On a fresh database (e.g. new UAT),
+        // we let MigrateAsync() run all migrations from scratch in the correct order.
+        var dbConn = context.Database.GetDbConnection();
+        await dbConn.OpenAsync();
+        bool isFreshDatabase;
+        using (var checkCmd = dbConn.CreateCommand())
+        {
+            checkCmd.CommandText = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'Guests'";
+            var checkResult = await checkCmd.ExecuteScalarAsync();
+            isFreshDatabase = Convert.ToInt64(checkResult) == 0;
+        }
+        await dbConn.CloseAsync();
+
+        if (isFreshDatabase)
+        {
+            // Fresh database — run all EF Core migrations from scratch, no pre-creation needed.
+            logger.LogInformation("PostgreSQL detected (fresh database). Running all migrations from scratch...");
+            await context.Database.MigrateAsync();
+            logger.LogInformation("All migrations applied successfully on fresh database.");
+        }
+        else
+        {
         // PostgreSQL on Railway — pre-create CarClasses table with correct types BEFORE running migrations.
         // The EF Core migration was generated for SQLite and uses TEXT types, which fail on PostgreSQL.
         // By creating the table manually with correct types first, we prevent the migration from failing.
-        logger.LogInformation("PostgreSQL detected. Pre-creating CarClasses table with correct types...");
+        logger.LogInformation("PostgreSQL detected (existing database). Pre-creating CarClasses table with correct types...");
         await context.Database.ExecuteSqlRawAsync(@"
             CREATE TABLE IF NOT EXISTS ""CarClasses"" (
                 ""Id""          uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -516,6 +540,8 @@ using (var scope = app.Services.CreateScope())
         logger.LogInformation("Applying pending migrations...");
         await context.Database.MigrateAsync();
         logger.LogInformation("Migrations applied successfully.");
+
+        } // end else (existing database)
 
         // Notifications tables — Postgres path (safe to run on every startup, idempotent)
         await context.Database.ExecuteSqlRawAsync(@"
