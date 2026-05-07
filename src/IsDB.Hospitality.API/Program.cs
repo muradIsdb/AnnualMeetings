@@ -130,7 +130,7 @@ using (var scope = app.Services.CreateScope())
             // If it has rows, this is an existing production database that needs the pre-creation block.
             checkCmd.CommandText = @"
                 SELECT COALESCE(
-                    (SELECT COUNT(*) FROM \""__EFMigrationsHistory\""),
+                    (SELECT COUNT(*) FROM ""__EFMigrationsHistory""),
                     0
                 )
                 WHERE EXISTS (
