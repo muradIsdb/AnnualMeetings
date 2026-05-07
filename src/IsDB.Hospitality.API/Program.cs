@@ -128,17 +128,17 @@ using (var scope = app.Services.CreateScope())
             // Check if __EFMigrationsHistory table exists AND has rows.
             // If it doesn't exist or is empty, this is a fresh database — let MigrateAsync() run everything.
             // If it has rows, this is an existing production database that needs the pre-creation block.
-            checkCmd.CommandText = @"
-                SELECT COALESCE(
-                    (SELECT COUNT(*) FROM ""__EFMigrationsHistory""),
-                    0
-                )
-                WHERE EXISTS (
-                    SELECT 1 FROM information_schema.tables
-                    WHERE table_schema = 'public' AND table_name = '__EFMigrationsHistory'
-                )";
-            var checkResult = await checkCmd.ExecuteScalarAsync();
-            isFreshDatabase = checkResult == null || Convert.ToInt64(checkResult) == 0;
+            // Two-step check: first see if the table exists, then count rows only if it does.
+            // This avoids a SQL parse error when the table doesn't exist at all.
+            checkCmd.CommandText = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '__EFMigrationsHistory'";
+            var tableExists = Convert.ToInt64(await checkCmd.ExecuteScalarAsync()) > 0;
+            long migrationCount = 0;
+            if (tableExists)
+            {
+                checkCmd.CommandText = @"SELECT COUNT(*) FROM ""__EFMigrationsHistory""";
+                migrationCount = Convert.ToInt64(await checkCmd.ExecuteScalarAsync());
+            }
+            isFreshDatabase = migrationCount == 0;
         }
         await dbConn.CloseAsync();
 
