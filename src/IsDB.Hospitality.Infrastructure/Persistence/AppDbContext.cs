@@ -37,7 +37,6 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<NotificationTemplate> NotificationTemplates => Set<NotificationTemplate>();
     public DbSet<CarClassRule> CarClassRules => Set<CarClassRule>();
     public DbSet<TravelBookingHistory> TravelBookingHistories => Set<TravelBookingHistory>();
-    public DbSet<PagePermission> PagePermissions => Set<PagePermission>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -202,11 +201,6 @@ public class AppDbContext : DbContext, IAppDbContext
             .WithMany(f => f.TravelBookings)
             .HasForeignKey(tb => tb.FlightId)
             .OnDelete(DeleteBehavior.Restrict); // Prevent cascade delete of Flight if bookings exist
-
-        // PagePermission — unique index on (Role, PageId)
-        modelBuilder.Entity<PagePermission>()
-            .HasIndex(p => new { p.Role, p.PageId })
-            .IsUnique();
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

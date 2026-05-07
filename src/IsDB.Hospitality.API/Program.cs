@@ -509,24 +509,6 @@ using (var scope = app.Services.CreateScope())
             VALUES ('20260506042132_FlightDataLayerSeparation', '9.0.0')
             ON CONFLICT DO NOTHING;
 
-            -- PagePermissions table — RBAC feature.
-            -- Drop and recreate to ensure IsGranted is BOOLEAN (not INTEGER from SQLite migration).
-            -- This is idempotent: if the table has correct schema it will be recreated empty
-            -- and the seeder will re-seed it on the same startup.
-            DROP TABLE IF EXISTS ""PagePermissions"" CASCADE;
-            CREATE TABLE ""PagePermissions"" (
-                ""Id""         uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-                ""Role""       integer     NOT NULL,
-                ""PageId""     text        NOT NULL,
-                ""IsGranted""  boolean     NOT NULL DEFAULT true,
-                ""CreatedAt""  timestamptz NOT NULL DEFAULT now(),
-                ""UpdatedAt""  timestamptz NOT NULL DEFAULT now()
-            );
-            CREATE UNIQUE INDEX ""IX_PagePermissions_Role_PageId"" ON ""PagePermissions""(""Role"", ""PageId"");
-            -- Mark the AddPagePermissions migration as applied
-            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
-            VALUES ('20260507064129_AddPagePermissions', '9.0.0')
-            ON CONFLICT DO NOTHING;
         ");
         logger.LogInformation("CarClasses pre-creation complete.");
 
@@ -625,20 +607,7 @@ using (var scope = app.Services.CreateScope())
         await context.Database.ExecuteSqlRawAsync(
             "CREATE UNIQUE INDEX IF NOT EXISTS [IX_NotificationTemplates_EventKey] ON [NotificationTemplates]([EventKey]);"
         );
-        // PagePermissions table (SQLite) — added for RBAC feature
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE TABLE IF NOT EXISTS [PagePermissions] (" +
-            "[Id] TEXT NOT NULL PRIMARY KEY, " +
-            "[Role] INTEGER NOT NULL, " +
-            "[PageId] TEXT NOT NULL, " +
-            "[IsGranted] INTEGER NOT NULL DEFAULT 1, " +
-            "[CreatedAt] TEXT NOT NULL DEFAULT (datetime('now')), " +
-            "[UpdatedAt] TEXT NOT NULL DEFAULT (datetime('now'))" +
-            ");"
-        );
-        await context.Database.ExecuteSqlRawAsync(
-            "CREATE UNIQUE INDEX IF NOT EXISTS [IX_PagePermissions_Role_PageId] ON [PagePermissions]([Role], [PageId]);"
-        );
+
     }
 
     await DatabaseSeeder.SeedAsync(context, logger);

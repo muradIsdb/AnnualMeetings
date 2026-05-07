@@ -16,7 +16,6 @@ public static class DatabaseSeeder
         await SeedCarClassesAsync(context);
         await SeedVehiclesAsync(context);
         await SeedSyncFieldMappingsAsync(context);
-        await SeedPagePermissionsAsync(context);
             await ApplyProductionSeedAsync(context, logger);
             logger.LogInformation("Database seeded successfully.");
         }
@@ -248,67 +247,10 @@ public static class DatabaseSeeder
         await context.SaveChangesAsync();
     }
 
-    /// <summary>
-    /// Seeds default page permissions for all non-Admin roles.
-    /// Only runs when the PagePermissions table is empty (idempotent).
-    /// Admin role always has implicit full access and is NOT stored here.
-    /// </summary>
-    private static async Task SeedPagePermissionsAsync(AppDbContext context)
-    {
-        if (await context.PagePermissions.AnyAsync()) return;
-
-        // Define all pages and their default allowed roles
-        var defaults = new List<(UserRole Role, string PageId)>
-        {
-            // Airport role
-            (UserRole.Airport,      "airport.dashboard"),
-
-            // Transport role
-            (UserRole.Transport,    "transport.dashboard"),
-            (UserRole.Transport,    "transport.departure_stats"),
-            (UserRole.Transport,    "fleet.management"),
-
-            // Hotel role
-            (UserRole.Hotel,        "hotel.dashboard"),
-            (UserRole.Hotel,        "hotel.arrivals"),
-            (UserRole.Hotel,        "hotel.guests"),
-            (UserRole.Hotel,        "hotel.management"),
-
-            // ControlRoom role
-            (UserRole.ControlRoom,  "airport.dashboard"),
-            (UserRole.ControlRoom,  "transport.dashboard"),
-            (UserRole.ControlRoom,  "transport.departure_stats"),
-            (UserRole.ControlRoom,  "controlroom.dashboard"),
-            (UserRole.ControlRoom,  "hotel.dashboard"),
-            (UserRole.ControlRoom,  "hotel.arrivals"),
-            (UserRole.ControlRoom,  "hotel.guests"),
-            (UserRole.ControlRoom,  "hotel.management"),
-
-            // Liaison role
-            (UserRole.Liaison,      "liaison.dashboard"),
-            (UserRole.Liaison,      "liaison.guests"),
-        };
-
-        var permissions = defaults.Select(d => new IsDB.Hospitality.Domain.Entities.PagePermission
-        {
-            Role = d.Role,
-            PageId = d.PageId,
-            IsGranted = true
-        }).ToList();
-
-        await context.PagePermissions.AddRangeAsync(permissions);
-        await context.SaveChangesAsync();
-    }
-
-    /// <summary>
-    /// Converts a SQLite "INSERT OR IGNORE INTO ..." statement to a PostgreSQL
-    /// "INSERT INTO ... ON CONFLICT DO NOTHING" statement.
-    /// </summary>
     private static string ConvertToPostgresUpsert(string sqliteInsert)
     {
         // Replace "INSERT OR IGNORE INTO" with "INSERT INTO"
         var pgSql = sqliteInsert.Replace("INSERT OR IGNORE INTO", "INSERT INTO");
-
         // Append ON CONFLICT DO NOTHING before the trailing semicolon
         if (pgSql.TrimEnd().EndsWith(";"))
         {
@@ -318,11 +260,9 @@ public static class DatabaseSeeder
         {
             pgSql += " ON CONFLICT DO NOTHING";
         }
-
         // PostgreSQL uses TRUE/FALSE instead of 1/0 for booleans.
         // However, EF Core maps bool columns to integer in the schema,
         // so numeric values (0/1) work fine in PostgreSQL integer columns.
-
         return pgSql;
     }
 }

@@ -32,7 +32,6 @@ public interface IAppDbContext
     DbSet<NotificationRead> NotificationReads { get; }
     DbSet<CarClassRule> CarClassRules { get; }
     DbSet<TravelBookingHistory> TravelBookingHistories { get; }
-    DbSet<PagePermission> PagePermissions { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
