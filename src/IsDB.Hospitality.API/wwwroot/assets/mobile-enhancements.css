@@ -34,30 +34,29 @@ button[aria-label="Open menu"] {
   }
 }
 
-/* ── 4. FLEET TABLE: Responsive card layout on tablet and mobile ── */
+/* ── 4. DATA TABLES: Horizontal scroll on mobile/tablet ── */
 @media (max-width: 1023px) {
-  /* Make fleet table horizontally scrollable */
-  .overflow-x-auto table,
-  table.min-w-full {
-    min-width: 600px;
-  }
-
-  /* Wrap the table in a scrollable container */
+  /* Ensure tables are horizontally scrollable */
   .overflow-x-auto {
+    overflow-x: auto !important;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: thin;
+    position: relative;
   }
 
-  /* Add scroll hint shadow on right edge */
-  .overflow-x-auto::after {
-    content: '';
-    position: absolute;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    width: 24px;
-    background: linear-gradient(to right, transparent, rgba(0,0,0,0.06));
-    pointer-events: none;
+  /* Fleet and Staff tables: set minimum width so columns don't collapse */
+  .overflow-x-auto table,
+  table.min-w-full,
+  table.w-full {
+    min-width: 640px !important;
+  }
+
+  /* Ensure the table wrapper doesn't clip */
+  div:has(> table),
+  .rounded-lg:has(> table),
+  .border:has(> table) {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
   }
 }
 

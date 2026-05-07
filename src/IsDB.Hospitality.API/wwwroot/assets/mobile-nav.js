@@ -371,15 +371,21 @@
   }
 
   function tryPopulateUserInfo() {
-    // Try to read user info from localStorage (JWT token or stored user)
+    // Read user info from Zustand persisted auth store ('auth-storage')
     try {
-      const stored = localStorage.getItem('user') || localStorage.getItem('auth');
+      const stored = localStorage.getItem('auth-storage');
       if (stored) {
-        const user = JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        const user = parsed?.state?.user;
         const nameEl = document.getElementById('mbl-user-name');
         const roleEl = document.getElementById('mbl-user-role');
-        if (nameEl && user.name) nameEl.textContent = user.name;
-        if (roleEl && user.role) roleEl.textContent = user.role;
+        if (user && nameEl) {
+          nameEl.textContent = user.name || user.fullName || user.email || 'User';
+        }
+        if (user && roleEl) {
+          const roles = user.roles || (user.role ? [user.role] : []);
+          roleEl.textContent = roles.map(r => r.replace(/([A-Z])/g, ' $1').trim()).join(', ');
+        }
       }
     } catch (e) { /* ignore */ }
   }
