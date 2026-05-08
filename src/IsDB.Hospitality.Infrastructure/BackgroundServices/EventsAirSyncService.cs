@@ -136,7 +136,24 @@ public class EventsAirSyncService : BackgroundService
         string token;
         try
         {
-            token = await EventsAirSyncHelpers.GetEventsAirTokenAsync(clientId, clientSecret, httpClientFactory, config.OAuthScope);
+            // OAuthScope is NotMapped on EventsAirConfig entity — read via raw SQL
+            string oAuthScope;
+            try
+            {
+                var conn = db.Database.GetDbConnection();
+                if (conn.State != System.Data.ConnectionState.Open) await conn.OpenAsync(cancellationToken);
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT \"OAuthScope\" FROM \"EventsAirConfigs\" LIMIT 1";
+                var scopeResult = await cmd.ExecuteScalarAsync(cancellationToken);
+                oAuthScope = scopeResult is string s && !string.IsNullOrWhiteSpace(s)
+                    ? s
+                    : "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
+            }
+            catch
+            {
+                oAuthScope = "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
+            }
+            token = await EventsAirSyncHelpers.GetEventsAirTokenAsync(clientId, clientSecret, httpClientFactory, oAuthScope);
         }
         catch (Exception ex)
         {

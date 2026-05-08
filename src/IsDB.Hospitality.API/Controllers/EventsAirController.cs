@@ -1,6 +1,7 @@
 using IsDB.Hospitality.Application.DTOs.EventsAir;
 using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Domain.Entities;
+using IsDB.Hospitality.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -13,12 +14,46 @@ namespace IsDB.Hospitality.API.Controllers;
 public class EventsAirController : ApiControllerBase
 {
     private readonly IAppDbContext _db;
+    private readonly AppDbContext _appDb;
     private readonly IHttpClientFactory _httpClientFactory;
 
-    public EventsAirController(IAppDbContext db, IHttpClientFactory httpClientFactory)
+    public EventsAirController(IAppDbContext db, AppDbContext appDb, IHttpClientFactory httpClientFactory)
     {
         _db = db;
+        _appDb = appDb;
         _httpClientFactory = httpClientFactory;
+    }
+
+    // Helper: read OAuthScope from DB via raw SQL (column is NotMapped on entity to avoid breaking existing deployments)
+    private async Task<string> GetOAuthScopeAsync()
+    {
+        const string defaultScope = "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
+        try
+        {
+            var conn = _appDb.Database.GetDbConnection();
+            if (conn.State != System.Data.ConnectionState.Open)
+                await conn.OpenAsync();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT \"OAuthScope\" FROM \"EventsAirConfigs\" LIMIT 1";
+            var result = await cmd.ExecuteScalarAsync();
+            return result is string s && !string.IsNullOrWhiteSpace(s) ? s : defaultScope;
+        }
+        catch
+        {
+            return defaultScope;
+        }
+    }
+
+    // Helper: save OAuthScope to DB via raw SQL
+    private async Task SaveOAuthScopeAsync(Guid configId, string scope)
+    {
+        try
+        {
+            await _appDb.Database.ExecuteSqlRawAsync(
+                "UPDATE \"EventsAirConfigs\" SET \"OAuthScope\" = {0} WHERE \"Id\" = {1}",
+                scope, configId);
+        }
+        catch { /* column may not exist yet on very first deployment */ }
     }
 
     // GET /api/eventsair/config
@@ -63,7 +98,7 @@ public class EventsAirController : ApiControllerBase
             LastSyncMessage = config.LastSyncMessage,
             LastSyncRecordsCount = config.LastSyncRecordsCount,
             IsActive = config.IsActive,
-            OAuthScope = config.OAuthScope
+            OAuthScope = await GetOAuthScopeAsync()
         });
     }
 
@@ -93,11 +128,13 @@ public class EventsAirController : ApiControllerBase
         config.AutoSyncEnabled = request.AutoSyncEnabled;
         config.SyncOnStartup = request.SyncOnStartup;
         config.IsActive = request.IsActive;
-        if (!string.IsNullOrWhiteSpace(request.OAuthScope))
-            config.OAuthScope = request.OAuthScope.Trim();
         config.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(CancellationToken.None);
+
+        // Save OAuthScope via raw SQL since the property is NotMapped
+        if (!string.IsNullOrWhiteSpace(request.OAuthScope))
+            await SaveOAuthScopeAsync(config.Id, request.OAuthScope.Trim());
 
         return Ok(new EventsAirConfigDto
         {
@@ -116,7 +153,7 @@ public class EventsAirController : ApiControllerBase
             LastSyncMessage = config.LastSyncMessage,
             LastSyncRecordsCount = config.LastSyncRecordsCount,
             IsActive = config.IsActive,
-            OAuthScope = config.OAuthScope
+            OAuthScope = await GetOAuthScopeAsync()
         });
     }
 
@@ -160,10 +197,7 @@ public class EventsAirController : ApiControllerBase
         // EventsAir uses Microsoft Azure AD for OAuth2 — the stored TokenEndpoint (auth.eventsair.com)
         // does not resolve; always use the correct Azure AD endpoint and scope.
         const string azureAdTokenEndpoint = "https://login.microsoftonline.com/dff76352-1ded-46e8-96a4-1a83718b2d3a/oauth2/v2.0/token";
-        var savedConfig2 = await _db.EventsAirConfigs.FirstOrDefaultAsync();
-        var eventsAirScope = !string.IsNullOrWhiteSpace(savedConfig2?.OAuthScope)
-            ? savedConfig2.OAuthScope
-            : "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
+        var eventsAirScope = await GetOAuthScopeAsync();
 
         var sw = Stopwatch.StartNew();
         try
@@ -266,7 +300,7 @@ public class EventsAirController : ApiControllerBase
         {
             // ── Acquire token ─────────────────────────────────────────────────
             var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
-                config.ClientId, config.ClientSecret, _httpClientFactory, config.OAuthScope);
+                config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
 
             // ── Pass 1: Upsert guests with DedicatedCar=True ──────────────────
             var contacts = await Application.Common.Models.EventsAirSyncHelpers.FetchContactsWithDedicatedCarAsync(
