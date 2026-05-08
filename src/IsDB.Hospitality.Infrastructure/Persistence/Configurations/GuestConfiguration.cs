@@ -11,6 +11,11 @@ public class GuestConfiguration : IEntityTypeConfiguration<Guest>
         builder.HasKey(g => g.Id);
         builder.Property(g => g.EventsAirContactId).IsRequired().HasMaxLength(100);
         builder.HasIndex(g => g.EventsAirContactId).IsUnique();
+        // Performance indexes
+        builder.HasIndex(g => g.IsActive);
+        builder.HasIndex(g => g.Status);
+        builder.HasIndex(g => g.InboundStatus);
+        builder.HasIndex(g => new { g.IsCritical, g.LastName });
         builder.Property(g => g.FirstName).IsRequired().HasMaxLength(100);
         builder.Property(g => g.LastName).IsRequired().HasMaxLength(100);
         builder.Property(g => g.Title).HasMaxLength(50);
@@ -47,6 +52,9 @@ public class FlightConfiguration : IEntityTypeConfiguration<Flight>
         builder.Property(f => f.ArrivalPortName).HasMaxLength(100);
         builder.Property(f => f.ActualTerminal).HasMaxLength(20);
         builder.Property(f => f.ActualGate).HasMaxLength(20);
+        // Performance indexes
+        builder.HasIndex(f => f.Status);
+        builder.HasIndex(f => f.ScheduledArrival);
     }
 }
 
@@ -60,6 +68,10 @@ public class TravelBookingConfiguration : IEntityTypeConfiguration<TravelBooking
         builder.Property(tb => tb.Terminal).HasMaxLength(20);
         builder.Property(tb => tb.Gate).HasMaxLength(20);
         builder.Property(tb => tb.DelayReason).HasMaxLength(500);
+        // Performance indexes
+        builder.HasIndex(tb => tb.IsArrival);
+        builder.HasIndex(tb => tb.GuestId);
+        builder.HasIndex(tb => tb.FlightId);
     }
 }
 
@@ -89,6 +101,10 @@ public class VehicleAssignmentConfiguration : IEntityTypeConfiguration<VehicleAs
         builder.Property(va => va.EstimatedArrivalTime).HasMaxLength(20);
         builder.HasOne(va => va.Vehicle).WithMany(v => v.Assignments).HasForeignKey(va => va.VehicleId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(va => va.AssignedByStaff).WithMany().HasForeignKey(va => va.AssignedByStaffId).OnDelete(DeleteBehavior.Restrict);
+        // Performance indexes
+        builder.HasIndex(va => va.IsActive);
+        builder.HasIndex(va => va.GuestId);
+        builder.HasIndex(va => va.VehicleId);
     }
 }
 
@@ -123,6 +139,9 @@ public class AlertConfiguration : IEntityTypeConfiguration<Alert>
         builder.Property(a => a.Message).IsRequired().HasMaxLength(1000);
         builder.Property(a => a.ResolutionNotes).HasMaxLength(500);
         builder.HasOne(a => a.ResolvedByStaff).WithMany().HasForeignKey(a => a.ResolvedByStaffId).OnDelete(DeleteBehavior.SetNull);
+        // Performance indexes
+        builder.HasIndex(a => a.IsResolved);
+        builder.HasIndex(a => a.GuestId);
     }
 }
 
