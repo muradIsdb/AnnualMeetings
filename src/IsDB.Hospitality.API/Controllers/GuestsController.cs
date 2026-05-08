@@ -188,6 +188,16 @@ public class GuestsController : ApiControllerBase
         var clientSecret = config.ClientSecret;
         var eventCode = config.EventCode;
         var apiBaseUrl = config.ApiBaseUrl;
+        var oAuthScope = config.OAuthScope;
+
+        // Load custom field GUIDs from DB (fall back to hardcoded defaults if not found)
+        var fieldMappings = await db.SyncFieldMappings.ToListAsync(cancellationToken);
+        var dedicatedCarGuid = fieldMappings.FirstOrDefault(f =>
+            f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase))
+            ?.EventsAirFieldGuid ?? DEDICATED_CAR_FIELD_GUID;
+        var rankGuid = fieldMappings.FirstOrDefault(f =>
+            f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase))
+            ?.EventsAirFieldGuid ?? RANK_FIELD_GUID;
 
         // Capture caller identity before entering the background Task (HttpContext not available inside)
         var callerStaffIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -200,14 +210,14 @@ public class GuestsController : ApiControllerBase
         {
             try
             {
-                var token = await GetEventsAirTokenAsync(clientId, clientSecret, httpClientFactory, cache);
+                var token = await GetEventsAirTokenAsync(clientId, clientSecret, httpClientFactory, cache, oAuthScope);
                 Console.WriteLine($"[SYNC] Token acquired. Starting optimized sync...");
 
                 // ═══════════════════════════════════════════════════════════════
                 // PASS 1: Fetch contacts with DedicatedCar=True (includes Rank)
                 // ═══════════════════════════════════════════════════════════════
                 var contacts = await FetchContactsWithDedicatedCarAsync(
-                    apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None);
+                    apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None, dedicatedCarGuid, rankGuid);
 
                 job.TotalFetched = contacts.Count;
                 Console.WriteLine($"[SYNC] Pass 1 complete: {contacts.Count} contacts with DedicatedCar=True fetched.");
@@ -532,17 +542,20 @@ public class GuestsController : ApiControllerBase
     // ═══════════════════════════════════════════════════════════════════════════
     // Helper: Get OAuth2 token for EventsAir API
     // ═══════════════════════════════════════════════════════════════════════════
-    private static async Task<string> GetEventsAirTokenAsync(string clientId, string clientSecret, IHttpClientFactory httpClientFactory, IMemoryCache cache)
+    private static async Task<string> GetEventsAirTokenAsync(string clientId, string clientSecret, IHttpClientFactory httpClientFactory, IMemoryCache cache, string? oAuthScope = null)
     {
         var cacheKey = $"eventsair_token_{clientId}";
         if (cache.TryGetValue(cacheKey, out string? cachedToken) && cachedToken != null) return cachedToken;
         var client = httpClientFactory.CreateClient();
         var tokenUrl = "https://login.microsoftonline.com/dff76352-1ded-46e8-96a4-1a83718b2d3a/oauth2/v2.0/token";
+        var scope = !string.IsNullOrWhiteSpace(oAuthScope)
+            ? oAuthScope
+            : "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
         var tokenRequest = new FormUrlEncodedContent(new[] {
             new KeyValuePair<string, string>("grant_type", "client_credentials"),
             new KeyValuePair<string, string>("client_id", clientId),
             new KeyValuePair<string, string>("client_secret", clientSecret),
-            new KeyValuePair<string, string>("scope", "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default")
+            new KeyValuePair<string, string>("scope", scope)
         });
         var response = await client.PostAsync(tokenUrl, tokenRequest);
         response.EnsureSuccessStatusCode();
@@ -560,8 +573,11 @@ public class GuestsController : ApiControllerBase
     // Only 2-3 API calls needed for ~200 contacts
     // ═══════════════════════════════════════════════════════════════════════════
     private static async Task<List<EventsAirContactDto>> FetchContactsWithDedicatedCarAsync(
-        string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+        string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
+        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null)
     {
+        dedicatedCarFieldGuid ??= DEDICATED_CAR_FIELD_GUID;
+        rankFieldGuid ??= RANK_FIELD_GUID;
         var fetched = new List<EventsAirContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -575,7 +591,7 @@ public class GuestsController : ApiControllerBase
             // Include customFields to get Rank value inline (no separate per-contact query needed)
             var graphqlQuery = $@"{{
               event(id: ""{eventCode}"") {{
-                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{DEDICATED_CAR_FIELD_GUID}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
+                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{dedicatedCarFieldGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
                   id
                   firstName
                   lastName
@@ -617,7 +633,7 @@ public class GuestsController : ApiControllerBase
                 if (errorMsg.Contains("cost", StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine("[SYNC] Cost limit hit — retrying with lighter query (no customFields/photo)...");
-                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken);
+                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken, dedicatedCarFieldGuid, rankFieldGuid);
                 }
                 throw new InvalidOperationException($"GraphQL error: {errorMsg}");
             }
@@ -638,7 +654,7 @@ public class GuestsController : ApiControllerBase
                     foreach (var cf in cfArray.EnumerateArray())
                     {
                         var defId = cf.TryGetProperty("definitionId", out var did) ? did.GetString() ?? "" : "";
-                        if (string.Equals(defId, RANK_FIELD_GUID, StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(defId, rankFieldGuid, StringComparison.OrdinalIgnoreCase))
                         {
                             if (cf.TryGetProperty("value", out var v) && v.ValueKind != JsonValueKind.Null)
                             {
@@ -702,8 +718,11 @@ public class GuestsController : ApiControllerBase
     /// Rank will be fetched separately per-contact in this case.
     /// </summary>
     private static async Task<List<EventsAirContactDto>> FetchContactsWithDedicatedCarLightAsync(
-        string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+        string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
+        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null)
     {
+        dedicatedCarFieldGuid ??= DEDICATED_CAR_FIELD_GUID;
+        rankFieldGuid ??= RANK_FIELD_GUID;
         var fetched = new List<EventsAirContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -715,7 +734,7 @@ public class GuestsController : ApiControllerBase
         {
             var graphqlQuery = $@"{{
               event(id: ""{eventCode}"") {{
-                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{DEDICATED_CAR_FIELD_GUID}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
+                  contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{dedicatedCarFieldGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
                   id
                   firstName
                   lastName
@@ -781,7 +800,7 @@ public class GuestsController : ApiControllerBase
         if (fetched.Count > 0)
         {
             Console.WriteLine($"[SYNC] Light path: fetching Rank values for {fetched.Count} contacts...");
-            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, RANK_FIELD_GUID, fetched.Select(c => c.ContactId), httpClientFactory, cancellationToken);
+            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, rankFieldGuid, fetched.Select(c => c.ContactId), httpClientFactory, cancellationToken);
             for (int i = 0; i < fetched.Count; i++)
             {
                 if (rankValues.TryGetValue(fetched[i].ContactId, out var rank))

@@ -19,6 +19,9 @@ public class EventsAirConfig : BaseEntity
     public int LastSyncRecordsCount { get; set; } = 0;
     public int LastSyncDeactivatedCount { get; set; } = 0;
     public bool IsActive { get; set; } = true;
+
+    /// <summary>Azure AD OAuth scope for EventsAir API access. Editable via the EventsAir Config page so no redeployment is needed if the scope changes.</summary>
+    public string OAuthScope { get; set; } = "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
 }
 
 public class EventsAirSyncLog : BaseEntity

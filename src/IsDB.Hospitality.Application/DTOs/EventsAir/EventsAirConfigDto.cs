@@ -17,6 +17,7 @@ public class EventsAirConfigDto
     public string? LastSyncMessage { get; set; }
     public int LastSyncRecordsCount { get; set; }
     public bool IsActive { get; set; }
+    public string OAuthScope { get; set; } = string.Empty;
 }
 
 public class UpdateEventsAirConfigRequest
@@ -31,6 +32,7 @@ public class UpdateEventsAirConfigRequest
     public bool AutoSyncEnabled { get; set; }
     public bool SyncOnStartup { get; set; }
     public bool IsActive { get; set; }
+    public string OAuthScope { get; set; } = string.Empty;
 }
 
 public class TestConnectionRequest

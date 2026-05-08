@@ -421,6 +421,10 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("OAuthScope")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<string>("TokenEndpoint")
                         .IsRequired()
                         .HasColumnType("text");

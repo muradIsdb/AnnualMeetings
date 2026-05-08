@@ -136,7 +136,7 @@ public class EventsAirSyncService : BackgroundService
         string token;
         try
         {
-            token = await EventsAirSyncHelpers.GetEventsAirTokenAsync(clientId, clientSecret, httpClientFactory);
+            token = await EventsAirSyncHelpers.GetEventsAirTokenAsync(clientId, clientSecret, httpClientFactory, config.OAuthScope);
         }
         catch (Exception ex)
         {

@@ -62,7 +62,8 @@ public class EventsAirController : ApiControllerBase
             LastSyncStatus = config.LastSyncStatus,
             LastSyncMessage = config.LastSyncMessage,
             LastSyncRecordsCount = config.LastSyncRecordsCount,
-            IsActive = config.IsActive
+            IsActive = config.IsActive,
+            OAuthScope = config.OAuthScope
         });
     }
 
@@ -92,6 +93,8 @@ public class EventsAirController : ApiControllerBase
         config.AutoSyncEnabled = request.AutoSyncEnabled;
         config.SyncOnStartup = request.SyncOnStartup;
         config.IsActive = request.IsActive;
+        if (!string.IsNullOrWhiteSpace(request.OAuthScope))
+            config.OAuthScope = request.OAuthScope.Trim();
         config.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(CancellationToken.None);
@@ -112,7 +115,8 @@ public class EventsAirController : ApiControllerBase
             LastSyncStatus = config.LastSyncStatus,
             LastSyncMessage = config.LastSyncMessage,
             LastSyncRecordsCount = config.LastSyncRecordsCount,
-            IsActive = config.IsActive
+            IsActive = config.IsActive,
+            OAuthScope = config.OAuthScope
         });
     }
 
@@ -156,7 +160,10 @@ public class EventsAirController : ApiControllerBase
         // EventsAir uses Microsoft Azure AD for OAuth2 — the stored TokenEndpoint (auth.eventsair.com)
         // does not resolve; always use the correct Azure AD endpoint and scope.
         const string azureAdTokenEndpoint = "https://login.microsoftonline.com/dff76352-1ded-46e8-96a4-1a83718b2d3a/oauth2/v2.0/token";
-        const string eventsAirScope = "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
+        var savedConfig2 = await _db.EventsAirConfigs.FirstOrDefaultAsync();
+        var eventsAirScope = !string.IsNullOrWhiteSpace(savedConfig2?.OAuthScope)
+            ? savedConfig2.OAuthScope
+            : "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
 
         var sw = Stopwatch.StartNew();
         try
@@ -259,7 +266,7 @@ public class EventsAirController : ApiControllerBase
         {
             // ── Acquire token ─────────────────────────────────────────────────
             var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
-                config.ClientId, config.ClientSecret, _httpClientFactory);
+                config.ClientId, config.ClientSecret, _httpClientFactory, config.OAuthScope);
 
             // ── Pass 1: Upsert guests with DedicatedCar=True ──────────────────
             var contacts = await Application.Common.Models.EventsAirSyncHelpers.FetchContactsWithDedicatedCarAsync(
