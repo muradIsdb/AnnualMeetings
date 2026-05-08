@@ -550,6 +550,18 @@ using (var scope = app.Services.CreateScope())
         ");
         logger.LogInformation("CarClasses pre-creation complete.");
 
+        // Add OAuthScope to EventsAirConfigs if missing (AddOAuthScopeToEventsAirConfig migration)
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'EventsAirConfigs' AND column_name = 'OAuthScope'
+                ) THEN
+                    ALTER TABLE ""EventsAirConfigs"" ADD COLUMN ""OAuthScope"" text NOT NULL DEFAULT '';
+                END IF;
+            END $$;
+        ");
+
         // Apply all remaining pending migrations
         logger.LogInformation("Applying pending migrations...");
         await context.Database.MigrateAsync();
