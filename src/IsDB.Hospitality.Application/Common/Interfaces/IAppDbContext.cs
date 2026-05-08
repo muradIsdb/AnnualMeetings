@@ -31,6 +31,7 @@ public interface IAppDbContext
     DbSet<Notification> Notifications { get; }
     DbSet<NotificationRead> NotificationReads { get; }
     DbSet<CarClassRule> CarClassRules { get; }
+    DbSet<TravelBooking> TravelBookings { get; }
     DbSet<TravelBookingHistory> TravelBookingHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
