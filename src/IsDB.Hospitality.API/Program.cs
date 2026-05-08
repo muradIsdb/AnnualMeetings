@@ -555,7 +555,7 @@ using (var scope = app.Services.CreateScope())
             DO $$ BEGIN
                 IF NOT EXISTS (
                     SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'EventsAirConfigs' AND column_name = 'OAuthScope'
+                    WHERE LOWER(table_name) = 'eventsairconfigs' AND LOWER(column_name) = 'oauthscope'
                 ) THEN
                     ALTER TABLE ""EventsAirConfigs"" ADD COLUMN ""OAuthScope"" text NOT NULL DEFAULT '';
                 END IF;

@@ -10,13 +10,13 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // Use idempotent raw SQL so this migration is safe to run even if the column
-            // was already added manually (e.g. by the legacy-DB pre-creation block in Program.cs).
+            // Use idempotent raw SQL with case-insensitive check so this migration is safe
+            // to run even if the column was already added manually.
             migrationBuilder.Sql(@"
                 DO $$ BEGIN
                     IF NOT EXISTS (
                         SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'EventsAirConfigs' AND column_name = 'OAuthScope'
+                        WHERE LOWER(table_name) = 'eventsairconfigs' AND LOWER(column_name) = 'oauthscope'
                     ) THEN
                         ALTER TABLE ""EventsAirConfigs"" ADD COLUMN ""OAuthScope"" text NOT NULL DEFAULT '';
                     END IF;
