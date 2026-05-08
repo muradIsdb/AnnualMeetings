@@ -52,7 +52,7 @@ public class EventsAirSyncService : BackgroundService
                     !string.IsNullOrWhiteSpace(startupConfig.EventCode))
                 {
                     _logger.LogInformation("EventsAir SyncOnStartup=true — running initial sync.");
-                    await SyncAsync(stoppingToken);
+                    await SyncAsync(stoppingToken, isStartupSync: true);
                 }
             }
             catch (OperationCanceledException) { return; }
@@ -91,7 +91,7 @@ public class EventsAirSyncService : BackgroundService
         _logger.LogInformation("EventsAir background sync service stopped.");
     }
 
-    private async Task SyncAsync(CancellationToken cancellationToken)
+    private async Task SyncAsync(CancellationToken cancellationToken, bool isStartupSync = false)
     {
         using var scope = _serviceProvider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -146,7 +146,8 @@ public class EventsAirSyncService : BackgroundService
             config.LastSyncStatus = "Failed";
             config.LastSyncMessage = $"Token acquisition failed: {ex.Message}";
             await db.SaveChangesAsync(CancellationToken.None);
-            await WriteSyncLogAsync(db, "Failed", config.LastSyncMessage, 0, 0, (int)sw.ElapsedMilliseconds);
+            await WriteSyncLogAsync(db, "Failed", config.LastSyncMessage, 0, 0, (int)sw.ElapsedMilliseconds,
+                triggerSource: isStartupSync ? "Startup" : "System Auto-Sync", syncType: "Scheduled");
             return;
         }
 
@@ -395,7 +396,9 @@ public class EventsAirSyncService : BackgroundService
             await db.SaveChangesAsync(CancellationToken.None);
 
             // ── Write sync log entry ──────────────────────────────────────────
-            await WriteSyncLogAsync(db, "Success", message, added + updated, deactivated, (int)sw.ElapsedMilliseconds);
+            await WriteSyncLogAsync(db, "Success", message, added + updated, deactivated, (int)sw.ElapsedMilliseconds,
+                added: added, updated: updated, travelSynced: travelSynced,
+                triggerSource: isStartupSync ? "Startup" : "System Auto-Sync", syncType: "Scheduled");
 
             _logger.LogInformation(
                 "EventsAir background sync completed. Added={Added}, Updated={Updated}, Deactivated={Deactivated}, Travel={Travel}.",
@@ -409,7 +412,8 @@ public class EventsAirSyncService : BackgroundService
             config.LastSyncStatus = "Failed";
             config.LastSyncMessage = ex.Message;
             await db.SaveChangesAsync(CancellationToken.None);
-            await WriteSyncLogAsync(db, "Failed", ex.Message, 0, 0, (int)sw.ElapsedMilliseconds);
+            await WriteSyncLogAsync(db, "Failed", ex.Message, 0, 0, (int)sw.ElapsedMilliseconds,
+                triggerSource: isStartupSync ? "Startup" : "System Auto-Sync", syncType: "Scheduled");
         }
     }
 
@@ -418,7 +422,10 @@ public class EventsAirSyncService : BackgroundService
     /// Uses a fresh SaveChangesAsync with CancellationToken.None so it always persists.
     /// </summary>
     private static async Task WriteSyncLogAsync(
-        AppDbContext db, string status, string message, int recordsSynced, int deactivated, int durationMs)
+        AppDbContext db, string status, string message, int recordsSynced, int deactivated, int durationMs,
+        int added = 0, int updated = 0, int travelSynced = 0,
+        string triggerSource = "System Auto-Sync", string syncType = "Scheduled",
+        Guid? initiatedByStaffId = null, string? initiatedByStaffName = null)
     {
         try
         {
@@ -429,7 +436,14 @@ public class EventsAirSyncService : BackgroundService
                 Message = message,
                 RecordsSynced = recordsSynced,
                 DurationMs = durationMs,
-                SyncType = "Scheduled"
+                SyncType = syncType,
+                TriggerSource = triggerSource,
+                InitiatedByStaffId = initiatedByStaffId,
+                InitiatedByStaffName = initiatedByStaffName,
+                RecordsAdded = added,
+                RecordsUpdated = updated,
+                RecordsDeactivated = deactivated,
+                TravelBookingsSynced = travelSynced
             });
             await db.SaveChangesAsync(CancellationToken.None);
         }

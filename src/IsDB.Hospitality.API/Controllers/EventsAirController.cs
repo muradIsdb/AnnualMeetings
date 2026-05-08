@@ -479,6 +479,13 @@ public class EventsAirController : ApiControllerBase
         config.LastSyncRecordsCount = added + updated;
         config.LastSyncDeactivatedCount = deactivated;
 
+        // Capture caller identity for the log
+        var staffIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        var staffId = staffIdClaim != null && Guid.TryParse(staffIdClaim, out var sid) ? sid : (Guid?)null;
+        var staffName = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
+                     ?? User.FindFirst("name")?.Value
+                     ?? User.Identity?.Name;
+
         _db.EventsAirSyncLogs.Add(new EventsAirSyncLog
         {
             SyncedAt = DateTime.UtcNow,
@@ -486,7 +493,14 @@ public class EventsAirController : ApiControllerBase
             Message = message,
             RecordsSynced = added + updated,
             DurationMs = (int)sw.ElapsedMilliseconds,
-            SyncType = "Manual"
+            SyncType = "Manual",
+            TriggerSource = "API Trigger",
+            InitiatedByStaffId = staffId,
+            InitiatedByStaffName = staffName,
+            RecordsAdded = added,
+            RecordsUpdated = updated,
+            RecordsDeactivated = deactivated,
+            TravelBookingsSynced = travelSynced
         });
 
         await _db.SaveChangesAsync(CancellationToken.None);
@@ -511,11 +525,49 @@ public class EventsAirController : ApiControllerBase
 
     // GET /api/eventsair/sync-logs
     [HttpGet("sync-logs")]
-    public async Task<ActionResult<List<EventsAirSyncLogDto>>> GetSyncLogs([FromQuery] int limit = 20)
+    public async Task<IActionResult> GetSyncLogs(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string? status = null,
+        [FromQuery] string? syncType = null,
+        [FromQuery] string? triggerSource = null,
+        [FromQuery] string? search = null,
+        [FromQuery] DateTime? startDate = null,
+        [FromQuery] DateTime? endDate = null)
     {
-        var logs = await _db.EventsAirSyncLogs
+        if (page < 1) page = 1;
+        if (pageSize < 1 || pageSize > 200) pageSize = 20;
+
+        var query = _db.EventsAirSyncLogs.AsQueryable();
+
+        // Filters
+        if (!string.IsNullOrWhiteSpace(status))
+            query = query.Where(l => l.Status == status);
+        if (!string.IsNullOrWhiteSpace(syncType))
+            query = query.Where(l => l.SyncType == syncType);
+        if (!string.IsNullOrWhiteSpace(triggerSource))
+            query = query.Where(l => l.TriggerSource == triggerSource);
+        if (startDate.HasValue)
+            query = query.Where(l => l.SyncedAt >= startDate.Value.ToUniversalTime());
+        if (endDate.HasValue)
+            query = query.Where(l => l.SyncedAt <= endDate.Value.ToUniversalTime().AddDays(1));
+
+        // Search (message or staff name)
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.ToLower();
+            query = query.Where(l =>
+                (l.Message != null && l.Message.ToLower().Contains(s)) ||
+                (l.InitiatedByStaffName != null && l.InitiatedByStaffName.ToLower().Contains(s)));
+        }
+
+        var totalCount = await query.CountAsync();
+        var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+        var logs = await query
             .OrderByDescending(l => l.SyncedAt)
-            .Take(limit)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .Select(l => new EventsAirSyncLogDto
             {
                 Id = l.Id,
@@ -524,10 +576,23 @@ public class EventsAirController : ApiControllerBase
                 Message = l.Message,
                 RecordsSynced = l.RecordsSynced,
                 DurationMs = l.DurationMs,
-                SyncType = l.SyncType
+                SyncType = l.SyncType,
+                TriggerSource = l.TriggerSource,
+                InitiatedByStaffName = l.InitiatedByStaffName,
+                RecordsAdded = l.RecordsAdded,
+                RecordsUpdated = l.RecordsUpdated,
+                RecordsDeactivated = l.RecordsDeactivated,
+                TravelBookingsSynced = l.TravelBookingsSynced
             })
             .ToListAsync();
 
-        return Ok(logs);
+        return Ok(new
+        {
+            items = logs,
+            totalCount,
+            totalPages,
+            page,
+            pageSize
+        });
     }
 }

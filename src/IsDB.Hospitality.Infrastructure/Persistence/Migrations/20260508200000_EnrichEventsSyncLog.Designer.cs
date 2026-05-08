@@ -3,6 +3,7 @@ using System;
 using IsDB.Hospitality.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260508200000_EnrichEventsSyncLog")]
+    partial class EnrichEventsSyncLog
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.11");
@@ -81,12 +84,6 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer");
-
-                    b.Property<string>("EventLogoBase64")
-                        .HasColumnType("text");
-
-                    b.Property<string>("EventLogoMimeType")
-                        .HasColumnType("varchar(50)");
 
                     b.Property<string>("EventLogoUrl")
                         .HasColumnType("text");
@@ -882,36 +879,6 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("NotificationTemplates");
-                });
-
-            modelBuilder.Entity("IsDB.Hospitality.Domain.Entities.PagePermission", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("IsGranted")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("PageId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("Role")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Role", "PageId")
-                        .IsUnique();
-
-                    b.ToTable("PagePermissions");
                 });
 
             modelBuilder.Entity("IsDB.Hospitality.Domain.Entities.PickupDayOption", b =>

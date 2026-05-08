@@ -189,6 +189,13 @@ public class GuestsController : ApiControllerBase
         var eventCode = config.EventCode;
         var apiBaseUrl = config.ApiBaseUrl;
 
+        // Capture caller identity before entering the background Task (HttpContext not available inside)
+        var callerStaffIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        var callerStaffId = callerStaffIdClaim != null && Guid.TryParse(callerStaffIdClaim, out var csid) ? csid : (Guid?)null;
+        var callerStaffName = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
+                           ?? User.FindFirst("name")?.Value
+                           ?? User.Identity?.Name;
+
         _ = Task.Run(async () =>
         {
             try
@@ -297,10 +304,11 @@ public class GuestsController : ApiControllerBase
                 // and the booking is updated to point to the new flight.
                 // Scheduled flight fields are ALWAYS overwritten from EventsAir.
                 // ═══════════════════════════════════════════════════════════════
+                int savedNew = 0, updatedExisting = 0, rebooked = 0;
                 try
                 {
                     var travelBookings = await FetchTravelBookingsFromEventsAirAsync(apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None);
-                    int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0, savedNew = 0, updatedExisting = 0, rebooked = 0;
+                    int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0;
                     Console.WriteLine($"[TRAVEL-SYNC] Processing {travelBookings.Count} travel bookings...");
                     foreach (var sample in travelBookings.Take(5))
                         Console.WriteLine($"[TRAVEL-SYNC] Sample: ContactId={sample.ContactId}, FlightNumber={sample.FlightNumber}, TravelType={sample.TravelTypeName}, ArrivalDate={sample.ArrivalDate}");
@@ -445,11 +453,69 @@ public class GuestsController : ApiControllerBase
                 job.State = "done"; job.FinishedAt = DateTime.UtcNow;
                 job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated.";
                 Console.WriteLine($"[SYNC] All passes complete. {added} new, {updated} updated, {deactivated} deactivated.");
+
+                // ── Write comprehensive sync log entry ────────────────────────
+                try
+                {
+                    using var logScope = scopeFactory.CreateScope();
+                    var logDb = logScope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var syncConfig = await logDb.EventsAirConfigs.FirstOrDefaultAsync();
+                    if (syncConfig != null)
+                    {
+                        syncConfig.LastSyncAt = DateTime.UtcNow;
+                        syncConfig.LastSyncStatus = "Success";
+                        syncConfig.LastSyncMessage = job.Message;
+                        syncConfig.LastSyncRecordsCount = added + updated;
+                        syncConfig.LastSyncDeactivatedCount = deactivated;
+                    }
+                    logDb.EventsAirSyncLogs.Add(new IsDB.Hospitality.Domain.Entities.EventsAirSyncLog
+                    {
+                        SyncedAt = DateTime.UtcNow,
+                        Status = "Success",
+                        Message = job.Message,
+                        RecordsSynced = added + updated,
+                        DurationMs = (int)(job.FinishedAt!.Value - job.StartedAt).TotalMilliseconds,
+                        SyncType = "Manual",
+                        TriggerSource = "Admin UI Button",
+                        InitiatedByStaffId = callerStaffId,
+                        InitiatedByStaffName = callerStaffName,
+                        RecordsAdded = added,
+                        RecordsUpdated = updated,
+                        RecordsDeactivated = deactivated,
+                        TravelBookingsSynced = savedNew + updatedExisting + rebooked
+                    });
+                    await logDb.SaveChangesAsync();
+                }
+                catch (Exception logEx)
+                {
+                    Console.WriteLine($"[SYNC] Warning: could not write sync log: {logEx.Message}");
+                }
             }
             catch (Exception ex)
             {
                 job.State = "error"; job.Message = ex.Message; job.FinishedAt = DateTime.UtcNow;
                 Console.WriteLine($"[SYNC] Error: {ex.Message}\n{ex.StackTrace}");
+
+                // ── Write failure log entry ───────────────────────────────────
+                try
+                {
+                    using var logScope = scopeFactory.CreateScope();
+                    var logDb = logScope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    logDb.EventsAirSyncLogs.Add(new IsDB.Hospitality.Domain.Entities.EventsAirSyncLog
+                    {
+                        SyncedAt = DateTime.UtcNow,
+                        Status = "Failed",
+                        Message = ex.Message,
+                        RecordsSynced = 0,
+                        DurationMs = (int)(DateTime.UtcNow - job.StartedAt).TotalMilliseconds,
+                        SyncType = "Manual",
+                        TriggerSource = "Admin UI Button",
+                        InitiatedByStaffId = callerStaffId,
+                        InitiatedByStaffName = callerStaffName
+                    });
+                    await logDb.SaveChangesAsync();
+                }
+                catch { /* best-effort */ }
             }
         });
 

@@ -26,7 +26,16 @@ public class EventsAirSyncLog : BaseEntity
     public DateTime SyncedAt { get; set; } = DateTime.UtcNow;
     public string Status { get; set; } = string.Empty; // Success, Failed, Partial
     public string? Message { get; set; }
+    // Legacy combined count (kept for backward compat)
     public int RecordsSynced { get; set; }
     public int DurationMs { get; set; }
     public string SyncType { get; set; } = "Scheduled"; // Scheduled, Manual
+    // Enriched fields
+    public string TriggerSource { get; set; } = "System Auto-Sync"; // System Auto-Sync, Admin UI Button, API Trigger, Startup
+    public Guid? InitiatedByStaffId { get; set; }
+    public string? InitiatedByStaffName { get; set; }
+    public int RecordsAdded { get; set; }
+    public int RecordsUpdated { get; set; }
+    public int RecordsDeactivated { get; set; }
+    public int TravelBookingsSynced { get; set; }
 }
