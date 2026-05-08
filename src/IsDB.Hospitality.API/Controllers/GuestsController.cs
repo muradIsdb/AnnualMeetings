@@ -241,16 +241,19 @@ public class GuestsController : ApiControllerBase
                 using var scope = scopeFactory.CreateScope();
                 var bgDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 int added = 0, updated = 0, deactivated = 0;
-                var syncedContactIds = new HashSet<string>(contacts.Select(c => c.ContactId), StringComparer.OrdinalIgnoreCase);
+                 var syncedContactIds = new HashSet<string>(contacts.Select(c => c.ContactId), StringComparer.OrdinalIgnoreCase);
+
+                // ── Bulk-load ALL guests keyed by EventsAirContactId (eliminates N per-contact SELECT) ──
+                var existingGuestsByContactId = await bgDb.Guests
+                    .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase);
 
                 // Upsert guests
                 foreach (var contact in contacts)
                 {
                     if (string.IsNullOrEmpty(contact.ContactId)) continue;
-                    var existing = await bgDb.Guests.FirstOrDefaultAsync(g => g.EventsAirContactId == contact.ContactId);
-                    if (existing == null)
+                    if (!existingGuestsByContactId.TryGetValue(contact.ContactId, out var existing))
                     {
-                        bgDb.Guests.Add(new Guest
+                        var newGuest = new Guest
                         {
                             EventsAirContactId = contact.ContactId,
                             FirstName = contact.FirstName,
@@ -268,7 +271,9 @@ public class GuestsController : ApiControllerBase
                             IsActive = true,
                             Status = GuestStatus.Expected,
                             LastSyncedAt = DateTime.UtcNow
-                        });
+                        };
+                        bgDb.Guests.Add(newGuest);
+                        existingGuestsByContactId[contact.ContactId] = newGuest; // keep dict in sync
                         added++;
                     }
                     else
@@ -295,29 +300,24 @@ public class GuestsController : ApiControllerBase
                 // ═══════════════════════════════════════════════════════════════
                 // PASS 2: Deactivate guests not in the fetched set
                 // ═══════════════════════════════════════════════════════════════
-                var activeGuestsInDb = await bgDb.Guests
-                    .Where(g => g.IsActive)
-                    .Include(g => g.VehicleAssignments)
-                    .Select(g => new { g.Id, g.EventsAirContactId, HasActiveVehicle = g.VehicleAssignments.Any(va => va.IsActive) })
-                    .ToListAsync();
+                // ── Bulk-load active-vehicle set in one query; reuse existingGuestsByContactId ──
+                var guestsWithActiveVehicle = (await bgDb.VehicleAssignments
+                    .Where(va => va.IsActive)
+                    .Select(va => va.GuestId)
+                    .ToListAsync()).ToHashSet();
 
-                foreach (var dbGuest in activeGuestsInDb)
+                foreach (var kvp in existingGuestsByContactId)
                 {
-                    if (!string.IsNullOrEmpty(dbGuest.EventsAirContactId) && !syncedContactIds.Contains(dbGuest.EventsAirContactId))
+                    var guestToDeactivate = kvp.Value;
+                    if (!string.IsNullOrEmpty(guestToDeactivate.EventsAirContactId) &&
+                        !syncedContactIds.Contains(guestToDeactivate.EventsAirContactId) &&
+                        guestToDeactivate.IsActive &&
+                        !guestsWithActiveVehicle.Contains(guestToDeactivate.Id))
                     {
-                        // Guest is no longer in the DedicatedCar=True list
-                        // Only deactivate if they don't have an active vehicle assignment
-                        if (!dbGuest.HasActiveVehicle)
-                        {
-                            var guestToDeactivate = await bgDb.Guests.FindAsync(dbGuest.Id);
-                            if (guestToDeactivate != null)
-                            {
-                                guestToDeactivate.IsActive = false;
-                                guestToDeactivate.DedicatedCar = null;
-                                guestToDeactivate.LastSyncedAt = DateTime.UtcNow;
-                                deactivated++;
-                            }
-                        }
+                        guestToDeactivate.IsActive = false;
+                        guestToDeactivate.DedicatedCar = null;
+                        guestToDeactivate.LastSyncedAt = DateTime.UtcNow;
+                        deactivated++;
                     }
                 }
                 await bgDb.SaveChangesAsync();
@@ -339,17 +339,24 @@ public class GuestsController : ApiControllerBase
                     foreach (var sample in travelBookings.Take(5))
                         Console.WriteLine($"[TRAVEL-SYNC] Sample: ContactId={sample.ContactId}, FlightNumber={sample.FlightNumber}, TravelType={sample.TravelTypeName}, ArrivalDate={sample.ArrivalDate}");
                     int errorCount = 0;
+                    // ── Bulk-load active guests with travel bookings + flights ──
+                    var guestsByContactId = await bgDb.Guests
+                        .Where(g => g.IsActive)
+                        .Include(g => g.TravelBookings)
+                            .ThenInclude(tb => tb.Flight)
+                        .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase);
+
+                    // ── Bulk-load all flights keyed by flight number ──────────
+                    var flightsByNumber = await bgDb.Flights
+                        .ToDictionaryAsync(f => f.FlightNumber, StringComparer.OrdinalIgnoreCase);
+
                     foreach (var tbDto in travelBookings)
                     {
                       try
                       {
                         if (string.IsNullOrEmpty(tbDto.FlightNumber)) { skippedNoFlight++; continue; }
                         if (string.IsNullOrEmpty(tbDto.ContactId)) { skippedNoContact++; continue; }
-                        var guest = await bgDb.Guests
-                            .Include(g => g.TravelBookings)
-                                .ThenInclude(tb => tb.Flight)
-                            .FirstOrDefaultAsync(g => g.EventsAirContactId == tbDto.ContactId && g.IsActive);
-                        if (guest == null) { skippedNoGuest++; continue; }
+                        if (!guestsByContactId.TryGetValue(tbDto.ContactId, out var guest)) { skippedNoGuest++; continue; }
 
                         bool isArrival = tbDto.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
 
@@ -375,10 +382,8 @@ public class GuestsController : ApiControllerBase
                             }
                         }
 
-                        // Find or create the Flight record.
-                        // ALWAYS overwrite scheduled fields from EventsAir (no write-once guard).
-                        var flight = await bgDb.Flights.FirstOrDefaultAsync(f => f.FlightNumber == tbDto.FlightNumber);
-                        if (flight == null)
+                        // Find or create the Flight record using the in-memory dictionary
+                        if (!flightsByNumber.TryGetValue(tbDto.FlightNumber, out var flight))
                         {
                             flight = new Flight
                             {
@@ -393,7 +398,7 @@ public class GuestsController : ApiControllerBase
                                 Status = FlightStatus.Scheduled
                             };
                             bgDb.Flights.Add(flight);
-                            await bgDb.SaveChangesAsync();
+                            flightsByNumber[tbDto.FlightNumber] = flight; // keep dict in sync
                         }
                         else
                         {
@@ -461,7 +466,6 @@ public class GuestsController : ApiControllerBase
                             existingBooking.LastSyncedAt = DateTime.UtcNow;
                             updatedExisting++;
                         }
-                        await bgDb.SaveChangesAsync();
                       }
                       catch (Exception bookingEx)
                       {
@@ -471,6 +475,8 @@ public class GuestsController : ApiControllerBase
                             entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
                       }
                     }
+                    // Single SaveChangesAsync for the entire Pass 3 batch
+                    await bgDb.SaveChangesAsync();
                     Console.WriteLine($"[TRAVEL-SYNC] Results: {savedNew} new, {updatedExisting} updated, {rebooked} rebooked (history saved), {errorCount} errors, skipped: {skippedNoFlight} no flight, {skippedNoContact} no contact, {skippedNoGuest} no guest match");
                 }
                 catch (Exception ex) { Console.WriteLine($"Travel sync error: {ex.Message}\n{ex.StackTrace}"); }

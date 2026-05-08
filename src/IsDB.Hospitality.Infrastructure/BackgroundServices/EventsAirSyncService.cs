@@ -182,16 +182,17 @@ public class EventsAirSyncService : BackgroundService
 
             var syncedContactIds = new HashSet<string>(contacts.Select(c => c.ContactId), StringComparer.OrdinalIgnoreCase);
 
+            // ── Bulk-load ALL guests keyed by EventsAirContactId (eliminates N per-contact SELECT) ──
+            var existingGuestsByContactId = await db.Guests
+                .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
             foreach (var contact in contacts)
             {
                 if (string.IsNullOrEmpty(contact.ContactId)) continue;
 
-                var existing = await db.Guests.FirstOrDefaultAsync(
-                    g => g.EventsAirContactId == contact.ContactId, cancellationToken);
-
-                if (existing == null)
+                if (!existingGuestsByContactId.TryGetValue(contact.ContactId, out var existing))
                 {
-                    db.Guests.Add(new Guest
+                    var newGuest = new Guest
                     {
                         EventsAirContactId = contact.ContactId,
                         FirstName = contact.FirstName,
@@ -209,7 +210,9 @@ public class EventsAirSyncService : BackgroundService
                         IsActive = true,
                         Status = GuestStatus.Expected,
                         LastSyncedAt = DateTime.UtcNow
-                    });
+                    };
+                    db.Guests.Add(newGuest);
+                    existingGuestsByContactId[contact.ContactId] = newGuest; // keep dict in sync
                     added++;
                 }
                 else
@@ -234,33 +237,29 @@ public class EventsAirSyncService : BackgroundService
 
             // ══════════════════════════════════════════════════════════════════
             // PASS 2: Deactivate guests no longer in the DedicatedCar=True list
-            //         (skip guests with active vehicle assignments)
+            //         Optimised: reuse existingGuestsByContactId from Pass 1 and
+            //         load active-vehicle set in one query — no FindAsync per guest.
             // ══════════════════════════════════════════════════════════════════
-            var activeGuests = await db.Guests
-                .Where(g => g.IsActive)
-                .Include(g => g.VehicleAssignments)
-                .Select(g => new
-                {
-                    g.Id,
-                    g.EventsAirContactId,
-                    HasActiveVehicle = g.VehicleAssignments.Any(va => va.IsActive)
-                })
-                .ToListAsync(cancellationToken);
 
-            foreach (var dbGuest in activeGuests)
+            // Single query: which guest IDs have an active vehicle assignment?
+            var guestsWithActiveVehicleList = await db.VehicleAssignments
+                .Where(va => va.IsActive)
+                .Select(va => va.GuestId)
+                .ToListAsync(cancellationToken);
+            var guestsWithActiveVehicle = guestsWithActiveVehicleList.ToHashSet();
+
+            foreach (var kvp in existingGuestsByContactId)
             {
-                if (!string.IsNullOrEmpty(dbGuest.EventsAirContactId) &&
-                    !syncedContactIds.Contains(dbGuest.EventsAirContactId) &&
-                    !dbGuest.HasActiveVehicle)
+                var g = kvp.Value;
+                if (!string.IsNullOrEmpty(g.EventsAirContactId) &&
+                    !syncedContactIds.Contains(g.EventsAirContactId) &&
+                    g.IsActive &&
+                    !guestsWithActiveVehicle.Contains(g.Id))
                 {
-                    var g = await db.Guests.FindAsync(new object[] { dbGuest.Id }, cancellationToken);
-                    if (g != null)
-                    {
-                        g.IsActive = false;
-                        g.DedicatedCar = null;
-                        g.LastSyncedAt = DateTime.UtcNow;
-                        deactivated++;
-                    }
+                    g.IsActive = false;
+                    g.DedicatedCar = null;
+                    g.LastSyncedAt = DateTime.UtcNow;
+                    deactivated++;
                 }
             }
             await db.SaveChangesAsync(cancellationToken);
@@ -269,25 +268,33 @@ public class EventsAirSyncService : BackgroundService
 
             // ══════════════════════════════════════════════════════════════════
             // PASS 3: Travel bookings — replace-on-rebooking with history
-            //         Scheduled flight fields are ALWAYS overwritten from EventsAir.
-            //         Each guest has at most ONE arrival and ONE departure booking.
+            //         Optimised: bulk-load all active guests (with bookings+flights)
+            //         and all flights into dictionaries before the loop —
+            //         eliminates 2N per-booking SELECT queries and N SaveChanges.
             // ══════════════════════════════════════════════════════════════════
             try
             {
                 var travelBookings = await EventsAirSyncHelpers.FetchTravelBookingsAsync(
                     apiBaseUrl, eventCode, token, httpClientFactory, cancellationToken);
 
+                // ── Bulk-load active guests with their travel bookings + flights ──
+                var guestsByContactId = await db.Guests
+                    .Where(g => g.IsActive)
+                    .Include(g => g.TravelBookings)
+                        .ThenInclude(tb => tb.Flight)
+                    .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
+                // ── Bulk-load all flights keyed by flight number ──────────────
+                var flightsByNumber = await db.Flights
+                    .ToDictionaryAsync(f => f.FlightNumber, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
                 foreach (var tbDto in travelBookings)
                 {
                     if (string.IsNullOrEmpty(tbDto.FlightNumber) || string.IsNullOrEmpty(tbDto.ContactId))
                         continue;
 
-                    var guest = await db.Guests
-                        .Include(g => g.TravelBookings)
-                        .ThenInclude(tb => tb.Flight)
-                        .FirstOrDefaultAsync(g => g.EventsAirContactId == tbDto.ContactId, cancellationToken);
-
-                    if (guest == null || !guest.IsActive) continue;
+                    if (!guestsByContactId.TryGetValue(tbDto.ContactId, out var guest))
+                        continue;
 
                     bool isArrival = tbDto.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
 
@@ -310,11 +317,8 @@ public class EventsAirSyncService : BackgroundService
                             ? depDate.Add(etdTime) : depDate;
                     }
 
-                    // Find or create the Flight record
-                    var flight = await db.Flights.FirstOrDefaultAsync(
-                        f => f.FlightNumber == tbDto.FlightNumber, cancellationToken);
-
-                    if (flight == null)
+                    // Find or create the Flight record using the in-memory dictionary
+                    if (!flightsByNumber.TryGetValue(tbDto.FlightNumber, out var flight))
                     {
                         flight = new Flight
                         {
@@ -327,11 +331,11 @@ public class EventsAirSyncService : BackgroundService
                             Status = FlightStatus.Scheduled
                         };
                         db.Flights.Add(flight);
-                        await db.SaveChangesAsync(cancellationToken);
+                        flightsByNumber[tbDto.FlightNumber] = flight; // keep dict in sync
                     }
                     else
                     {
-                        // Always overwrite scheduled fields (no write-once guard)
+                        // Always overwrite scheduled fields (EventsAir-owned)
                         if (scheduledArrival.HasValue) flight.ScheduledArrival = scheduledArrival.Value;
                         if (scheduledDeparture.HasValue) flight.ScheduledDeparture = scheduledDeparture.Value;
                         if (!string.IsNullOrEmpty(tbDto.ArrivalPortName)) flight.ArrivalPortName = tbDto.ArrivalPortName;
@@ -393,6 +397,7 @@ public class EventsAirSyncService : BackgroundService
                     travelSynced++;
                 }
 
+                // Single SaveChangesAsync for the entire Pass 3 batch
                 await db.SaveChangesAsync(cancellationToken);
                 _logger.LogInformation("EventsAir background sync Pass 3: {Count} travel bookings processed.", travelSynced);
             }
