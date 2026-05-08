@@ -82,9 +82,21 @@ public class GetArrivalFlightsQueryHandler : IRequestHandler<GetArrivalFlightsQu
                     .Where(tb => tb.IsArrival)
                     .Select(tb => tb.Flight.ActualTerminal)
                     .FirstOrDefault(),
+                Gate = g.TravelBookings
+                    .Where(tb => tb.IsArrival)
+                    .Select(tb => tb.Flight.ActualGate)
+                    .FirstOrDefault(),
                 FlightStatus = g.TravelBookings
                     .Where(tb => tb.IsArrival)
                     .Select(tb => (FlightStatus?)tb.Flight.Status)
+                    .FirstOrDefault(),
+                LiveDelayMinutes = g.TravelBookings
+                    .Where(tb => tb.IsArrival)
+                    .Select(tb => tb.Flight.LiveDelayMinutes)
+                    .FirstOrDefault(),
+                LastTrackedAt = g.TravelBookings
+                    .Where(tb => tb.IsArrival)
+                    .Select(tb => tb.Flight.LastTrackedAt)
                     .FirstOrDefault()
             })
             .ToListAsync(cancellationToken);
@@ -104,9 +116,12 @@ public class GetArrivalFlightsQueryHandler : IRequestHandler<GetArrivalFlightsQu
                     ScheduledArrival = grp.Key.HasValue ? first.ScheduledArrival : null,
                     ActualArrival = grp.Key.HasValue ? first.ActualArrival : null,
                     Terminal = grp.Key.HasValue ? first.Terminal : null,
+                    Gate = grp.Key.HasValue ? first.Gate : null,
                     FlightStatus = grp.Key.HasValue
                         ? (first.FlightStatus?.ToString() ?? "Unknown")
                         : "Unknown",
+                    LiveDelayMinutes = grp.Key.HasValue ? first.LiveDelayMinutes : null,
+                    LastTrackedAt = grp.Key.HasValue ? first.LastTrackedAt : null,
                     Guests = grp
                         .Select(g => g.Guest)
                         .OrderByDescending(g => g.IsCritical)

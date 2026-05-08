@@ -64,6 +64,9 @@ public class TravelBookingSummaryDto
     public bool ChangedSinceLastView { get; set; }
     public string? PreviousFlightNumber { get; set; }
     public DateTime? ChangedAt { get; set; }
+    // Layer 2 live fields (Aviationstack-owned)
+    public int? LiveDelayMinutes { get; set; }
+    public DateTime? LastTrackedAt { get; set; }
 }
 
 public class ChecklistCompletionDto

@@ -523,6 +523,9 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("LastTrackedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("LiveDelayMinutes")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("ScheduledArrival")
                         .HasColumnType("timestamp with time zone");
 
