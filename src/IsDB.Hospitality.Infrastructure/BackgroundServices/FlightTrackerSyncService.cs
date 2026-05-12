@@ -75,9 +75,20 @@ public class FlightTrackerSyncService : BackgroundService
                     flight.ActualArrival = status.ActualArrival;
                     changed = true;
                 }
+                if (status.ActualDeparture.HasValue && flight.ActualDeparture != status.ActualDeparture)
+                {
+                    flight.ActualDeparture = status.ActualDeparture;
+                    changed = true;
+                }
                 if (status.Terminal != null && flight.ActualTerminal != status.Terminal) { flight.ActualTerminal = status.Terminal; changed = true; }
                 if (status.Gate != null && flight.ActualGate != status.Gate) { flight.ActualGate = status.Gate; changed = true; }
+                if (status.DelayMinutes.HasValue && flight.LiveDelayMinutes != status.DelayMinutes)
+                {
+                    flight.LiveDelayMinutes = status.DelayMinutes;
+                    changed = true;
+                }
 
+                // Layer 2 timestamp — always updated on each poll
                 flight.LastTrackedAt = DateTime.UtcNow;
 
                 if (changed)

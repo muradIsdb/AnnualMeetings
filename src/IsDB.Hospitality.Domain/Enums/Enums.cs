@@ -107,5 +107,7 @@ public enum OutboundStatus
 public enum StatusTrack
 {
     Inbound = 0,
-    Outbound = 1
+    Outbound = 1,
+    /// <summary>Vehicle activity events (assign, unassign, reassign, force-assign)</summary>
+    Vehicle = 2
 }

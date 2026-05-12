@@ -1,0 +1,228 @@
+/* ============================================================
+   IsDB Hospitality Platform — Mobile & Tablet UI Enhancements
+   Applies responsive improvements on top of the compiled bundle
+   Version 2.0 — Updated for production bundle (index-CymXeUZW.js)
+   ============================================================ */
+
+/* ── 1. TABLET SIDEBAR: Hide desktop sidebar on tablet (768px–1023px) ── */
+/*
+   New bundle structure:
+     - aside.hidden.md:flex.w-64      → desktop sidebar (shown at md=768px+)
+     - aside.fixed...w-72.md:hidden   → mobile drawer (hidden at md=768px+)
+     - button.md:hidden[aria-label]   → hamburger (hidden at md=768px+)
+
+   We override to keep hamburger visible and sidebar hidden up to lg (1024px).
+*/
+@media (min-width: 768px) and (max-width: 1023px) {
+  /* Hide the desktop sidebar on tablet */
+  aside.hidden,
+  aside[class*="w-64"][class*="bg-white"][class*="border-r"] {
+    display: none !important;
+  }
+}
+
+/* ── 2. HAMBURGER BUTTON: Show on tablet (override md:hidden up to 1023px) ── */
+@media (max-width: 1023px) {
+  button[aria-label="Open menu"] {
+    display: flex !important;
+  }
+}
+
+/* ── 3. MOBILE DRAWER: Allow on tablet (override md:hidden) ── */
+/*
+   The mobile drawer and overlay both have md:hidden which hides them at 768px+.
+   We override to allow them to appear on tablet (768px–1023px) when React opens them.
+   The drawer uses translate-x for animation, so we just need display:flex to be allowed.
+*/
+@media (min-width: 768px) and (max-width: 1023px) {
+  /* Allow the mobile drawer to show on tablet */
+  aside[class*="w-72"][class*="fixed"][class*="inset-y-0"] {
+    display: flex !important;
+  }
+  /* Allow the mobile overlay to show on tablet (uses z-40 as discriminator) */
+  div.fixed.inset-0.z-40 {
+    display: block !important;
+  }
+}
+
+/* ── 4. DATA TABLES: Horizontal scroll on mobile/tablet ── */
+@media (max-width: 1023px) {
+  /* Ensure tables are horizontally scrollable */
+  .overflow-x-auto {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    position: relative;
+  }
+
+  /* Fleet and Staff tables: set minimum width so columns don't collapse */
+  .overflow-x-auto table,
+  table.min-w-full,
+  table.w-full {
+    min-width: 640px !important;
+  }
+
+  /* Ensure the table wrapper doesn't clip */
+  div:has(> table),
+  .rounded-lg:has(> table),
+  .border:has(> table) {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ── 5. STAFF TABLE: Fix role badge truncation ── */
+@media (max-width: 1023px) {
+  /* Allow role badges to wrap instead of truncating */
+  td .flex.flex-wrap {
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+  }
+
+  /* Ensure status column is visible */
+  table td:last-child,
+  table th:last-child {
+    min-width: 80px;
+  }
+}
+
+/* ── 6. BUTTON COLOR CONSISTENCY: Replace btn-danger for non-destructive actions ── */
+/* The "New Alert" button uses btn-danger (red) — keep red for alerts as it is semantic */
+/* However standardize the Placard button to IsDB green */
+button.bg-gray-800,
+a.bg-gray-800,
+button[class*="bg-gray-900"],
+a[class*="bg-gray-900"] {
+  background-color: rgb(0 107 63) !important;
+  color: white !important;
+}
+
+button[class*="bg-gray-800"]:hover,
+a[class*="bg-gray-800"]:hover {
+  background-color: rgb(0 85 50) !important;
+}
+
+/* ── 7. TOUCH TARGETS: Expand small icon-only buttons ── */
+/* Bare icon buttons (refresh icons) need larger touch targets */
+button.btn-secondary.p-2 {
+  min-width: 44px !important;
+  min-height: 44px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+/* ── 8. PLATFORM SETTINGS TABS: Prevent label wrapping ── */
+/* Tab navigation labels should not wrap to two lines */
+@media (max-width: 1023px) {
+  /* Make the tab container horizontally scrollable */
+  nav.flex.gap-1,
+  div.flex.gap-1 > button[class*="border-b"] {
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+  }
+
+  /* Scrollable tab container */
+  div.bg-white.border-b > nav.flex {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+    padding-bottom: 0 !important;
+  }
+
+  div.bg-white.border-b > nav.flex::-webkit-scrollbar {
+    display: none !important;
+  }
+}
+
+/* ── 9. DEPARTURE FORM: Sticky submit button ── */
+@media (max-width: 767px) {
+  /* Make the submit button sticky at the bottom on mobile */
+  .max-w-2xl.mx-auto form > button[type="submit"],
+  .max-w-2xl.mx-auto > div > button[type="submit"] {
+    position: sticky !important;
+    bottom: 16px !important;
+    z-index: 10 !important;
+    box-shadow: 0 4px 12px rgba(0, 107, 63, 0.3) !important;
+  }
+}
+
+/* ── 10. LINK CARD BUTTONS: Stack vertically on mobile ── */
+@media (max-width: 767px) {
+  /* Registration form link card — stack Copy Link and Open Form buttons */
+  .bg-blue-50 .flex.gap-2,
+  .bg-blue-50 .flex.gap-3 {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .bg-blue-50 .flex.gap-2 > button,
+  .bg-blue-50 .flex.gap-2 > a,
+  .bg-blue-50 .flex.gap-3 > button,
+  .bg-blue-50 .flex.gap-3 > a {
+    width: 100% !important;
+    justify-content: center !important;
+  }
+}
+
+/* ── 11. GENERAL MOBILE IMPROVEMENTS ── */
+
+/* Ensure all pages have proper horizontal padding on mobile */
+@media (max-width: 767px) {
+  .p-6 {
+    padding: 1rem !important;
+  }
+
+  .px-6 {
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+
+  /* Page titles scale down on mobile */
+  h1.text-2xl {
+    font-size: 1.25rem !important;
+    line-height: 1.75rem !important;
+  }
+
+  /* Stat cards: ensure 2-column grid on mobile */
+  .grid.grid-cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* ── 12. NOTIFICATION BELL: Ensure proper touch target ── */
+button[aria-label*="notification"],
+button[aria-label*="Notification"] {
+  min-width: 44px !important;
+  min-height: 44px !important;
+}
+
+/* ── 13. FORM INPUTS: Prevent iOS zoom on focus ── */
+@media (max-width: 767px) {
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="tel"],
+  select,
+  textarea {
+    font-size: 16px !important; /* Prevents iOS auto-zoom */
+  }
+}
+
+/* ── 14. MODAL/DIALOG: Full-screen on mobile ── */
+@media (max-width: 767px) {
+  /* Dialogs should be full-width on mobile */
+  .fixed.inset-0 > div[class*="max-w"],
+  .fixed.inset-0 > div[class*="w-full"] {
+    margin: 0 !important;
+    border-radius: 1rem 1rem 0 0 !important;
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    max-width: 100% !important;
+    max-height: 90vh !important;
+    overflow-y: auto !important;
+  }
+}

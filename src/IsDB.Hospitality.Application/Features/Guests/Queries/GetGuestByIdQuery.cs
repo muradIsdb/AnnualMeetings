@@ -94,7 +94,10 @@ public class GetGuestByIdQueryHandler : IRequestHandler<GetGuestByIdQuery, Guest
                 ActualDeparture = tb.Flight.ActualDeparture,
                 ChangedSinceLastView = tb.ChangedSinceLastView,
                 PreviousFlightNumber = tb.PreviousFlightNumber,
-                ChangedAt = tb.ChangedAt
+                ChangedAt = tb.ChangedAt,
+                // Layer 2 live fields (Aviationstack-owned)
+                LiveDelayMinutes = tb.Flight.LiveDelayMinutes,
+                LastTrackedAt = tb.Flight.LastTrackedAt
             }).ToList(),
             ChecklistCompletions = allChecklistItems.Select(ci =>
             {

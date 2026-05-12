@@ -188,19 +188,52 @@ public class GuestsController : ApiControllerBase
         var clientSecret = config.ClientSecret;
         var eventCode = config.EventCode;
         var apiBaseUrl = config.ApiBaseUrl;
+        // OAuthScope is NotMapped on EventsAirConfig entity — read via raw SQL
+        string oAuthScope;
+        try
+        {
+            var conn2 = db.Database.GetDbConnection();
+            if (conn2.State != System.Data.ConnectionState.Open) await conn2.OpenAsync(cancellationToken);
+            using var cmd2 = conn2.CreateCommand();
+            cmd2.CommandText = "SELECT \"OAuthScope\" FROM \"EventsAirConfigs\" LIMIT 1";
+            var scopeResult2 = await cmd2.ExecuteScalarAsync(cancellationToken);
+            oAuthScope = scopeResult2 is string s2 && !string.IsNullOrWhiteSpace(s2)
+                ? s2
+                : "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
+        }
+        catch
+        {
+            oAuthScope = "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
+        }
+
+        // Load custom field GUIDs from DB (fall back to hardcoded defaults if not found)
+        var fieldMappings = await db.SyncFieldMappings.ToListAsync(cancellationToken);
+        var dedicatedCarGuid = fieldMappings.FirstOrDefault(f =>
+            f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase))
+            ?.EventsAirFieldGuid ?? DEDICATED_CAR_FIELD_GUID;
+        var rankGuid = fieldMappings.FirstOrDefault(f =>
+            f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase))
+            ?.EventsAirFieldGuid ?? RANK_FIELD_GUID;
+
+        // Capture caller identity before entering the background Task (HttpContext not available inside)
+        var callerStaffIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        var callerStaffId = callerStaffIdClaim != null && Guid.TryParse(callerStaffIdClaim, out var csid) ? csid : (Guid?)null;
+        var callerStaffName = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
+                           ?? User.FindFirst("name")?.Value
+                           ?? User.Identity?.Name;
 
         _ = Task.Run(async () =>
         {
             try
             {
-                var token = await GetEventsAirTokenAsync(clientId, clientSecret, httpClientFactory, cache);
+                var token = await GetEventsAirTokenAsync(clientId, clientSecret, httpClientFactory, cache, oAuthScope);
                 Console.WriteLine($"[SYNC] Token acquired. Starting optimized sync...");
 
                 // ═══════════════════════════════════════════════════════════════
                 // PASS 1: Fetch contacts with DedicatedCar=True (includes Rank)
                 // ═══════════════════════════════════════════════════════════════
                 var contacts = await FetchContactsWithDedicatedCarAsync(
-                    apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None);
+                    apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None, dedicatedCarGuid, rankGuid);
 
                 job.TotalFetched = contacts.Count;
                 Console.WriteLine($"[SYNC] Pass 1 complete: {contacts.Count} contacts with DedicatedCar=True fetched.");
@@ -208,16 +241,19 @@ public class GuestsController : ApiControllerBase
                 using var scope = scopeFactory.CreateScope();
                 var bgDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 int added = 0, updated = 0, deactivated = 0;
-                var syncedContactIds = new HashSet<string>(contacts.Select(c => c.ContactId), StringComparer.OrdinalIgnoreCase);
+                 var syncedContactIds = new HashSet<string>(contacts.Select(c => c.ContactId), StringComparer.OrdinalIgnoreCase);
+
+                // ── Bulk-load ALL guests keyed by EventsAirContactId (eliminates N per-contact SELECT) ──
+                var existingGuestsByContactId = await bgDb.Guests
+                    .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase);
 
                 // Upsert guests
                 foreach (var contact in contacts)
                 {
                     if (string.IsNullOrEmpty(contact.ContactId)) continue;
-                    var existing = await bgDb.Guests.FirstOrDefaultAsync(g => g.EventsAirContactId == contact.ContactId);
-                    if (existing == null)
+                    if (!existingGuestsByContactId.TryGetValue(contact.ContactId, out var existing))
                     {
-                        bgDb.Guests.Add(new Guest
+                        var newGuest = new Guest
                         {
                             EventsAirContactId = contact.ContactId,
                             FirstName = contact.FirstName,
@@ -235,7 +271,9 @@ public class GuestsController : ApiControllerBase
                             IsActive = true,
                             Status = GuestStatus.Expected,
                             LastSyncedAt = DateTime.UtcNow
-                        });
+                        };
+                        bgDb.Guests.Add(newGuest);
+                        existingGuestsByContactId[contact.ContactId] = newGuest; // keep dict in sync
                         added++;
                     }
                     else
@@ -262,29 +300,24 @@ public class GuestsController : ApiControllerBase
                 // ═══════════════════════════════════════════════════════════════
                 // PASS 2: Deactivate guests not in the fetched set
                 // ═══════════════════════════════════════════════════════════════
-                var activeGuestsInDb = await bgDb.Guests
-                    .Where(g => g.IsActive)
-                    .Include(g => g.VehicleAssignments)
-                    .Select(g => new { g.Id, g.EventsAirContactId, HasActiveVehicle = g.VehicleAssignments.Any(va => va.IsActive) })
-                    .ToListAsync();
+                // ── Bulk-load active-vehicle set in one query; reuse existingGuestsByContactId ──
+                var guestsWithActiveVehicle = (await bgDb.VehicleAssignments
+                    .Where(va => va.IsActive)
+                    .Select(va => va.GuestId)
+                    .ToListAsync()).ToHashSet();
 
-                foreach (var dbGuest in activeGuestsInDb)
+                foreach (var kvp in existingGuestsByContactId)
                 {
-                    if (!string.IsNullOrEmpty(dbGuest.EventsAirContactId) && !syncedContactIds.Contains(dbGuest.EventsAirContactId))
+                    var guestToDeactivate = kvp.Value;
+                    if (!string.IsNullOrEmpty(guestToDeactivate.EventsAirContactId) &&
+                        !syncedContactIds.Contains(guestToDeactivate.EventsAirContactId) &&
+                        guestToDeactivate.IsActive &&
+                        !guestsWithActiveVehicle.Contains(guestToDeactivate.Id))
                     {
-                        // Guest is no longer in the DedicatedCar=True list
-                        // Only deactivate if they don't have an active vehicle assignment
-                        if (!dbGuest.HasActiveVehicle)
-                        {
-                            var guestToDeactivate = await bgDb.Guests.FindAsync(dbGuest.Id);
-                            if (guestToDeactivate != null)
-                            {
-                                guestToDeactivate.IsActive = false;
-                                guestToDeactivate.DedicatedCar = null;
-                                guestToDeactivate.LastSyncedAt = DateTime.UtcNow;
-                                deactivated++;
-                            }
-                        }
+                        guestToDeactivate.IsActive = false;
+                        guestToDeactivate.DedicatedCar = null;
+                        guestToDeactivate.LastSyncedAt = DateTime.UtcNow;
+                        deactivated++;
                     }
                 }
                 await bgDb.SaveChangesAsync();
@@ -297,25 +330,33 @@ public class GuestsController : ApiControllerBase
                 // and the booking is updated to point to the new flight.
                 // Scheduled flight fields are ALWAYS overwritten from EventsAir.
                 // ═══════════════════════════════════════════════════════════════
+                int savedNew = 0, updatedExisting = 0, rebooked = 0;
                 try
                 {
                     var travelBookings = await FetchTravelBookingsFromEventsAirAsync(apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None);
-                    int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0, savedNew = 0, updatedExisting = 0, rebooked = 0;
+                    int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0;
                     Console.WriteLine($"[TRAVEL-SYNC] Processing {travelBookings.Count} travel bookings...");
                     foreach (var sample in travelBookings.Take(5))
                         Console.WriteLine($"[TRAVEL-SYNC] Sample: ContactId={sample.ContactId}, FlightNumber={sample.FlightNumber}, TravelType={sample.TravelTypeName}, ArrivalDate={sample.ArrivalDate}");
                     int errorCount = 0;
+                    // ── Bulk-load active guests with travel bookings + flights ──
+                    var guestsByContactId = await bgDb.Guests
+                        .Where(g => g.IsActive)
+                        .Include(g => g.TravelBookings)
+                            .ThenInclude(tb => tb.Flight)
+                        .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase);
+
+                    // ── Bulk-load all flights keyed by flight number ──────────
+                    var flightsByNumber = await bgDb.Flights
+                        .ToDictionaryAsync(f => f.FlightNumber, StringComparer.OrdinalIgnoreCase);
+
                     foreach (var tbDto in travelBookings)
                     {
                       try
                       {
                         if (string.IsNullOrEmpty(tbDto.FlightNumber)) { skippedNoFlight++; continue; }
                         if (string.IsNullOrEmpty(tbDto.ContactId)) { skippedNoContact++; continue; }
-                        var guest = await bgDb.Guests
-                            .Include(g => g.TravelBookings)
-                                .ThenInclude(tb => tb.Flight)
-                            .FirstOrDefaultAsync(g => g.EventsAirContactId == tbDto.ContactId && g.IsActive);
-                        if (guest == null) { skippedNoGuest++; continue; }
+                        if (!guestsByContactId.TryGetValue(tbDto.ContactId, out var guest)) { skippedNoGuest++; continue; }
 
                         bool isArrival = tbDto.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
 
@@ -341,10 +382,8 @@ public class GuestsController : ApiControllerBase
                             }
                         }
 
-                        // Find or create the Flight record.
-                        // ALWAYS overwrite scheduled fields from EventsAir (no write-once guard).
-                        var flight = await bgDb.Flights.FirstOrDefaultAsync(f => f.FlightNumber == tbDto.FlightNumber);
-                        if (flight == null)
+                        // Find or create the Flight record using the in-memory dictionary
+                        if (!flightsByNumber.TryGetValue(tbDto.FlightNumber, out var flight))
                         {
                             flight = new Flight
                             {
@@ -359,7 +398,7 @@ public class GuestsController : ApiControllerBase
                                 Status = FlightStatus.Scheduled
                             };
                             bgDb.Flights.Add(flight);
-                            await bgDb.SaveChangesAsync();
+                            flightsByNumber[tbDto.FlightNumber] = flight; // keep dict in sync
                         }
                         else
                         {
@@ -427,7 +466,6 @@ public class GuestsController : ApiControllerBase
                             existingBooking.LastSyncedAt = DateTime.UtcNow;
                             updatedExisting++;
                         }
-                        await bgDb.SaveChangesAsync();
                       }
                       catch (Exception bookingEx)
                       {
@@ -437,6 +475,8 @@ public class GuestsController : ApiControllerBase
                             entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
                       }
                     }
+                    // Single SaveChangesAsync for the entire Pass 3 batch
+                    await bgDb.SaveChangesAsync();
                     Console.WriteLine($"[TRAVEL-SYNC] Results: {savedNew} new, {updatedExisting} updated, {rebooked} rebooked (history saved), {errorCount} errors, skipped: {skippedNoFlight} no flight, {skippedNoContact} no contact, {skippedNoGuest} no guest match");
                 }
                 catch (Exception ex) { Console.WriteLine($"Travel sync error: {ex.Message}\n{ex.StackTrace}"); }
@@ -445,11 +485,69 @@ public class GuestsController : ApiControllerBase
                 job.State = "done"; job.FinishedAt = DateTime.UtcNow;
                 job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated.";
                 Console.WriteLine($"[SYNC] All passes complete. {added} new, {updated} updated, {deactivated} deactivated.");
+
+                // ── Write comprehensive sync log entry ────────────────────────
+                try
+                {
+                    using var logScope = scopeFactory.CreateScope();
+                    var logDb = logScope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var syncConfig = await logDb.EventsAirConfigs.FirstOrDefaultAsync();
+                    if (syncConfig != null)
+                    {
+                        syncConfig.LastSyncAt = DateTime.UtcNow;
+                        syncConfig.LastSyncStatus = "Success";
+                        syncConfig.LastSyncMessage = job.Message;
+                        syncConfig.LastSyncRecordsCount = added + updated;
+                        syncConfig.LastSyncDeactivatedCount = deactivated;
+                    }
+                    logDb.EventsAirSyncLogs.Add(new IsDB.Hospitality.Domain.Entities.EventsAirSyncLog
+                    {
+                        SyncedAt = DateTime.UtcNow,
+                        Status = "Success",
+                        Message = job.Message,
+                        RecordsSynced = added + updated,
+                        DurationMs = (int)(job.FinishedAt!.Value - job.StartedAt).TotalMilliseconds,
+                        SyncType = "Manual",
+                        TriggerSource = "Admin UI Button",
+                        InitiatedByStaffId = callerStaffId,
+                        InitiatedByStaffName = callerStaffName,
+                        RecordsAdded = added,
+                        RecordsUpdated = updated,
+                        RecordsDeactivated = deactivated,
+                        TravelBookingsSynced = savedNew + updatedExisting + rebooked
+                    });
+                    await logDb.SaveChangesAsync();
+                }
+                catch (Exception logEx)
+                {
+                    Console.WriteLine($"[SYNC] Warning: could not write sync log: {logEx.Message}");
+                }
             }
             catch (Exception ex)
             {
                 job.State = "error"; job.Message = ex.Message; job.FinishedAt = DateTime.UtcNow;
                 Console.WriteLine($"[SYNC] Error: {ex.Message}\n{ex.StackTrace}");
+
+                // ── Write failure log entry ───────────────────────────────────
+                try
+                {
+                    using var logScope = scopeFactory.CreateScope();
+                    var logDb = logScope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    logDb.EventsAirSyncLogs.Add(new IsDB.Hospitality.Domain.Entities.EventsAirSyncLog
+                    {
+                        SyncedAt = DateTime.UtcNow,
+                        Status = "Failed",
+                        Message = ex.Message,
+                        RecordsSynced = 0,
+                        DurationMs = (int)(DateTime.UtcNow - job.StartedAt).TotalMilliseconds,
+                        SyncType = "Manual",
+                        TriggerSource = "Admin UI Button",
+                        InitiatedByStaffId = callerStaffId,
+                        InitiatedByStaffName = callerStaffName
+                    });
+                    await logDb.SaveChangesAsync();
+                }
+                catch { /* best-effort */ }
             }
         });
 
@@ -466,17 +564,20 @@ public class GuestsController : ApiControllerBase
     // ═══════════════════════════════════════════════════════════════════════════
     // Helper: Get OAuth2 token for EventsAir API
     // ═══════════════════════════════════════════════════════════════════════════
-    private static async Task<string> GetEventsAirTokenAsync(string clientId, string clientSecret, IHttpClientFactory httpClientFactory, IMemoryCache cache)
+    private static async Task<string> GetEventsAirTokenAsync(string clientId, string clientSecret, IHttpClientFactory httpClientFactory, IMemoryCache cache, string? oAuthScope = null)
     {
         var cacheKey = $"eventsair_token_{clientId}";
         if (cache.TryGetValue(cacheKey, out string? cachedToken) && cachedToken != null) return cachedToken;
         var client = httpClientFactory.CreateClient();
         var tokenUrl = "https://login.microsoftonline.com/dff76352-1ded-46e8-96a4-1a83718b2d3a/oauth2/v2.0/token";
+        var scope = !string.IsNullOrWhiteSpace(oAuthScope)
+            ? oAuthScope
+            : "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
         var tokenRequest = new FormUrlEncodedContent(new[] {
             new KeyValuePair<string, string>("grant_type", "client_credentials"),
             new KeyValuePair<string, string>("client_id", clientId),
             new KeyValuePair<string, string>("client_secret", clientSecret),
-            new KeyValuePair<string, string>("scope", "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default")
+            new KeyValuePair<string, string>("scope", scope)
         });
         var response = await client.PostAsync(tokenUrl, tokenRequest);
         response.EnsureSuccessStatusCode();
@@ -494,8 +595,11 @@ public class GuestsController : ApiControllerBase
     // Only 2-3 API calls needed for ~200 contacts
     // ═══════════════════════════════════════════════════════════════════════════
     private static async Task<List<EventsAirContactDto>> FetchContactsWithDedicatedCarAsync(
-        string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+        string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
+        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null)
     {
+        dedicatedCarFieldGuid ??= DEDICATED_CAR_FIELD_GUID;
+        rankFieldGuid ??= RANK_FIELD_GUID;
         var fetched = new List<EventsAirContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -509,7 +613,7 @@ public class GuestsController : ApiControllerBase
             // Include customFields to get Rank value inline (no separate per-contact query needed)
             var graphqlQuery = $@"{{
               event(id: ""{eventCode}"") {{
-                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{DEDICATED_CAR_FIELD_GUID}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
+                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{dedicatedCarFieldGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
                   id
                   firstName
                   lastName
@@ -551,7 +655,7 @@ public class GuestsController : ApiControllerBase
                 if (errorMsg.Contains("cost", StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine("[SYNC] Cost limit hit — retrying with lighter query (no customFields/photo)...");
-                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken);
+                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken, dedicatedCarFieldGuid, rankFieldGuid);
                 }
                 throw new InvalidOperationException($"GraphQL error: {errorMsg}");
             }
@@ -572,7 +676,7 @@ public class GuestsController : ApiControllerBase
                     foreach (var cf in cfArray.EnumerateArray())
                     {
                         var defId = cf.TryGetProperty("definitionId", out var did) ? did.GetString() ?? "" : "";
-                        if (string.Equals(defId, RANK_FIELD_GUID, StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(defId, rankFieldGuid, StringComparison.OrdinalIgnoreCase))
                         {
                             if (cf.TryGetProperty("value", out var v) && v.ValueKind != JsonValueKind.Null)
                             {
@@ -636,8 +740,11 @@ public class GuestsController : ApiControllerBase
     /// Rank will be fetched separately per-contact in this case.
     /// </summary>
     private static async Task<List<EventsAirContactDto>> FetchContactsWithDedicatedCarLightAsync(
-        string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+        string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
+        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null)
     {
+        dedicatedCarFieldGuid ??= DEDICATED_CAR_FIELD_GUID;
+        rankFieldGuid ??= RANK_FIELD_GUID;
         var fetched = new List<EventsAirContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -649,7 +756,7 @@ public class GuestsController : ApiControllerBase
         {
             var graphqlQuery = $@"{{
               event(id: ""{eventCode}"") {{
-                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{DEDICATED_CAR_FIELD_GUID}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
+                  contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{dedicatedCarFieldGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
                   id
                   firstName
                   lastName
@@ -715,7 +822,7 @@ public class GuestsController : ApiControllerBase
         if (fetched.Count > 0)
         {
             Console.WriteLine($"[SYNC] Light path: fetching Rank values for {fetched.Count} contacts...");
-            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, RANK_FIELD_GUID, fetched.Select(c => c.ContactId), httpClientFactory, cancellationToken);
+            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, rankFieldGuid, fetched.Select(c => c.ContactId), httpClientFactory, cancellationToken);
             for (int i = 0; i < fetched.Count; i++)
             {
                 if (rankValues.TryGetValue(fetched[i].ContactId, out var rank))

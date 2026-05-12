@@ -17,16 +17,20 @@ public static class EventsAirSyncHelpers
     // ─── OAuth2 Token ─────────────────────────────────────────────────────────
 
     public static async Task<string> GetEventsAirTokenAsync(
-        string clientId, string clientSecret, IHttpClientFactory httpClientFactory)
+        string clientId, string clientSecret, IHttpClientFactory httpClientFactory,
+        string? oAuthScope = null)
     {
         var client = httpClientFactory.CreateClient();
         const string tokenUrl = "https://login.microsoftonline.com/dff76352-1ded-46e8-96a4-1a83718b2d3a/oauth2/v2.0/token";
+        var scope = !string.IsNullOrWhiteSpace(oAuthScope)
+            ? oAuthScope
+            : "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
         var tokenRequest = new FormUrlEncodedContent(new[]
         {
             new KeyValuePair<string, string>("grant_type", "client_credentials"),
             new KeyValuePair<string, string>("client_id", clientId),
             new KeyValuePair<string, string>("client_secret", clientSecret),
-            new KeyValuePair<string, string>("scope", "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default")
+            new KeyValuePair<string, string>("scope", scope)
         });
         var response = await client.PostAsync(tokenUrl, tokenRequest);
         response.EnsureSuccessStatusCode();

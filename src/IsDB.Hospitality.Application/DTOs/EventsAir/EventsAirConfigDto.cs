@@ -17,6 +17,7 @@ public class EventsAirConfigDto
     public string? LastSyncMessage { get; set; }
     public int LastSyncRecordsCount { get; set; }
     public bool IsActive { get; set; }
+    public string OAuthScope { get; set; } = string.Empty;
 }
 
 public class UpdateEventsAirConfigRequest
@@ -31,6 +32,7 @@ public class UpdateEventsAirConfigRequest
     public bool AutoSyncEnabled { get; set; }
     public bool SyncOnStartup { get; set; }
     public bool IsActive { get; set; }
+    public string OAuthScope { get; set; } = string.Empty;
 }
 
 public class TestConnectionRequest
@@ -60,6 +62,13 @@ public class EventsAirSyncLogDto
     public int RecordsSynced { get; set; }
     public int DurationMs { get; set; }
     public string SyncType { get; set; } = string.Empty;
+    // Enriched fields
+    public string TriggerSource { get; set; } = string.Empty;
+    public string? InitiatedByStaffName { get; set; }
+    public int RecordsAdded { get; set; }
+    public int RecordsUpdated { get; set; }
+    public int RecordsDeactivated { get; set; }
+    public int TravelBookingsSynced { get; set; }
 }
 
 public class TriggerSyncResult

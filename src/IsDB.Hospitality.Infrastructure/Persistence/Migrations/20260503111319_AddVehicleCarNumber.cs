@@ -13,7 +13,7 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.AddColumn<string>(
                 name: "CarNumber",
                 table: "Vehicles",
-                type: "TEXT",
+                type: "text",
                 nullable: true);
         }
 
