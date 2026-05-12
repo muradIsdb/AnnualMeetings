@@ -33,3 +33,5 @@ ENV PORT=8080
 EXPOSE 8080
 
 ENTRYPOINT ["dotnet", "IsDB.Hospitality.API.dll"]
+
+# Build cache bust: 20260507181900

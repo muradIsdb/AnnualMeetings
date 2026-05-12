@@ -1,6 +1,6 @@
 ﻿using System;
 using Microsoft.EntityFrameworkCore.Migrations;
-
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 #nullable disable
 
 namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
@@ -81,39 +81,39 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.AddColumn<int>(
                 name: "InboundStatus",
                 table: "Guests",
-                type: "INTEGER",
+                type: "integer",
                 nullable: false,
                 defaultValue: 0);
 
             migrationBuilder.AddColumn<int>(
                 name: "OutboundStatus",
                 table: "Guests",
-                type: "INTEGER",
+                type: "integer",
                 nullable: true);
 
             migrationBuilder.AddColumn<bool>(
                 name: "ReceivedByEmbassyTeam",
                 table: "Guests",
-                type: "INTEGER",
+                type: "boolean",
                 nullable: false,
                 defaultValue: false);
 
             migrationBuilder.AlterColumn<string>(
                 name: "RoomNumber",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "character varying(50)",
                 maxLength: 50,
                 nullable: false,
                 defaultValue: "",
                 oldClrType: typeof(string),
-                oldType: "TEXT",
+                oldType: "character varying(50)",
                 oldMaxLength: 20,
                 oldNullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "Email",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "character varying(200)",
                 maxLength: 200,
                 nullable: false,
                 defaultValue: "");
@@ -121,53 +121,53 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.AddColumn<Guid>(
                 name: "HotelOptionId",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "uuid",
                 nullable: false,
                 defaultValue: new Guid("00000000-0000-0000-0000-000000000000"));
 
             migrationBuilder.AddColumn<Guid>(
                 name: "ManageToken",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "uuid",
                 nullable: false,
                 defaultValue: new Guid("00000000-0000-0000-0000-000000000000"));
 
             migrationBuilder.AddColumn<Guid>(
                 name: "PickupDayOptionId",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "uuid",
                 nullable: false,
                 defaultValue: new Guid("00000000-0000-0000-0000-000000000000"));
 
             migrationBuilder.AddColumn<Guid>(
                 name: "PickupHourOptionId",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "uuid",
                 nullable: false,
                 defaultValue: new Guid("00000000-0000-0000-0000-000000000000"));
 
             migrationBuilder.AddColumn<bool>(
                 name: "IsRead",
                 table: "Alerts",
-                type: "INTEGER",
+                type: "boolean",
                 nullable: false,
                 defaultValue: false);
 
             migrationBuilder.AddColumn<int>(
                 name: "TargetRole",
                 table: "Alerts",
-                type: "INTEGER",
+                type: "integer",
                 nullable: true);
 
             migrationBuilder.CreateTable(
                 name: "AppConfigs",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "INTEGER", nullable: false)
-                        .Annotation("Sqlite:Autoincrement", true),
-                    EventTitle = table.Column<string>(type: "TEXT", nullable: false),
-                    MinimumLeadTimeHours = table.Column<int>(type: "INTEGER", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    EventTitle = table.Column<string>(type: "text", nullable: false),
+                    MinimumLeadTimeHours = table.Column<int>(type: "integer", nullable: false),
+                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -178,20 +178,20 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                 name: "GuestStatusHistories",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    GuestId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Track = table.Column<int>(type: "INTEGER", nullable: false),
-                    StatusValue = table.Column<int>(type: "INTEGER", nullable: false),
-                    StatusLabel = table.Column<string>(type: "TEXT", nullable: false),
-                    ChangedByStaffId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    ChangedByName = table.Column<string>(type: "TEXT", nullable: true),
-                    ChangedByRole = table.Column<int>(type: "INTEGER", nullable: true),
-                    IsSystemGenerated = table.Column<bool>(type: "INTEGER", nullable: false),
-                    Notes = table.Column<string>(type: "TEXT", nullable: true),
-                    IsRolledBack = table.Column<bool>(type: "INTEGER", nullable: false),
-                    RolledBackByHistoryId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    GuestId = table.Column<Guid>(type: "uuid", nullable: false),
+                    Track = table.Column<int>(type: "integer", nullable: false),
+                    StatusValue = table.Column<int>(type: "integer", nullable: false),
+                    StatusLabel = table.Column<string>(type: "text", nullable: false),
+                    ChangedByStaffId = table.Column<Guid>(type: "uuid", nullable: true),
+                    ChangedByName = table.Column<string>(type: "text", nullable: true),
+                    ChangedByRole = table.Column<int>(type: "integer", nullable: true),
+                    IsSystemGenerated = table.Column<bool>(type: "boolean", nullable: false),
+                    Notes = table.Column<string>(type: "text", nullable: true),
+                    IsRolledBack = table.Column<bool>(type: "boolean", nullable: false),
+                    RolledBackByHistoryId = table.Column<Guid>(type: "uuid", nullable: true),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -214,13 +214,13 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                 name: "Notifications",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Message = table.Column<string>(type: "TEXT", nullable: false),
-                    TargetRoles = table.Column<string>(type: "TEXT", nullable: false),
-                    Priority = table.Column<int>(type: "INTEGER", nullable: false),
-                    CreatedByStaffId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    Message = table.Column<string>(type: "text", nullable: false),
+                    TargetRoles = table.Column<string>(type: "text", nullable: false),
+                    Priority = table.Column<int>(type: "integer", nullable: false),
+                    CreatedByStaffId = table.Column<Guid>(type: "uuid", nullable: false),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -237,9 +237,9 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                 name: "NotificationReads",
                 columns: table => new
                 {
-                    NotificationId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    StaffUserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    ReadAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    NotificationId = table.Column<Guid>(type: "uuid", nullable: false),
+                    StaffUserId = table.Column<Guid>(type: "uuid", nullable: false),
+                    ReadAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -440,17 +440,17 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.AlterColumn<string>(
                 name: "RoomNumber",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "character varying(20)",
                 maxLength: 20,
                 nullable: true,
                 oldClrType: typeof(string),
-                oldType: "TEXT",
+                oldType: "character varying(20)",
                 oldMaxLength: 50);
 
             migrationBuilder.AddColumn<string>(
                 name: "DestinationAirport",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "character varying(100)",
                 maxLength: 100,
                 nullable: false,
                 defaultValue: "");
@@ -458,53 +458,53 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.AddColumn<string>(
                 name: "FlightNumber",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "character varying(20)",
                 maxLength: 20,
                 nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "GuestEmail",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "character varying(200)",
                 maxLength: 200,
                 nullable: true);
 
             migrationBuilder.AddColumn<Guid>(
                 name: "GuestId",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "uuid",
                 nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "GuestPhone",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "character varying(50)",
                 maxLength: 50,
                 nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "HotelName",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "character varying(200)",
                 maxLength: 200,
                 nullable: true);
 
             migrationBuilder.AddColumn<DateTime>(
                 name: "ProcessedAt",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "timestamp with time zone",
                 nullable: true);
 
             migrationBuilder.AddColumn<Guid>(
                 name: "ProcessedByStaffId",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "uuid",
                 nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "SpecialRequirements",
                 table: "DepartureRequests",
-                type: "TEXT",
+                type: "character varying(1000)",
                 maxLength: 1000,
                 nullable: true);
 

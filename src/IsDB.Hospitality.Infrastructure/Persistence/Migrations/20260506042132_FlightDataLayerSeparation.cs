@@ -14,39 +14,39 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.AddColumn<DateTime>(
                 name: "ChangedAt",
                 table: "TravelBookings",
-                type: "TEXT",
+                type: "timestamp with time zone",
                 nullable: true);
 
             migrationBuilder.AddColumn<bool>(
                 name: "ChangedSinceLastView",
                 table: "TravelBookings",
-                type: "INTEGER",
+                type: "boolean",
                 nullable: false,
                 defaultValue: false);
 
             migrationBuilder.AddColumn<string>(
                 name: "PreviousFlightNumber",
                 table: "TravelBookings",
-                type: "TEXT",
+                type: "text",
                 nullable: true);
 
             migrationBuilder.CreateTable(
                 name: "TravelBookingHistories",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    TravelBookingId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    GuestId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    PreviousFlightNumber = table.Column<string>(type: "TEXT", nullable: false),
-                    PreviousAirlineName = table.Column<string>(type: "TEXT", nullable: true),
-                    PreviousScheduledArrival = table.Column<DateTime>(type: "TEXT", nullable: true),
-                    PreviousScheduledDeparture = table.Column<DateTime>(type: "TEXT", nullable: true),
-                    PreviousDeparturePort = table.Column<string>(type: "TEXT", nullable: true),
-                    PreviousArrivalPort = table.Column<string>(type: "TEXT", nullable: true),
-                    PreviousSeatClass = table.Column<string>(type: "TEXT", nullable: true),
-                    ChangedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    TravelBookingId = table.Column<Guid>(type: "uuid", nullable: false),
+                    GuestId = table.Column<Guid>(type: "uuid", nullable: false),
+                    PreviousFlightNumber = table.Column<string>(type: "text", nullable: false),
+                    PreviousAirlineName = table.Column<string>(type: "text", nullable: true),
+                    PreviousScheduledArrival = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    PreviousScheduledDeparture = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    PreviousDeparturePort = table.Column<string>(type: "text", nullable: true),
+                    PreviousArrivalPort = table.Column<string>(type: "text", nullable: true),
+                    PreviousSeatClass = table.Column<string>(type: "text", nullable: true),
+                    ChangedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {

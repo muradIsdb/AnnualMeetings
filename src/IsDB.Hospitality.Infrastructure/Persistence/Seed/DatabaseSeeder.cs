@@ -167,9 +167,12 @@ public static class DatabaseSeeder
 
         var classes = new List<CarClass>
         {
-            new() { Id = Guid.NewGuid(), Name = "Luxury Car",   Description = "High-end luxury vehicles for VIP and VVIP guests",     Color = "#7C3AED", SortOrder = 1 },
-            new() { Id = Guid.NewGuid(), Name = "AMOC Car",     Description = "AMOC-designated vehicles for organizing committee",    Color = "#0369A1", SortOrder = 2 },
-            new() { Id = Guid.NewGuid(), Name = "Standard Car", Description = "Standard vehicles for general participants",           Color = "#059669", SortOrder = 3 },
+            new() { Id = Guid.NewGuid(), Name = "VVIP Luxury",       Description = "Reserved for VVIP guests — heads of state, ministers, and senior dignitaries",           Color = "#7C3AED", SortOrder = 1 },
+            new() { Id = Guid.NewGuid(), Name = "Executive Luxury",  Description = "Premium luxury sedans for senior executives and VIP guests",                          Color = "#B45309", SortOrder = 2 },
+            new() { Id = Guid.NewGuid(), Name = "Executive SUV",     Description = "Executive-class SUVs for senior officials and delegations",                          Color = "#0E7490", SortOrder = 3 },
+            new() { Id = Guid.NewGuid(), Name = "Board & DG Class",  Description = "Dedicated vehicles for Board of Governors members and the Director General",          Color = "#DC2626", SortOrder = 4 },
+            new() { Id = Guid.NewGuid(), Name = "AMOC",              Description = "AMOC-designated vehicles for the organizing committee",                               Color = "#0369A1", SortOrder = 5 },
+            new() { Id = Guid.NewGuid(), Name = "General Pool",      Description = "General pool vehicles for standard participants and staff",                          Color = "#059669", SortOrder = 6 },
         };
 
         await context.CarClasses.AddRangeAsync(classes);
@@ -261,8 +264,81 @@ public static class DatabaseSeeder
             pgSql += " ON CONFLICT DO NOTHING";
         }
         // PostgreSQL uses TRUE/FALSE instead of 1/0 for booleans.
-        // However, EF Core maps bool columns to integer in the schema,
-        // so numeric values (0/1) work fine in PostgreSQL integer columns.
+        // Npgsql maps C# bool to PostgreSQL 'boolean', which rejects integer literals.
+        // We convert known boolean columns by replacing their positional integer values.
+        pgSql = ConvertBooleanColumnsToPostgres(pgSql);
         return pgSql;
+    }
+
+    /// <summary>
+    /// Replaces integer 0/1 values for known boolean columns with PostgreSQL true/false literals.
+    /// Works by parsing the column list from the INSERT statement and replacing values at the
+    /// matching positions in the VALUES clause.
+    /// </summary>
+    private static string ConvertBooleanColumnsToPostgres(string sql)
+    {
+        // Known boolean columns across all seeded tables
+        var booleanColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "IsSelectedForSync", "IsFromEventsAir", "AutoSyncEnabled",
+            "SyncOnStartup", "IsActive"
+        };
+
+        // Extract column list: INSERT INTO "Table" ("Col1", "Col2", ...) VALUES (...)
+        var colMatch = System.Text.RegularExpressions.Regex.Match(
+            sql, @"\(([^)]+)\)\s+VALUES\s+\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!colMatch.Success) return sql;
+
+        var columns = colMatch.Groups[1].Value
+            .Split(',')
+            .Select(c => c.Trim().Trim('"'))
+            .ToList();
+
+        // Find boolean column positions (0-indexed)
+        var boolPositions = new HashSet<int>();
+        for (int i = 0; i < columns.Count; i++)
+            if (booleanColumns.Contains(columns[i]))
+                boolPositions.Add(i);
+
+        if (boolPositions.Count == 0) return sql;
+
+        // Extract VALUES clause and replace 0/1 at bool positions
+        var valuesStart = sql.IndexOf("VALUES", StringComparison.OrdinalIgnoreCase);
+        var prefix = sql[..valuesStart];
+        var valuesPart = sql[valuesStart..];
+
+        // Parse the values tuple: VALUES ('a', 'b', 0, 1, ...)
+        var tupleMatch = System.Text.RegularExpressions.Regex.Match(
+            valuesPart, @"\((.+)\)", System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (!tupleMatch.Success) return sql;
+
+        // Tokenize values respecting quoted strings
+        var rawValues = tupleMatch.Groups[1].Value;
+        var tokens = new List<string>();
+        int depth = 0; var current = new System.Text.StringBuilder(); bool inQuote = false;
+        foreach (char ch in rawValues)
+        {
+            if (ch == '\'' && !inQuote) { inQuote = true; current.Append(ch); }
+            else if (ch == '\'' && inQuote) { inQuote = false; current.Append(ch); }
+            else if (ch == ',' && !inQuote && depth == 0)
+            {
+                tokens.Add(current.ToString().Trim());
+                current.Clear();
+            }
+            else { current.Append(ch); }
+        }
+        if (current.Length > 0) tokens.Add(current.ToString().Trim());
+
+        // Replace 0/1 at boolean positions
+        for (int i = 0; i < tokens.Count && i < columns.Count; i++)
+        {
+            if (!boolPositions.Contains(i)) continue;
+            if (tokens[i] == "0") tokens[i] = "false";
+            else if (tokens[i] == "1") tokens[i] = "true";
+        }
+
+        // Reconstruct the SQL
+        var suffix = valuesPart[(tupleMatch.Index + tupleMatch.Length)..];
+        return prefix + "VALUES (" + string.Join(", ", tokens) + ")" + suffix;
     }
 }

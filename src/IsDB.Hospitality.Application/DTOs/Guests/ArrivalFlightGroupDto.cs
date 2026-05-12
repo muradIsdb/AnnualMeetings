@@ -11,6 +11,10 @@ public class ArrivalFlightGroupDto
     public DateTime? ScheduledArrival { get; set; }
     public DateTime? ActualArrival { get; set; }
     public string? Terminal { get; set; }
+    public string? Gate { get; set; }
     public string FlightStatus { get; set; } = "Unknown";
+    // Layer 2 live fields (Aviationstack-owned)
+    public int? LiveDelayMinutes { get; set; }
+    public DateTime? LastTrackedAt { get; set; }
     public List<GuestSummaryDto> Guests { get; set; } = new();
 }

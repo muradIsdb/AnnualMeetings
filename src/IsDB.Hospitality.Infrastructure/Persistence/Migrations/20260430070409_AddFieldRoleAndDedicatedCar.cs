@@ -13,7 +13,7 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.AddColumn<string>(
                 name: "FieldRole",
                 table: "SyncFieldMappings",
-                type: "TEXT",
+                type: "text",
                 nullable: false,
                 defaultValue: "");
         }

@@ -13,7 +13,7 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.AddColumn<string>(
                 name: "RankValue",
                 table: "Guests",
-                type: "TEXT",
+                type: "text",
                 nullable: true);
         }
 

@@ -21,64 +21,79 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
 
     public async Task<DashboardSummaryDto> Handle(GetDashboardSummaryQuery request, CancellationToken cancellationToken)
     {
-        // Guests (active only)
-        var guests = await _context.Guests
-            .Where(g => g.IsActive)
-            .Include(g => g.VehicleAssignments.Where(va => va.IsActive))
-                .ThenInclude(va => va.Vehicle)
+        var activeGuests = _context.Guests.AsNoTracking().Where(g => g.IsActive);
+
+        // ── 1. Count queries — sequential to avoid EF Core concurrent-context error ─
+        var totalGuests       = await activeGuests.CountAsync(cancellationToken);
+        var arrivingCount     = await activeGuests.CountAsync(g => g.Status == GuestStatus.ArrivedAtAirport, cancellationToken);
+        var receivedByEmbassy = await activeGuests.CountAsync(g => g.Status == GuestStatus.ReceivedByEmbassy, cancellationToken);
+        var onTheWayToHotel   = await activeGuests.CountAsync(g => g.Status == GuestStatus.OnTheWayToHotel, cancellationToken);
+        var atHotel           = await activeGuests.CountAsync(g => g.Status == GuestStatus.AtHotel, cancellationToken);
+        var departing         = await activeGuests.CountAsync(g =>
+            g.Status == GuestStatus.DepartingHotel || g.Status == GuestStatus.AtAirportDeparture, cancellationToken);
+        var guestsDeserving   = await activeGuests.CountAsync(g => g.DeservedCarClassId.HasValue, cancellationToken);
+
+        // ── 2. Lightweight guest projection (only needed columns, no navigation) ───
+        var guests = await activeGuests
+            .Select(g => new
+            {
+                g.Id, g.FirstName, g.LastName, g.Designation, g.Nationality,
+                g.Country, g.PhotoUrl, g.IsCritical, g.RequiresAccessibility,
+                g.Status, g.Notes, g.DeservedCarClassId, g.DedicatedCar,
+                g.RankValue, g.RegistrationTypeName, g.InboundStatus, g.OutboundStatus,
+                g.HotelName, g.RoomNumber, g.Organization
+            })
             .ToListAsync(cancellationToken);
 
-        // Alerts
-        var activeAlerts = await _context.Alerts
+        // ── 3. Active vehicle assignments (guestId → licensePlate) ───────────────
+        var activeAssignments = await _context.VehicleAssignments.AsNoTracking()
+            .Where(va => va.IsActive)
+            .Select(va => new { va.GuestId, va.Vehicle!.LicensePlate })
+            .ToListAsync(cancellationToken);
+
+        // ── 4. Alerts ─────────────────────────────────────────────────────────────
+        var activeAlerts = await _context.Alerts.AsNoTracking()
             .Include(a => a.Guest)
             .Where(a => !a.IsResolved)
             .OrderByDescending(a => a.Severity)
             .ThenByDescending(a => a.CreatedAt)
             .ToListAsync(cancellationToken);
 
-        // Fleet
-        var vehicles = await _context.Vehicles
+        // ── 5. Fleet ──────────────────────────────────────────────────────────────
+        var vehicles = await _context.Vehicles.AsNoTracking()
             .Where(v => v.IsActive)
             .Include(v => v.CarClass)
             .ToListAsync(cancellationToken);
 
-        // Car classes (for per-class breakdown including classes with 0 vehicles)
-        var carClasses = await _context.CarClasses
+        var carClasses = await _context.CarClasses.AsNoTracking()
             .OrderBy(c => c.SortOrder)
             .ToListAsync(cancellationToken);
 
-        // Guests deserving each class
-        var guestsByClass = guests
-            .Where(g => g.DeservedCarClassId.HasValue)
-            .GroupBy(g => g.DeservedCarClassId!.Value)
-            .ToDictionary(grp => grp.Key, grp => grp.Count());
-
-        var drivers = await _context.Drivers
+        var drivers = await _context.Drivers.AsNoTracking()
             .Where(d => d.IsActive)
             .ToListAsync(cancellationToken);
 
-        // Recent activity — last 20 vehicle assignments
-        var recentAssignments = await _context.VehicleAssignments
+        // ── 6. Recent activity ────────────────────────────────────────────────────
+        var recentAssignments = await _context.VehicleAssignments.AsNoTracking()
             .Include(va => va.Guest)
             .Include(va => va.Vehicle)
-                .ThenInclude(v => v.Driver)
+                .ThenInclude(v => v!.Driver)
             .OrderByDescending(va => va.AssignedAt)
             .Take(20)
             .ToListAsync(cancellationToken);
 
-        var recentActivity = recentAssignments.Select(va => new ActivityItemDto
-        {
-            Type = va.IsActive ? "VehicleAssigned" : "VehicleUnassigned",
-            GuestName = va.Guest != null ? va.Guest.FirstName + " " + va.Guest.LastName : "Unknown",
-            VehiclePlate = va.Vehicle?.LicensePlate,
-            DriverName = va.Vehicle?.Driver?.FullName ?? va.Vehicle?.DriverName,
-            Detail = va.IsActive
-                ? va.AssignmentType.ToString() + " assignment"
-                : $"Unassigned at {(va.UnassignedAt.HasValue ? va.UnassignedAt.Value.ToString("HH:mm") : "N/A")}",
-            OccurredAt = va.IsActive ? va.AssignedAt : (va.UnassignedAt ?? va.AssignedAt),
-        }).ToList();
+        // ── Build lookup: guestId → licensePlate ─────────────────────────────────
+        var plateLookup = activeAssignments
+            .GroupBy(a => a.GuestId)
+            .ToDictionary(g => g.Key, g => g.First().LicensePlate);
 
-        // Status groups
+        // Guests without any active vehicle assignment
+        var guestsWithAssignment      = activeAssignments.Select(a => a.GuestId).ToHashSet();
+        int guestsWithoutVehicle      = guests.Count(g => !guestsWithAssignment.Contains(g.Id));
+        int guestsAssignedNoDedicated = guests.Count(g =>
+            guestsWithAssignment.Contains(g.Id) && g.DedicatedCar != "True");
+
+        // ── Build status groups ───────────────────────────────────────────────────
         var statusGroups = guests
             .GroupBy(g => g.Status)
             .Select(grp => new GuestStatusGroupDto
@@ -87,71 +102,98 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
                 Count = grp.Count(),
                 Guests = grp.OrderByDescending(g => g.IsCritical).Select(g => new GuestSummaryDto
                 {
-                    Id = g.Id,
-                    FullName = g.FirstName + " " + g.LastName,
-                    Designation = g.Designation,
-                    Nationality = g.Nationality,
-                    PhotoUrl = g.PhotoUrl,
-                    IsCritical = g.IsCritical,
+                    Id                    = g.Id,
+                    FullName              = g.FirstName + " " + g.LastName,
+                    Designation           = g.Designation,
+                    Nationality           = g.Nationality,
+                    Country               = g.Country,
+                    PhotoUrl              = g.PhotoUrl,
+                    IsCritical            = g.IsCritical,
                     RequiresAccessibility = g.RequiresAccessibility,
-                    StatusLabel = g.Status.ToString(),
-                    ActiveVehiclePlate = g.VehicleAssignments.FirstOrDefault()?.Vehicle.LicensePlate,
-                    Notes = g.Notes
+                    StatusLabel           = g.Status.ToString(),
+                    ActiveVehiclePlate    = plateLookup.TryGetValue(g.Id, out var plate) ? plate : null,
+                    Notes                 = g.Notes,
+                    DedicatedCar          = g.DedicatedCar,
+                    RankValue             = g.RankValue,
+                    RegistrationTypeName  = g.RegistrationTypeName,
+                    InboundStatus         = g.InboundStatus,
+                    InboundStatusLabel    = g.InboundStatus.ToString(),
+                    OutboundStatus        = g.OutboundStatus,
+                    OutboundStatusLabel   = g.OutboundStatus?.ToString(),
+                    HotelName             = g.HotelName,
+                    RoomNumber            = g.RoomNumber,
+                    Organization          = g.Organization,
+                    DeservedCarClassId    = g.DeservedCarClassId,
                 }).ToList()
             })
             .ToList();
 
+        // Guests deserving per class
+        var guestsByClass = guests
+            .Where(g => g.DeservedCarClassId.HasValue)
+            .GroupBy(g => g.DeservedCarClassId!.Value)
+            .ToDictionary(grp => grp.Key, grp => grp.Count());
+
+        // ── Recent activity ───────────────────────────────────────────────────────
+        var recentActivity = recentAssignments.Select(va => new ActivityItemDto
+        {
+            Type         = va.IsActive ? "VehicleAssigned" : "VehicleUnassigned",
+            GuestName    = va.Guest != null ? va.Guest.FirstName + " " + va.Guest.LastName : "Unknown",
+            VehiclePlate = va.Vehicle?.LicensePlate,
+            DriverName   = va.Vehicle?.Driver?.FullName ?? va.Vehicle?.DriverName,
+            Detail       = va.IsActive
+                ? va.AssignmentType.ToString() + " assignment"
+                : $"Unassigned at {(va.UnassignedAt.HasValue ? va.UnassignedAt.Value.ToString("HH:mm") : "N/A")}",
+            OccurredAt   = va.IsActive ? va.AssignedAt : (va.UnassignedAt ?? va.AssignedAt),
+        }).ToList();
+
         return new DashboardSummaryDto
         {
-            TotalGuests = guests.Count,
-            ArrivingCount = guests.Count(g => g.Status == GuestStatus.ArrivedAtAirport),
-            ReceivedByEmbassyCount = guests.Count(g => g.Status == GuestStatus.ReceivedByEmbassy),
-            OnTheWayToHotelCount = guests.Count(g => g.Status == GuestStatus.OnTheWayToHotel),
-            AtHotelCount = guests.Count(g => g.Status == GuestStatus.AtHotel),
-            DepartingCount = guests.Count(g => g.Status == GuestStatus.DepartingHotel || g.Status == GuestStatus.AtAirportDeparture),
-            ActiveAlertsCount = activeAlerts.Count,
-            CriticalAlertsCount = activeAlerts.Count(a => a.Severity == AlertSeverity.Critical || a.Severity == AlertSeverity.High),
+            TotalGuests                       = totalGuests,
+            ArrivingCount                     = arrivingCount,
+            ReceivedByEmbassyCount            = receivedByEmbassy,
+            OnTheWayToHotelCount              = onTheWayToHotel,
+            AtHotelCount                      = atHotel,
+            DepartingCount                    = departing,
+            ActiveAlertsCount                 = activeAlerts.Count,
+            CriticalAlertsCount               = activeAlerts.Count(a => a.Severity == AlertSeverity.Critical || a.Severity == AlertSeverity.High),
             ActiveAlerts = activeAlerts.Select(a => new AlertDto
             {
-                Id = a.Id,
-                GuestId = a.GuestId,
-                GuestName = a.Guest != null ? a.Guest.FirstName + " " + a.Guest.LastName : null,
-                Title = a.Title,
-                Message = a.Message,
-                Severity = a.Severity,
+                Id            = a.Id,
+                GuestId       = a.GuestId,
+                GuestName     = a.Guest != null ? a.Guest.FirstName + " " + a.Guest.LastName : null,
+                Title         = a.Title,
+                Message       = a.Message,
+                Severity      = a.Severity,
                 SeverityLabel = a.Severity.ToString(),
-                IsResolved = a.IsResolved,
-                CreatedAt = a.CreatedAt
+                IsResolved    = a.IsResolved,
+                CreatedAt     = a.CreatedAt
             }).ToList(),
             GuestsByStatus = statusGroups,
-
             // Fleet stats
-            VehiclesTotal = vehicles.Count,
-            VehiclesAvailable = vehicles.Count(v => v.Status == VehicleStatus.Available),
-            VehiclesAssigned = vehicles.Count(v => v.Status == VehicleStatus.Assigned),
-            VehiclesOutOfService = vehicles.Count(v => v.Status == VehicleStatus.OutOfService),
-            DriversTotal = drivers.Count,
-            DriversAvailable = drivers.Count(d => d.Status == DriverStatus.Available),
-            DriversAssigned = drivers.Count(d => d.Status == DriverStatus.Assigned),
-            GuestsWithoutVehicle = guests.Count(g => !g.VehicleAssignments.Any(va => va.IsActive)),
-            GuestsAssignedWithoutDedicatedCar = guests.Count(g =>
-                g.VehicleAssignments.Any(va => va.IsActive) && g.DedicatedCar != "True"),
-            GuestsDeservingVehicle = guests.Count(g => g.DeservedCarClassId.HasValue),
-
+            VehiclesTotal                     = vehicles.Count,
+            VehiclesAvailable                 = vehicles.Count(v => v.Status == VehicleStatus.Available),
+            VehiclesAssigned                  = vehicles.Count(v => v.Status == VehicleStatus.Assigned),
+            VehiclesOutOfService              = vehicles.Count(v => v.Status == VehicleStatus.OutOfService),
+            DriversTotal                      = drivers.Count,
+            DriversAvailable                  = drivers.Count(d => d.Status == DriverStatus.Available),
+            DriversAssigned                   = drivers.Count(d => d.Status == DriverStatus.Assigned),
+            GuestsWithoutVehicle              = guestsWithoutVehicle,
+            GuestsAssignedWithoutDedicatedCar = guestsAssignedNoDedicated,
+            GuestsDeservingVehicle            = guestsDeserving,
             // Fleet by class
             FleetByClass = carClasses.Select(cc => new FleetByClassDto
             {
-                ClassId = cc.Id,
-                ClassName = cc.Name,
-                ClassColor = cc.Color,
-                SortOrder = cc.SortOrder,
-                TotalVehicles = vehicles.Count(v => v.CarClassId == cc.Id),
-                Available = vehicles.Count(v => v.CarClassId == cc.Id && v.Status == VehicleStatus.Available),
-                Assigned = vehicles.Count(v => v.CarClassId == cc.Id && v.Status == VehicleStatus.Assigned),
-                OutOfService = vehicles.Count(v => v.CarClassId == cc.Id && v.Status == VehicleStatus.OutOfService),
+                ClassId         = cc.Id,
+                ClassName       = cc.Name,
+                ClassColor      = cc.Color,
+                SortOrder       = cc.SortOrder,
+                TotalVehicles   = vehicles.Count(v => v.CarClassId == cc.Id),
+                Available       = vehicles.Count(v => v.CarClassId == cc.Id && v.Status == VehicleStatus.Available),
+                Assigned        = vehicles.Count(v => v.CarClassId == cc.Id && v.Status == VehicleStatus.Assigned),
+                OutOfService    = vehicles.Count(v => v.CarClassId == cc.Id && v.Status == VehicleStatus.OutOfService),
                 GuestsDeserving = guestsByClass.TryGetValue(cc.Id, out var cnt) ? cnt : 0,
             }).ToList(),
-
             // Recent activity
             RecentActivity = recentActivity,
         };

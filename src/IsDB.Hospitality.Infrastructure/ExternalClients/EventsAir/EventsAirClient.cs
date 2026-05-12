@@ -20,6 +20,7 @@ public class EventsAirOptions
     // EventsAir uses Microsoft Azure AD for authentication
     // Correct endpoint: https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
     public string TokenUrl { get; set; } = "https://login.microsoftonline.com/dff76352-1ded-46e8-96a4-1a83718b2d3a/oauth2/v2.0/token";
+    public string OAuthScope { get; set; } = "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
 }
 
 public class EventsAirClient : IEventsAirClient
@@ -69,7 +70,7 @@ public class EventsAirClient : IEventsAirClient
             new KeyValuePair<string, string>("client_id", _options.ClientId),
             new KeyValuePair<string, string>("client_secret", _options.ClientSecret),
             // EventsAir requires the Azure AD scope, not "api"
-            new KeyValuePair<string, string>("scope", "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default")
+            new KeyValuePair<string, string>("scope", _options.OAuthScope)
         });
 
         var response = await _httpClient.PostAsync(_options.TokenUrl, tokenRequest);

@@ -13,28 +13,28 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.AddColumn<int>(
                 name: "ActualOccupiedGuest",
                 table: "HotelOptions",
-                type: "INTEGER",
+                type: "integer",
                 nullable: false,
                 defaultValue: 0);
 
             migrationBuilder.AddColumn<int>(
                 name: "ActualOccupiedIsDB",
                 table: "HotelOptions",
-                type: "INTEGER",
+                type: "integer",
                 nullable: false,
                 defaultValue: 0);
 
             migrationBuilder.AddColumn<int>(
                 name: "ContractedRoomsGuest",
                 table: "HotelOptions",
-                type: "INTEGER",
+                type: "integer",
                 nullable: false,
                 defaultValue: 0);
 
             migrationBuilder.AddColumn<int>(
                 name: "ContractedRoomsIsDB",
                 table: "HotelOptions",
-                type: "INTEGER",
+                type: "integer",
                 nullable: false,
                 defaultValue: 0);
         }

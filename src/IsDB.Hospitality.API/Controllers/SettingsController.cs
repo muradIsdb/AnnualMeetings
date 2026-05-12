@@ -45,7 +45,9 @@ public class SettingsController : ApiControllerBase
             MinimumLeadTimeHours = config.MinimumLeadTimeHours,
             EventTimezone = config.EventTimezone,
             PlaCardTheme = config.PlaCardTheme,
-            EventLogoUrl = config.EventLogoUrl
+            EventLogoUrl = !string.IsNullOrEmpty(config.EventLogoBase64)
+                ? $"data:{config.EventLogoMimeType ?? "image/png"};base64,{config.EventLogoBase64}"
+                : config.EventLogoUrl
         });
     }
 
@@ -72,7 +74,9 @@ public class SettingsController : ApiControllerBase
             MinimumLeadTimeHours = config.MinimumLeadTimeHours,
             EventTimezone = config.EventTimezone,
             PlaCardTheme = config.PlaCardTheme,
-            EventLogoUrl = config.EventLogoUrl
+            EventLogoUrl = !string.IsNullOrEmpty(config.EventLogoBase64)
+                ? $"data:{config.EventLogoMimeType ?? "image/png"};base64,{config.EventLogoBase64}"
+                : config.EventLogoUrl
         });
     }
 
@@ -93,22 +97,11 @@ public class SettingsController : ApiControllerBase
         if (file.Length > 5 * 1024 * 1024)
             return BadRequest("File size must be under 5 MB.");
 
-        // Save to wwwroot/uploads/
-        var uploadsDir = Path.Combine(_env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot"), "uploads");
-        Directory.CreateDirectory(uploadsDir);
-
-        var ext = Path.GetExtension(file.FileName).ToLower();
-        var fileName = $"event-logo{ext}";
-        var filePath = Path.Combine(uploadsDir, fileName);
-
-        // Delete any existing logo files with different extensions
-        foreach (var oldFile in Directory.GetFiles(uploadsDir, "event-logo.*"))
-            System.IO.File.Delete(oldFile);
-
-        using (var stream = new FileStream(filePath, FileMode.Create))
-            await file.CopyToAsync(stream);
-
-        var logoUrl = $"/uploads/{fileName}";
+        // Read file into memory and convert to base64 for persistent DB storage
+        using var ms = new MemoryStream();
+        await file.CopyToAsync(ms);
+        var base64 = Convert.ToBase64String(ms.ToArray());
+        var mimeType = file.ContentType.ToLower();
 
         // Update config
         var config = await _db.AppConfigs.FindAsync(1);
@@ -117,7 +110,9 @@ public class SettingsController : ApiControllerBase
             config = new IsDB.Hospitality.Domain.Entities.AppConfig { Id = 1 };
             _db.AppConfigs.Add(config);
         }
-        config.EventLogoUrl = logoUrl;
+        config.EventLogoBase64 = base64;
+        config.EventLogoMimeType = mimeType;
+        config.EventLogoUrl = null; // clear old file-path URL
         config.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
@@ -127,7 +122,7 @@ public class SettingsController : ApiControllerBase
             MinimumLeadTimeHours = config.MinimumLeadTimeHours,
             EventTimezone = config.EventTimezone,
             PlaCardTheme = config.PlaCardTheme,
-            EventLogoUrl = config.EventLogoUrl
+            EventLogoUrl = $"data:{mimeType};base64,{base64}"
         });
     }
 
@@ -139,14 +134,9 @@ public class SettingsController : ApiControllerBase
         if (config == null)
             return NotFound();
 
-        // Delete the file if it exists
-        if (!string.IsNullOrEmpty(config.EventLogoUrl))
-        {
-            var uploadsDir = Path.Combine(_env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot"), "uploads");
-            foreach (var oldFile in Directory.GetFiles(uploadsDir, "event-logo.*"))
-                System.IO.File.Delete(oldFile);
-        }
-
+        // Clear both base64 and legacy file-path URL
+        config.EventLogoBase64 = null;
+        config.EventLogoMimeType = null;
         config.EventLogoUrl = null;
         config.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();

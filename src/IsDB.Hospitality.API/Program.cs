@@ -116,10 +116,48 @@ using (var scope = app.Services.CreateScope())
     var isPostgres = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DATABASE_URL"));
     if (isPostgres)
     {
+        // Detect whether this is a fresh database or an existing legacy production database.
+        // Fresh DB → run MigrateAsync() directly (migration chain is now idempotent).
+        // Legacy production DB (has rows in __EFMigrationsHistory without InitialCreate) → run pre-creation block.
+        var dbConn = context.Database.GetDbConnection();
+        await dbConn.OpenAsync();
+        bool isFreshDatabase;
+        bool isEfCoreCreatedDb = false;
+        using (var checkCmd = dbConn.CreateCommand())
+        {
+            checkCmd.CommandText = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '__EFMigrationsHistory'";
+            var tableExists = Convert.ToInt64(await checkCmd.ExecuteScalarAsync()) > 0;
+            long migrationCount = 0;
+            if (tableExists)
+            {
+                checkCmd.CommandText = @"SELECT COUNT(*) FROM ""__EFMigrationsHistory""";
+                migrationCount = Convert.ToInt64(await checkCmd.ExecuteScalarAsync());
+                if (migrationCount > 0)
+                {
+                    checkCmd.CommandText = @"SELECT COUNT(*) FROM ""__EFMigrationsHistory"" WHERE ""MigrationId"" LIKE '%InitialCreate%'";
+                    isEfCoreCreatedDb = Convert.ToInt64(await checkCmd.ExecuteScalarAsync()) > 0;
+                }
+            }
+            isFreshDatabase = migrationCount == 0;
+        }
+        await dbConn.CloseAsync();
+
+        if (isFreshDatabase || isEfCoreCreatedDb)
+        {
+            // Fresh or EF Core-managed database: run MigrateAsync() directly.
+            // The migration chain is now idempotent (IF NOT EXISTS for duplicate tables).
+            logger.LogInformation(isFreshDatabase
+                ? "PostgreSQL detected (fresh database). Running all migrations from scratch..."
+                : "PostgreSQL detected (EF Core-created database). Running pending migrations only...");
+            await context.Database.MigrateAsync();
+            logger.LogInformation("All migrations applied successfully.");
+        }
+        else
+        {
         // PostgreSQL on Railway — pre-create CarClasses table with correct types BEFORE running migrations.
         // The EF Core migration was generated for SQLite and uses TEXT types, which fail on PostgreSQL.
         // By creating the table manually with correct types first, we prevent the migration from failing.
-        logger.LogInformation("PostgreSQL detected. Pre-creating CarClasses table with correct types...");
+        logger.LogInformation("PostgreSQL detected (existing database). Pre-creating CarClasses table with correct types...");
         await context.Database.ExecuteSqlRawAsync(@"
             CREATE TABLE IF NOT EXISTS ""CarClasses"" (
                 ""Id""          uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -512,10 +550,24 @@ using (var scope = app.Services.CreateScope())
         ");
         logger.LogInformation("CarClasses pre-creation complete.");
 
+        // Add OAuthScope to EventsAirConfigs if missing (AddOAuthScopeToEventsAirConfig migration)
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE LOWER(table_name) = 'eventsairconfigs' AND LOWER(column_name) = 'oauthscope'
+                ) THEN
+                    ALTER TABLE ""EventsAirConfigs"" ADD COLUMN ""OAuthScope"" text NOT NULL DEFAULT '';
+                END IF;
+            END $$;
+        ");
+
         // Apply all remaining pending migrations
         logger.LogInformation("Applying pending migrations...");
         await context.Database.MigrateAsync();
         logger.LogInformation("Migrations applied successfully.");
+
+        } // end else (existing database)
 
         // Notifications tables — Postgres path (safe to run on every startup, idempotent)
         await context.Database.ExecuteSqlRawAsync(@"

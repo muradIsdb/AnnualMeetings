@@ -30,6 +30,7 @@ public class Flight : BaseEntity
     public string? ActualGate { get; set; }
 
     public DateTime? LastTrackedAt { get; set; } // When AviationStack data was last updated
+    public int? LiveDelayMinutes { get; set; }   // Delay in minutes from Aviationstack (Layer 2 only)
 
     // Navigation property for related travel bookings
     public ICollection<TravelBooking> TravelBookings { get; set; } = new List<TravelBooking>();
