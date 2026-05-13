@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { StaffUser } from '../types'
+import { UserRole } from '../types'
 
 interface AuthState {
   user: StaffUser | null
@@ -8,19 +9,21 @@ interface AuthState {
   isAuthenticated: boolean
   /** Whether the current user is an Admin (has access to all pages). */
   isAdmin: boolean
-  /** List of pageIds the current user is permitted to access. Empty if isAdmin=true. */
+  /** Kept for compatibility but no longer used for access control. */
   grantedPageIds: string[]
 
   login: (user: StaffUser, accessToken: string, refreshToken: string) => void
   logout: () => void
   setPermissions: (isAdmin: boolean, grantedPageIds: string[]) => void
-  /** Returns true if the current user can access the given pageId. */
+  /** Returns true if the current user can access the given pageId.
+   *  Access control feature was removed - always returns true.
+   *  Role-based visibility is handled by ProtectedRoute and AppLayout role checks. */
   hasPage: (pageId: string) => boolean
 }
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set, get) => ({
+    (set, _get) => ({
       user: null,
       accessToken: null,
       isAuthenticated: false,
@@ -30,7 +33,10 @@ export const useAuthStore = create<AuthState>()(
       login: (user, accessToken, refreshToken) => {
         localStorage.setItem('accessToken', accessToken)
         localStorage.setItem('refreshToken', refreshToken)
-        set({ user, accessToken, isAuthenticated: true })
+        // Derive isAdmin from user role directly - no API call needed
+        const roles: UserRole[] = user.roles?.length ? user.roles : (user.role ? [user.role] : [])
+        const isAdmin = roles.includes(UserRole.Admin)
+        set({ user, accessToken, isAuthenticated: true, isAdmin })
       },
 
       logout: () => {
@@ -43,10 +49,10 @@ export const useAuthStore = create<AuthState>()(
         set({ isAdmin, grantedPageIds })
       },
 
-      hasPage: (pageId: string) => {
-        const { isAdmin, grantedPageIds } = get()
-        if (isAdmin) return true
-        return grantedPageIds.includes(pageId)
+      hasPage: (_pageId: string) => {
+        // Access control feature removed - all authenticated users can see all nav items
+        // Role-based access is enforced by ProtectedRoute wrappers in App.tsx
+        return true
       },
     }),
     {
