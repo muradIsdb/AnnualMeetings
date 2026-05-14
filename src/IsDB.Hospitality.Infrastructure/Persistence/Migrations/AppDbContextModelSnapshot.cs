@@ -1776,6 +1776,26 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Navigation("Assignments");
 
                     b.Navigation("Driver");
+
+                    b.Navigation("StatusHistory");
+                });
+
+            modelBuilder.Entity("IsDB.Hospitality.Domain.Entities.VehicleStatusHistory", b =>
+                {
+                    b.HasOne("IsDB.Hospitality.Domain.Entities.Vehicle", "Vehicle")
+                        .WithMany("StatusHistory")
+                        .HasForeignKey("VehicleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IsDB.Hospitality.Domain.Entities.StaffUser", "ChangedByStaff")
+                        .WithMany()
+                        .HasForeignKey("ChangedByStaffId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("ChangedByStaff");
+
+                    b.Navigation("Vehicle");
                 });
 #pragma warning restore 612, 618
         }

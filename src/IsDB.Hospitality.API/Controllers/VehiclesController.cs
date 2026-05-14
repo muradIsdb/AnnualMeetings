@@ -142,6 +142,8 @@ public class VehiclesController : ApiControllerBase
         if (string.IsNullOrWhiteSpace(req.Make) || string.IsNullOrWhiteSpace(req.Model) || string.IsNullOrWhiteSpace(req.LicensePlate))
             return BadRequest(new { message = "Make, model, and license plate are required." });
 
+        var staffUser = await _db.StaffUsers.FindAsync(CurrentUserId);
+
         var vehicle = new Vehicle
         {
             Id = Guid.NewGuid(),
@@ -149,11 +151,26 @@ public class VehiclesController : ApiControllerBase
             Model = req.Model.Trim(),
             LicensePlate = req.LicensePlate.Trim().ToUpper(),
             Color = req.Color?.Trim(),
-            Status = VehicleStatus.Available,
+            // Default: NotProvided — set to Available when the vehicle physically arrives on site
+            Status = VehicleStatus.NotProvided,
             IsActive = true,
             CarClassId = req.CarClassId,
         };
         _db.Vehicles.Add(vehicle);
+
+        // Write initial status history entry
+        _db.VehicleStatusHistories.Add(new VehicleStatusHistory
+        {
+            Id = Guid.NewGuid(),
+            VehicleId = vehicle.Id,
+            OldStatus = VehicleStatus.NotProvided,
+            NewStatus = VehicleStatus.NotProvided,
+            ChangedByStaffId = CurrentUserId,
+            ChangedByName = staffUser?.FullName,
+            ChangedByRole = staffUser?.Role,
+            Notes = "Vehicle registered — awaiting physical delivery",
+        });
+
         await _db.SaveChangesAsync();
 
         // Assign driver if provided
@@ -236,6 +253,7 @@ public class VehiclesController : ApiControllerBase
         var imported = 0;
         var skipped = 0;
         var errors = new List<string>();
+        var staffUser = await _db.StaffUsers.FindAsync(CurrentUserId);
 
         using var reader = new System.IO.StreamReader(file.OpenReadStream());
         var header = await reader.ReadLineAsync();
@@ -307,7 +325,7 @@ public class VehiclesController : ApiControllerBase
                 continue;
             }
 
-            _db.Vehicles.Add(new Vehicle
+            var newVehicle = new Vehicle
             {
                 Id = Guid.NewGuid(),
                 Make = make,
@@ -315,10 +333,26 @@ public class VehiclesController : ApiControllerBase
                 LicensePlate = plate,
                 Color = string.IsNullOrEmpty(color) ? null : color,
                 CarNumber = string.IsNullOrEmpty(carNumber) ? null : carNumber,
-                Status = VehicleStatus.Available,
+                // Default: NotProvided — set to Available when the vehicle physically arrives on site
+                Status = VehicleStatus.NotProvided,
                 IsActive = true,
                 CarClassId = carClassId,
+            };
+            _db.Vehicles.Add(newVehicle);
+
+            // Write initial status history entry
+            _db.VehicleStatusHistories.Add(new VehicleStatusHistory
+            {
+                Id = Guid.NewGuid(),
+                VehicleId = newVehicle.Id,
+                OldStatus = VehicleStatus.NotProvided,
+                NewStatus = VehicleStatus.NotProvided,
+                ChangedByStaffId = CurrentUserId,
+                ChangedByName = staffUser?.FullName,
+                ChangedByRole = staffUser?.Role,
+                Notes = "Vehicle registered via CSV import — awaiting physical delivery",
             });
+
             imported++;
         }
 
@@ -400,8 +434,152 @@ public class VehiclesController : ApiControllerBase
         await _db.SaveChangesAsync();
         return Ok();
     }
+
+    /// <summary>
+    /// Update the status of a single vehicle.
+    /// Cannot change status of an Assigned vehicle (must unassign first).
+    /// Writes a history entry with optional notes.
+    /// </summary>
+    [HttpPatch("{id:guid}/status")]
+    [Authorize(Roles = "Admin,Transport")]
+    public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UpdateVehicleStatusRequest req)
+    {
+        if (!Enum.TryParse<VehicleStatus>(req.Status, ignoreCase: true, out var newStatus))
+            return BadRequest(new { message = $"Invalid status '{req.Status}'. Valid values: Available, OutOfService, NotProvided." });
+
+        var vehicle = await _db.Vehicles.FindAsync(id);
+        if (vehicle == null) return NotFound();
+
+        // Cannot manually change status of an Assigned vehicle
+        if (vehicle.Status == VehicleStatus.Assigned)
+            return BadRequest(new { message = "Cannot change status of an assigned vehicle. Unassign the vehicle from its guest first." });
+
+        // Cannot set to Assigned via this endpoint
+        if (newStatus == VehicleStatus.Assigned)
+            return BadRequest(new { message = "Cannot set status to Assigned via this endpoint. Use the assignment workflow." });
+
+        var oldStatus = vehicle.Status;
+        if (oldStatus == newStatus)
+            return Ok(new { message = "Status unchanged." });
+
+        vehicle.Status = newStatus;
+
+        var staffUser = await _db.StaffUsers.FindAsync(CurrentUserId);
+        _db.VehicleStatusHistories.Add(new VehicleStatusHistory
+        {
+            Id = Guid.NewGuid(),
+            VehicleId = vehicle.Id,
+            OldStatus = oldStatus,
+            NewStatus = newStatus,
+            ChangedByStaffId = CurrentUserId,
+            ChangedByName = staffUser?.FullName,
+            ChangedByRole = staffUser?.Role,
+            Notes = req.Notes,
+        });
+
+        await _db.SaveChangesAsync();
+        return Ok(new { id = vehicle.Id, oldStatus = oldStatus.ToString(), newStatus = newStatus.ToString() });
+    }
+
+    /// <summary>
+    /// Bulk-update the status of multiple vehicles in one request.
+    /// Skips Assigned vehicles (cannot change their status) and returns a summary.
+    /// </summary>
+    [HttpPatch("bulk-status")]
+    [Authorize(Roles = "Admin,Transport")]
+    public async Task<IActionResult> BulkUpdateStatus([FromBody] BulkUpdateVehicleStatusRequest req)
+    {
+        if (req.VehicleIds == null || req.VehicleIds.Count == 0)
+            return BadRequest(new { message = "No vehicle IDs provided." });
+
+        if (!Enum.TryParse<VehicleStatus>(req.Status, ignoreCase: true, out var newStatus))
+            return BadRequest(new { message = $"Invalid status '{req.Status}'. Valid values: Available, OutOfService, NotProvided." });
+
+        if (newStatus == VehicleStatus.Assigned)
+            return BadRequest(new { message = "Cannot set status to Assigned via this endpoint. Use the assignment workflow." });
+
+        var vehicles = await _db.Vehicles
+            .Where(v => req.VehicleIds.Contains(v.Id) && v.IsActive)
+            .ToListAsync();
+
+        var staffUser = await _db.StaffUsers.FindAsync(CurrentUserId);
+        var updated = new List<string>();
+        var skipped = new List<string>();
+
+        foreach (var vehicle in vehicles)
+        {
+            if (vehicle.Status == VehicleStatus.Assigned)
+            {
+                skipped.Add($"{vehicle.Make} {vehicle.Model} ({vehicle.LicensePlate}) — currently assigned to a guest");
+                continue;
+            }
+
+            if (vehicle.Status == newStatus)
+            {
+                skipped.Add($"{vehicle.Make} {vehicle.Model} ({vehicle.LicensePlate}) — already {newStatus}");
+                continue;
+            }
+
+            var oldStatus = vehicle.Status;
+            vehicle.Status = newStatus;
+
+            _db.VehicleStatusHistories.Add(new VehicleStatusHistory
+            {
+                Id = Guid.NewGuid(),
+                VehicleId = vehicle.Id,
+                OldStatus = oldStatus,
+                NewStatus = newStatus,
+                ChangedByStaffId = CurrentUserId,
+                ChangedByName = staffUser?.FullName,
+                ChangedByRole = staffUser?.Role,
+                Notes = req.Notes,
+            });
+
+            updated.Add($"{vehicle.Make} {vehicle.Model} ({vehicle.LicensePlate})");
+        }
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            updatedCount = updated.Count,
+            skippedCount = skipped.Count,
+            updated,
+            skipped,
+        });
+    }
+
+    /// <summary>
+    /// Get the full status change history for a single vehicle.
+    /// </summary>
+    [HttpGet("{id:guid}/status-history")]
+    [Authorize(Roles = "Admin,Transport")]
+    public async Task<IActionResult> GetStatusHistory(Guid id)
+    {
+        var vehicle = await _db.Vehicles.FindAsync(id);
+        if (vehicle == null) return NotFound();
+
+        var history = await _db.VehicleStatusHistories
+            .Where(h => h.VehicleId == id)
+            .OrderByDescending(h => h.CreatedAt)
+            .Select(h => new
+            {
+                h.Id,
+                OldStatus = h.OldStatus.ToString(),
+                NewStatus = h.NewStatus.ToString(),
+                h.ChangedByName,
+                ChangedByRole = h.ChangedByRole.HasValue ? h.ChangedByRole.ToString() : null,
+                h.Notes,
+                ChangedAt = h.CreatedAt,
+            })
+            .ToListAsync();
+
+        return Ok(history);
+    }
 }
 
 public record CreateVehicleRequest(string Make, string Model, string LicensePlate, string? Color, Guid? DriverId = null, Guid? CarClassId = null);
 public record AssignDriverToVehicleRequest(Guid? DriverId);
 public record SetCarNumberRequest(string? CarNumber);
+public record UpdateVehicleStatusRequest(string Status, string? Notes = null);
+public record BulkUpdateVehicleStatusRequest(List<Guid> VehicleIds, string Status, string? Notes = null);

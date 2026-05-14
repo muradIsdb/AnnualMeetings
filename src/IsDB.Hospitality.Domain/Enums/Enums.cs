@@ -32,7 +32,9 @@ public enum VehicleStatus
 {
     Available = 0,
     Assigned = 1,
-    OutOfService = 2
+    OutOfService = 2,
+    /// <summary>Vehicle is contracted/registered but has not yet physically arrived on site.</summary>
+    NotProvided = 3
 }
 public enum DriverStatus
 {

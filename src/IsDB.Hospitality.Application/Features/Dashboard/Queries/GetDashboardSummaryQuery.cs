@@ -175,6 +175,7 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
             VehiclesAvailable                 = vehicles.Count(v => v.Status == VehicleStatus.Available),
             VehiclesAssigned                  = vehicles.Count(v => v.Status == VehicleStatus.Assigned),
             VehiclesOutOfService              = vehicles.Count(v => v.Status == VehicleStatus.OutOfService),
+            VehiclesNotProvided               = vehicles.Count(v => v.Status == VehicleStatus.NotProvided),
             DriversTotal                      = drivers.Count,
             DriversAvailable                  = drivers.Count(d => d.Status == DriverStatus.Available),
             DriversAssigned                   = drivers.Count(d => d.Status == DriverStatus.Assigned),
@@ -192,6 +193,7 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
                 Available       = vehicles.Count(v => v.CarClassId == cc.Id && v.Status == VehicleStatus.Available),
                 Assigned        = vehicles.Count(v => v.CarClassId == cc.Id && v.Status == VehicleStatus.Assigned),
                 OutOfService    = vehicles.Count(v => v.CarClassId == cc.Id && v.Status == VehicleStatus.OutOfService),
+                NotProvided     = vehicles.Count(v => v.CarClassId == cc.Id && v.Status == VehicleStatus.NotProvided),
                 GuestsDeserving = guestsByClass.TryGetValue(cc.Id, out var cnt) ? cnt : 0,
             }).ToList(),
             // Recent activity
