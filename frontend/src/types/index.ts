@@ -34,10 +34,11 @@ export enum GuestStatus {
 }
 
 export enum InboundStatus {
-  Expected = 0,
-  AtAirport = 1,
-  InTransit = 2,
-  AtHotel = 3,
+  ArrivalScheduled = 0,
+  Arrived = 1,
+  ReceivedByEmbassyTeam = 2,
+  VehicleAssigned = 3,
+  AtHotel = 4,
 }
 
 export enum OutboundStatus {
@@ -74,6 +75,18 @@ export interface GuestSummary {
   isVip?: boolean;
   registrationTypeId?: string;
   registrationTypeName?: string;
+  // Extended fields returned by the API
+  rankValue?: string;
+  designation?: string;
+  photoUrl?: string;
+  activeVehiclePlate?: string;
+  activeVehicleId?: string;
+  deservedCarClassName?: string;
+  deservedCarClassColor?: string;
+  deservedCarClassId?: string;
+  statusLabel?: string;
+  inboundStatusLabel?: string;
+  outboundStatusLabel?: string;
 }
 
 export interface Guest extends GuestSummary {
@@ -117,10 +130,22 @@ export interface Vehicle {
   isAvailable: boolean;
 }
 
-export interface VehicleWithStatus extends Vehicle {
-  assignedGuestId?: string;
-  assignedGuestName?: string;
+export interface VehicleWithStatus {
+  id: string;
+  licensePlate: string;
+  make: string;
+  model: string;
+  color?: string;
   status?: string;
+  driverName?: string;
+  driverPhone?: string;
+  currentGuestId?: string;
+  currentGuestName?: string;
+  carClassId?: string;
+  carClassName?: string;
+  carClassColor?: string;
+  carNumber?: string;
+  driverId?: string;
 }
 
 export interface Alert {

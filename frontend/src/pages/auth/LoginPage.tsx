@@ -3,27 +3,20 @@ import { useNavigate } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { Eye, EyeOff, Lock, Mail } from 'lucide-react'
-import { authApi, accessControlApi } from '../../api/services'
+import { authApi } from '../../api/services'
 import { useAuthStore } from '../../store/authStore'
 
 export default function LoginPage() {
   const navigate = useNavigate()
-  const { login, setPermissions } = useAuthStore()
+  const { login } = useAuthStore()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
 
   const loginMutation = useMutation({
     mutationFn: () => authApi.login(email, password),
-    onSuccess: async (data) => {
+    onSuccess: (data) => {
       login(data.user, (data.accessToken ?? data.token) as string, data.refreshToken ?? '')
-      // Fetch page permissions immediately after login
-      try {
-        const perms = await accessControlApi.getMyPermissions()
-        setPermissions(perms.isAdmin, perms.grantedPageIds)
-      } catch {
-        // Non-fatal: fall back to role-based access if permissions endpoint fails
-      }
       toast.success(`Welcome, ${data.user.fullName}`)
       navigate('/')
     },

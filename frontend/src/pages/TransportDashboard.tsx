@@ -11,10 +11,10 @@ import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query'
 import { Car, RefreshCw, AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Truck } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-import { guestsApi, vehiclesApi, dashboardApi } from '../../api/services'
-import { InboundStatus } from '../../types'
-import type { GuestSummary } from '../../types'
-import { AssignVehicleModal } from '../../components/fleet/AssignVehicleModal'
+import { guestsApi, vehiclesApi, dashboardApi } from '../api/services'
+import { InboundStatus } from '../types'
+import type { GuestSummary } from '../types'
+import { AssignVehicleModal } from '../components/fleet/AssignVehicleModal'
 
 // ─── Guest Avatar ─────────────────────────────────────────────────────────────
 
