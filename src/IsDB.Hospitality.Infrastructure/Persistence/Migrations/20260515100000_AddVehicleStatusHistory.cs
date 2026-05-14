@@ -11,57 +11,31 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.CreateTable(
-                name: "VehicleStatusHistories",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "char(36)", nullable: false, collation: "ascii_general_ci"),
-                    VehicleId = table.Column<Guid>(type: "char(36)", nullable: false, collation: "ascii_general_ci"),
-                    OldStatus = table.Column<int>(type: "int", nullable: false),
-                    NewStatus = table.Column<int>(type: "int", nullable: false),
-                    ChangedByStaffId = table.Column<Guid>(type: "char(36)", nullable: true, collation: "ascii_general_ci"),
-                    ChangedByName = table.Column<string>(type: "longtext", nullable: true)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
-                    ChangedByRole = table.Column<int>(type: "int", nullable: true),
-                    Notes = table.Column<string>(type: "longtext", nullable: true)
-                        .Annotation("MySql:CharSet", "utf8mb4"),
-                    CreatedAt = table.Column<DateTime>(type: "datetime(6)", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "datetime(6)", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_VehicleStatusHistories", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_VehicleStatusHistories_StaffUsers_ChangedByStaffId",
-                        column: x => x.ChangedByStaffId,
-                        principalTable: "StaffUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
-                    table.ForeignKey(
-                        name: "FK_VehicleStatusHistories_Vehicles_VehicleId",
-                        column: x => x.VehicleId,
-                        principalTable: "Vehicles",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                })
-                .Annotation("MySql:CharSet", "utf8mb4");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_VehicleStatusHistories_ChangedByStaffId",
-                table: "VehicleStatusHistories",
-                column: "ChangedByStaffId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_VehicleStatusHistories_VehicleId",
-                table: "VehicleStatusHistories",
-                column: "VehicleId");
+            // Use raw SQL so this migration is idempotent on PostgreSQL.
+            // The pre-creation block in Program.cs already creates the table on existing Railway DBs.
+            // This migration handles fresh EF Core-managed databases.
+            migrationBuilder.Sql(@"
+                CREATE TABLE IF NOT EXISTS ""VehicleStatusHistories"" (
+                    ""Id""                 uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+                    ""VehicleId""          uuid        NOT NULL REFERENCES ""Vehicles""(""Id"") ON DELETE CASCADE,
+                    ""OldStatus""          integer     NOT NULL,
+                    ""NewStatus""          integer     NOT NULL,
+                    ""ChangedByStaffId""   uuid        NULL REFERENCES ""StaffUsers""(""Id"") ON DELETE SET NULL,
+                    ""ChangedByName""      text        NULL,
+                    ""ChangedByRole""      integer     NULL,
+                    ""Notes""              text        NULL,
+                    ""CreatedAt""          timestamptz NOT NULL DEFAULT now(),
+                    ""UpdatedAt""          timestamptz NOT NULL DEFAULT now()
+                );
+                CREATE INDEX IF NOT EXISTS ""IX_VehicleStatusHistories_VehicleId"" ON ""VehicleStatusHistories""(""VehicleId"");
+                CREATE INDEX IF NOT EXISTS ""IX_VehicleStatusHistories_ChangedByStaffId"" ON ""VehicleStatusHistories""(""ChangedByStaffId"");
+            ");
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropTable(
-                name: "VehicleStatusHistories");
+            migrationBuilder.Sql(@"DROP TABLE IF EXISTS ""VehicleStatusHistories"";");
         }
     }
 }
