@@ -617,6 +617,24 @@ using (var scope = app.Services.CreateScope())
             );
             CREATE INDEX IF NOT EXISTS ""IX_NotificationReads_StaffUserId"" ON ""NotificationReads""(""StaffUserId"");
         ");
+
+        // VehicleStatusHistories table — safe to run on every startup, idempotent
+        await context.Database.ExecuteSqlRawAsync(@"
+            CREATE TABLE IF NOT EXISTS ""VehicleStatusHistories"" (
+                ""Id""                 uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+                ""VehicleId""          uuid        NOT NULL REFERENCES ""Vehicles""(""Id"") ON DELETE CASCADE,
+                ""OldStatus""          integer     NOT NULL,
+                ""NewStatus""          integer     NOT NULL,
+                ""ChangedByStaffId""   uuid        NULL REFERENCES ""StaffUsers""(""Id"") ON DELETE SET NULL,
+                ""ChangedByName""      text        NULL,
+                ""ChangedByRole""      integer     NULL,
+                ""Notes""              text        NULL,
+                ""CreatedAt""          timestamptz NOT NULL DEFAULT now(),
+                ""UpdatedAt""          timestamptz NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS ""IX_VehicleStatusHistories_VehicleId"" ON ""VehicleStatusHistories""(""VehicleId"");
+            CREATE INDEX IF NOT EXISTS ""IX_VehicleStatusHistories_ChangedByStaffId"" ON ""VehicleStatusHistories""(""ChangedByStaffId"");
+        ");
     }
     else
     {
