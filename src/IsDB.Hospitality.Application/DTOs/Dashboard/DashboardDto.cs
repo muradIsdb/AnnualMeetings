@@ -22,6 +22,7 @@ public class DashboardSummaryDto
     public int VehiclesAvailable { get; set; }
     public int VehiclesAssigned { get; set; }
     public int VehiclesOutOfService { get; set; }
+    public int VehiclesNotProvided { get; set; }
     public int DriversTotal { get; set; }
     public int DriversAvailable { get; set; }
     public int DriversAssigned { get; set; }
@@ -48,6 +49,7 @@ public class FleetByClassDto
     public int Available { get; set; }
     public int Assigned { get; set; }
     public int OutOfService { get; set; }
+    public int NotProvided { get; set; }
     public int GuestsDeserving { get; set; }
 }
 
