@@ -136,6 +136,62 @@ public class CarClassesController : ApiControllerBase
         return NoContent();
     }
 
+    // GET /api/car-classes/{id}/history — provision history for all vehicles in a class
+    [HttpGet("{id:guid}/history")]
+    [Authorize(Roles = "Admin,Transport")]
+    public async Task<IActionResult> GetHistory(
+        Guid id,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        [FromQuery] string? fromDate = null,
+        [FromQuery] string? toDate = null)
+    {
+        var carClass = await _db.CarClasses.FindAsync(id);
+        if (carClass == null) return NotFound();
+
+        var query = _db.VehicleStatusHistories
+            .Include(h => h.Vehicle)
+            .Where(h => h.Vehicle.CarClassId == id);
+
+        if (!string.IsNullOrWhiteSpace(fromDate) && DateTime.TryParse(fromDate, out var from))
+            query = query.Where(h => h.CreatedAt >= from.ToUniversalTime());
+
+        if (!string.IsNullOrWhiteSpace(toDate) && DateTime.TryParse(toDate, out var to))
+            query = query.Where(h => h.CreatedAt <= to.ToUniversalTime().AddDays(1));
+
+        var total = await query.CountAsync();
+
+        var items = await query
+            .OrderByDescending(h => h.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(h => new
+            {
+                h.Id,
+                VehicleId       = h.VehicleId,
+                VehiclePlate    = h.Vehicle.LicensePlate,
+                VehicleMake     = h.Vehicle.Make,
+                VehicleModel    = h.Vehicle.Model,
+                OldStatus       = h.OldStatus.ToString(),
+                NewStatus       = h.NewStatus.ToString(),
+                h.ChangedByName,
+                ChangedByRole   = h.ChangedByRole.HasValue ? h.ChangedByRole.ToString() : null,
+                h.Notes,
+                ChangedAt       = h.CreatedAt,
+            })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            CarClassId   = id,
+            CarClassName = carClass.Name,
+            Total        = total,
+            Page         = page,
+            PageSize     = pageSize,
+            Items        = items,
+        });
+    }
+
     // PATCH /api/car-classes/reorder  — update sort orders in bulk
     [HttpPatch("reorder")]
     [Authorize(Roles = "Admin")]
