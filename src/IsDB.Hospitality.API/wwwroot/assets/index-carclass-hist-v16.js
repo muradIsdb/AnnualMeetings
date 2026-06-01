@@ -1382,7 +1382,7 @@ function ReceptionDashboard(){
     else if(key==="tomorrow"){const tm=new Date(d);tm.setDate(d.getDate()+1);f=fmt(tm);t=fmt(tm);}
     else if(key==="thisweek"){const mon=new Date(d);mon.setDate(d.getDate()-d.getDay()+1);const sun=new Date(mon);sun.setDate(mon.getDate()+6);f=fmt(mon);t=fmt(sun);}
     else if(key==="next3"){const n3=new Date(d);n3.setDate(d.getDate()+3);f=fmt(d);t=fmt(n3);}
-    else{f=fmt(d);t=fmt(d);}
+    else if(key==="all"){f="2000-01-01";t="2099-12-31";}else{f=fmt(d);t=fmt(d);}
     setFromDate(f);setToDate(t);setAppliedFrom(f);setAppliedTo(t);setActiveQuick(key);
   };
   const applyFilter=()=>{setAppliedFrom(fromDate);setAppliedTo(toDate);setActiveQuick("");};
@@ -1391,7 +1391,7 @@ function ReceptionDashboard(){
     queryFn:()=>_.get("/dashboard/reception-summary",{params:{from:appliedFrom,to:appliedTo}}).then(r=>r.data),
     refetchInterval:60000
   });
-  const quickBtns=[["yesterday","Yesterday"],["today","Today"],["tomorrow","Tomorrow"],["thisweek","This Week"],["next3","Next 3 Days"]];
+  const quickBtns=[["all","All"],["yesterday","Yesterday"],["today","Today"],["tomorrow","Tomorrow"],["thisweek","This Week"],["next3","Next 3 Days"]];
   const filterBar=s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4 mb-4",children:[
     s.jsx("div",{className:"flex flex-wrap gap-2 mb-3",children:quickBtns.map(function(qb){return s.jsx("button",{onClick:function(){setQuick(qb[0]);},className:"px-3 py-1.5 text-sm rounded-lg border "+(activeQuick===qb[0]?"bg-green-700 text-white border-green-700":"bg-white text-gray-700 border-gray-300 hover:bg-gray-50"),children:qb[1]},qb[0]);})}),
     s.jsxs("div",{className:"flex flex-wrap items-center gap-3",children:[
