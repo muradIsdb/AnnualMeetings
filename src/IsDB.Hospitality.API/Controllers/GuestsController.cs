@@ -1587,6 +1587,52 @@ public class GuestsController : ApiControllerBase
         return Ok(new { acknowledged = bookings.Count });
     }
 
+    /// <summary>Update hotel name and/or room number for a guest already at hotel. Admin and Hotel roles only.</summary>
+    [HttpPatch("{id:guid}/hotel-assignment")]
+    public async Task<IActionResult> UpdateHotelAssignment(
+        Guid id,
+        [FromBody] UpdateHotelAssignmentRequest req,
+        [FromServices] AppDbContext db,
+        CancellationToken ct)
+    {
+        var callerRole = GetCallerRole();
+        var isAdmin = callerRole == UserRole.Admin;
+        var isHotel = callerRole == UserRole.Hotel;
+        if (!isAdmin && !isHotel)
+            return Forbid();
+
+        var guest = await db.Guests.FindAsync(new object[] { id }, ct);
+        if (guest == null) return NotFound();
+
+        if (guest.InboundStatus != InboundStatus.AtHotel)
+            return BadRequest(new { message = "Hotel assignment can only be updated after the guest has arrived at the hotel." });
+
+        // Build diff notes
+        var parts = new List<string>();
+        if (req.HotelName != null && req.HotelName != guest.HotelName)
+            parts.Add($"Hotel: {guest.HotelName ?? "(none)"} \u2192 {req.HotelName}");
+        if (req.RoomNumber != null && req.RoomNumber != guest.RoomNumber)
+            parts.Add($"Room: {guest.RoomNumber ?? "(none)"} \u2192 {req.RoomNumber}");
+
+        if (parts.Count == 0)
+            return Ok(new { message = "No changes detected." });
+
+        // Apply changes
+        if (req.HotelName != null) guest.HotelName = string.IsNullOrWhiteSpace(req.HotelName) ? null : req.HotelName.Trim();
+        if (req.RoomNumber != null) guest.RoomNumber = string.IsNullOrWhiteSpace(req.RoomNumber) ? null : req.RoomNumber.Trim();
+        guest.UpdatedAt = DateTime.UtcNow;
+
+        // Record history
+        await AddHistoryEntry(db, guest.Id, StatusTrack.Inbound,
+            (int)InboundStatus.AtHotel,
+            "Hotel Assignment Updated",
+            CurrentUserId, GetCallerName(), callerRole,
+            false, string.Join(", ", parts));
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Hotel assignment updated.", notes = string.Join(", ", parts) });
+    }
+
     private async Task SendUndoOutboundNotification(
         AppDbContext db, Guest guest, int undoneStatusValue, CancellationToken ct)
     {
@@ -1620,3 +1666,4 @@ public record BulkAssignCarClassRequest(List<Guid> GuestIds, Guid? CarClassId);
 public record SetStatusRequest(InboundStatus Status, string? Notes = null, string? HotelName = null, string? RoomNumber = null);
 public record SetOutboundStatusRequest(OutboundStatus Status, string? Notes = null);
 public record ForceStatusRequest(StatusTrack Track, int StatusValue, string? Notes = null);
+public record UpdateHotelAssignmentRequest(string? HotelName, string? RoomNumber);
