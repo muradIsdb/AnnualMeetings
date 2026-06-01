@@ -1367,13 +1367,13 @@ function ReceptionDashboard(){
   const navigate=qt();
   const today=new Date();
   const fmt=d=>d.toISOString().split("T")[0];
-  const [fromDate,setFromDate]=Oe(fmt(today));
-  const [toDate,setToDate]=Oe(fmt(today));
-  const [appliedFrom,setAppliedFrom]=Oe(fmt(today));
-  const [appliedTo,setAppliedTo]=Oe(fmt(today));
-  const [guestSearch,setGuestSearch]=Oe("");
-  const [statusFilter,setStatusFilter]=Oe("");
-  const [activeQuick,setActiveQuick]=Oe("today");
+  const [fromDate,setFromDate]=N.useState(fmt(today));
+  const [toDate,setToDate]=N.useState(fmt(today));
+  const [appliedFrom,setAppliedFrom]=N.useState(fmt(today));
+  const [appliedTo,setAppliedTo]=N.useState(fmt(today));
+  const [guestSearch,setGuestSearch]=N.useState("");
+  const [statusFilter,setStatusFilter]=N.useState("");
+  const [activeQuick,setActiveQuick]=N.useState("today");
   const setQuick=key=>{
     const d=new Date();
     let f,t;
