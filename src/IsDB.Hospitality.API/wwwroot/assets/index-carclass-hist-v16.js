@@ -1426,10 +1426,10 @@ function ReceptionDashboard(){
       s.jsxs("div",{className:"flex items-center justify-between",children:[
         s.jsxs("div",{className:"flex items-center gap-3",children:[
           s.jsx("span",{className:"font-semibold text-gray-900",children:fl.flightNumber||"\u2014"}),
-          s.jsx("span",{className:"text-sm text-gray-500",children:fl.airline||""}),
+          s.jsx("span",{className:"text-sm text-gray-500",children:fl.airlineName||""}),
           fl.scheduledArrival&&s.jsx("span",{className:"text-sm text-gray-500",children:new Date(fl.scheduledArrival).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})})
         ]}),
-        s.jsx("span",{className:"text-sm font-medium text-gray-700",children:((fl.guestCount||0)+" guests")})
+        s.jsx("span",{className:"text-sm font-medium text-gray-700",children:((fl.totalGuests||0)+" guests")})
       ]})
     ]},fl.flightNumber||fl.scheduledArrival||"fl");})})
   ]}):null;
