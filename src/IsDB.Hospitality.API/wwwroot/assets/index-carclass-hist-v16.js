@@ -691,7 +691,7 @@ function HD4() {
   const [loading, setLoading] = N.useState(true);
   const [error, setError] = N.useState(null);
   const [lastUpdated, setLastUpdated] = N.useState(null);
-  const navigate = Rt();
+  const navigate = qt();
 
   const fetchData = N.useCallback(async () => {
     setLoading(true);
