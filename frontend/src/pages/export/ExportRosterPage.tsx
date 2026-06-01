@@ -19,7 +19,11 @@
 //   Sv = downloadBlob(url, filename, params) helper
 
 import React, { useState, useMemo } from 'react'
-import { Download, Filter, Users, Check, SquareCheckBig, Square, RefreshCw, X } from 'lucide-react'
+import { Download, Filter, Users, SquareCheckBig, Square, RefreshCw, X } from 'lucide-react'
+
+// Sentinel value sent to backend to represent null/empty rank or car class
+const UNSET = '__UNSET__'
+const UNSET_LABEL = '(Not Set)'
 
 // ─── Column definitions ───────────────────────────────────────────────────────
 const ALL_COLUMNS = [
@@ -45,6 +49,9 @@ const ALL_COLUMNS = [
 ]
 
 // ─── Multi-select checkbox group component ────────────────────────────────────
+// options: display labels (strings)
+// selected: Set of values (may differ from labels when useUnset=true)
+// getVal: maps label → value sent to backend (default: identity)
 function CheckboxGroup({
   label,
   options,
@@ -52,6 +59,7 @@ function CheckboxGroup({
   onToggle,
   onSelectAll,
   onClearAll,
+  unsetCount,
 }: {
   label: string
   options: string[]
@@ -59,8 +67,12 @@ function CheckboxGroup({
   onToggle: (v: string) => void
   onSelectAll: () => void
   onClearAll: () => void
+  unsetCount?: number   // if provided, show (Not Set) option
 }) {
-  const allSelected = options.length > 0 && options.every(o => selected.has(o))
+  // All options including the synthetic UNSET
+  const allOpts = unsetCount !== undefined ? [UNSET, ...options] : options
+  const allSelected = allOpts.length > 0 && allOpts.every(o => selected.has(o))
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4">
       <div className="flex items-center justify-between mb-3">
@@ -84,10 +96,31 @@ function CheckboxGroup({
           </button>
         </div>
       </div>
-      {options.length === 0 ? (
+      {allOpts.length === 0 ? (
         <p className="text-xs text-gray-400 italic">No options available</p>
       ) : (
         <div className="flex flex-wrap gap-2">
+          {/* (Not Set) option — rendered first with a distinct style */}
+          {unsetCount !== undefined && (
+            <button
+              key={UNSET}
+              onClick={() => onToggle(UNSET)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                selected.has(UNSET)
+                  ? 'bg-amber-50 border-amber-400 text-amber-700'
+                  : 'bg-white border-dashed border-gray-300 text-gray-400 hover:border-amber-400 hover:text-amber-600'
+              }`}
+            >
+              {selected.has(UNSET)
+                ? <SquareCheckBig className="w-3.5 h-3.5" />
+                : <Square className="w-3.5 h-3.5" />}
+              {UNSET_LABEL}
+              {unsetCount > 0 && (
+                <span className="ml-1 text-[10px] opacity-70">({unsetCount})</span>
+              )}
+            </button>
+          )}
+          {/* Real value options */}
           {options.map(opt => {
             const checked = selected.has(opt)
             return (
@@ -111,7 +144,7 @@ function CheckboxGroup({
   )
 }
 
-// ─── Column selector (same pattern as CheckboxGroup) ─────────────────────────
+// ─── Column selector ──────────────────────────────────────────────────────────
 function ColumnSelector({
   selectedCols,
   onToggle,
@@ -189,8 +222,11 @@ export default function ExportRosterPage() {
     return Array.from(s).sort() as string[]
   }, [guests])
 
+  // Count guests with no rank
+  const unsetRankCount = useMemo(() =>
+    guests.filter((g: any) => !g.rankValue).length, [guests])
+
   const carClassOptions = useMemo(() => {
-    // { id, name } pairs — deduplicated
     const map = new Map<string, string>()
     guests.forEach((g: any) => {
       if (g.deservedCarClassId && g.deservedCarClassName)
@@ -201,19 +237,39 @@ export default function ExportRosterPage() {
       .map(([id, name]) => ({ id, name }))
   }, [guests])
 
+  // Count guests with no car class
+  const unsetCarClassCount = useMemo(() =>
+    guests.filter((g: any) => !g.deservedCarClassId).length, [guests])
+
   // Filter state — empty Set means "all selected" (no filter applied)
   const [selRegTypes, setSelRegTypes] = useState<Set<string>>(new Set())
+  // Rank: values are actual rankValue strings OR UNSET sentinel
   const [selRanks, setSelRanks] = useState<Set<string>>(new Set())
+  // Car class: values are carClassId strings OR UNSET sentinel
   const [selCarClassIds, setSelCarClassIds] = useState<Set<string>>(new Set())
   const [selCols, setSelCols] = useState<Set<string>>(new Set(ALL_COLUMNS.map(c => c.key)))
   const [exporting, setExporting] = useState(false)
 
-  // Preview count — client-side filtering
+  // Preview count — client-side filtering (mirrors backend logic)
   const previewCount = useMemo(() => {
     return guests.filter((g: any) => {
       if (selRegTypes.size > 0 && !selRegTypes.has(g.registrationTypeName)) return false
-      if (selRanks.size > 0 && !selRanks.has(g.rankValue)) return false
-      if (selCarClassIds.size > 0 && !selCarClassIds.has(g.deservedCarClassId)) return false
+      if (selRanks.size > 0) {
+        const hasUnset = selRanks.has(UNSET)
+        const realRanks = Array.from(selRanks).filter(r => r !== UNSET)
+        const guestRank = g.rankValue
+        const matchUnset = hasUnset && !guestRank
+        const matchReal = realRanks.length > 0 && guestRank && realRanks.includes(guestRank)
+        if (!matchUnset && !matchReal) return false
+      }
+      if (selCarClassIds.size > 0) {
+        const hasUnset = selCarClassIds.has(UNSET)
+        const realIds = Array.from(selCarClassIds).filter(r => r !== UNSET)
+        const guestClassId = g.deservedCarClassId
+        const matchUnset = hasUnset && !guestClassId
+        const matchReal = realIds.length > 0 && guestClassId && realIds.includes(guestClassId)
+        if (!matchUnset && !matchReal) return false
+      }
       return true
     }).length
   }, [guests, selRegTypes, selRanks, selCarClassIds])
@@ -244,6 +300,10 @@ export default function ExportRosterPage() {
   }
 
   const hasFilters = selRegTypes.size > 0 || selRanks.size > 0 || selCarClassIds.size > 0
+
+  // All-options lists including UNSET sentinel for rank and car class
+  const allRankOpts = [UNSET, ...rankOptions]
+  const allCarClassIds = [UNSET, ...carClassOptions.map(c => c.id)]
 
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-5">
@@ -282,6 +342,7 @@ export default function ExportRosterPage() {
           )}
         </div>
 
+        {/* Registration Type — no (Not Set) needed */}
         <CheckboxGroup
           label="Registration Type"
           options={regTypeOptions}
@@ -291,26 +352,41 @@ export default function ExportRosterPage() {
           onClearAll={() => setSelRegTypes(new Set())}
         />
 
+        {/* Rank — with (Not Set) */}
         <CheckboxGroup
           label="Rank"
           options={rankOptions}
           selected={selRanks}
           onToggle={v => setSelRanks(toggle(selRanks, v))}
-          onSelectAll={() => setSelRanks(new Set(rankOptions))}
+          onSelectAll={() => setSelRanks(new Set(allRankOpts))}
           onClearAll={() => setSelRanks(new Set())}
+          unsetCount={unsetRankCount}
         />
 
+        {/* Deserve Car Class — with (Not Set) */}
+        {/* Car class filter uses IDs internally but displays names */}
         <CheckboxGroup
           label="Deserve Car Class"
           options={carClassOptions.map(c => c.name)}
-          selected={new Set(Array.from(selCarClassIds).map(id => carClassOptions.find(c => c.id === id)?.name ?? ''))}
+          selected={new Set([
+            ...(selCarClassIds.has(UNSET) ? [UNSET] : []),
+            ...Array.from(selCarClassIds)
+              .filter(id => id !== UNSET)
+              .map(id => carClassOptions.find(c => c.id === id)?.name ?? '')
+              .filter(Boolean),
+          ])}
           onToggle={name => {
+            if (name === UNSET) {
+              setSelCarClassIds(toggle(selCarClassIds, UNSET))
+              return
+            }
             const cls = carClassOptions.find(c => c.name === name)
             if (!cls) return
             setSelCarClassIds(toggle(selCarClassIds, cls.id))
           }}
-          onSelectAll={() => setSelCarClassIds(new Set(carClassOptions.map(c => c.id)))}
+          onSelectAll={() => setSelCarClassIds(new Set(allCarClassIds))}
           onClearAll={() => setSelCarClassIds(new Set())}
+          unsetCount={unsetCarClassCount}
         />
       </div>
 

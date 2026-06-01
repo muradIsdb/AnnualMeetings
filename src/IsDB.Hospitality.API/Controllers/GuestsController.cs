@@ -1706,13 +1706,30 @@ public class GuestsController : ApiControllerBase
             .OrderBy(g => g.LastName).ThenBy(g => g.FirstName)
             .ToListAsync(ct);
 
+        // Sentinel for null/empty values
+        const string Unset = "__UNSET__";
+
         // Apply filters
         if (regTypes.Count > 0)
             guests = guests.Where(g => g.RegistrationTypeName != null && regTypes.Contains(g.RegistrationTypeName)).ToList();
         if (rankList.Count > 0)
-            guests = guests.Where(g => g.RankValue != null && rankList.Contains(g.RankValue)).ToList();
-        if (classIds.Count > 0)
-            guests = guests.Where(g => g.DeservedCarClassId.HasValue && classIds.Contains(g.DeservedCarClassId.Value)).ToList();
+        {
+            var includeUnset = rankList.Contains(Unset);
+            var realRanks    = rankList.Where(r => r != Unset).ToList();
+            guests = guests.Where(g =>
+                (includeUnset && string.IsNullOrWhiteSpace(g.RankValue)) ||
+                (realRanks.Count > 0 && !string.IsNullOrWhiteSpace(g.RankValue) && realRanks.Contains(g.RankValue))
+            ).ToList();
+        }
+        if (classIds.Count > 0 || (ParseList(deservedCarClassIds).Contains(Unset)))
+        {
+            var rawClassList  = ParseList(deservedCarClassIds);
+            var includeUnset  = rawClassList.Contains(Unset);
+            guests = guests.Where(g =>
+                (includeUnset && !g.DeservedCarClassId.HasValue) ||
+                (classIds.Count > 0 && g.DeservedCarClassId.HasValue && classIds.Contains(g.DeservedCarClassId.Value))
+            ).ToList();
+        }
 
         // Build CSV
         var sb = new StringBuilder();
