@@ -1394,7 +1394,7 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("LicensePlate")
                         .IsUnique()
-                        .HasFilter("[LicensePlate] IS NOT NULL");
+                        .HasFilter("\"LicensePlate\" IS NOT NULL");
 
                     b.ToTable("Vehicles");
                 });

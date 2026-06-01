@@ -82,7 +82,7 @@ public class VehicleConfiguration : IEntityTypeConfiguration<Vehicle>
         builder.HasKey(v => v.Id);
         builder.Property(v => v.LicensePlate).IsRequired(false).HasMaxLength(20);
         // Allow multiple NULL values — only enforce uniqueness on non-null plates
-        builder.HasIndex(v => v.LicensePlate).IsUnique().HasFilter("[LicensePlate] IS NOT NULL");
+        builder.HasIndex(v => v.LicensePlate).IsUnique().HasFilter("\"LicensePlate\" IS NOT NULL");
         builder.Property(v => v.Make).IsRequired().HasMaxLength(50);
         builder.Property(v => v.Model).IsRequired().HasMaxLength(50);
         builder.Property(v => v.Color).HasMaxLength(30);
