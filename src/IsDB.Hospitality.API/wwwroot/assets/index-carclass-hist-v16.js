@@ -888,8 +888,7 @@ function HD4() {
               ? s.jsx("div", { className: "px-5 py-8 text-center text-sm text-gray-500", children: "No recent check-ins." })
               : data.recentCheckins.map((g, i) => {
                   const c = colorFor(i);
-                  return s.jsxs("div", { key: g.id, className: "px-5 py-3.5 flex items-center gap-3 hover:bg-gray-50 transition-colors cursor-pointer",
-                    onClick: () => navigate("/guests/" + g.id), children: [
+                  return s.jsxs("div", { key: g.id, className: "px-5 py-3.5 flex items-center gap-3 hover:bg-gray-50 transition-colors", children: [
                     s.jsx("div", { className: "w-8 h-8 rounded-full " + c.bg + " flex items-center justify-center flex-shrink-0", children:
                       s.jsx("span", { className: c.text + " font-semibold text-xs", children: g.initials })
                     }),
