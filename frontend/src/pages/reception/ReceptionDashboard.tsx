@@ -160,7 +160,7 @@ export default function ReceptionDashboard() {
 
   const filteredGuests = useMemo(() => {
     if (!data) return [];
-    return data.guests.filter((g) => {
+    return data?.guests.filter((g) => {
       const matchSearch =
         !guestSearch ||
         g.fullName.toLowerCase().includes(guestSearch.toLowerCase()) ||
@@ -264,34 +264,34 @@ export default function ReceptionDashboard() {
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Scheduled</p>
-              <p className="text-3xl font-bold text-gray-700 mt-1">{data.scheduled}</p>
+              <p className="text-3xl font-bold text-gray-700 mt-1">{data?.scheduled}</p>
               <p className="text-xs text-gray-400 mt-1">not yet arrived</p>
             </div>
             <div className="bg-blue-50 rounded-xl border border-blue-100 p-4 shadow-sm">
               <p className="text-xs font-medium text-blue-600 uppercase tracking-wide">Arrived at Airport</p>
-              <p className="text-3xl font-bold text-blue-700 mt-1">{data.arrivedAtAirport}</p>
+              <p className="text-3xl font-bold text-blue-700 mt-1">{data?.arrivedAtAirport}</p>
               <p className="text-xs text-blue-400 mt-1">flight landed</p>
             </div>
             <div className="bg-amber-50 rounded-xl border border-amber-100 p-4 shadow-sm">
               <p className="text-xs font-medium text-amber-600 uppercase tracking-wide">Received by Embassy</p>
-              <p className="text-3xl font-bold text-amber-700 mt-1">{data.receivedByEmbassy}</p>
+              <p className="text-3xl font-bold text-amber-700 mt-1">{data?.receivedByEmbassy}</p>
               <p className="text-xs text-amber-400 mt-1">embassy team received</p>
             </div>
             <div className="bg-indigo-50 rounded-xl border border-indigo-100 p-4 shadow-sm">
               <p className="text-xs font-medium text-indigo-600 uppercase tracking-wide">In Transit → Hotel</p>
-              <p className="text-3xl font-bold text-indigo-700 mt-1">{data.inTransitToHotel}</p>
+              <p className="text-3xl font-bold text-indigo-700 mt-1">{data?.inTransitToHotel}</p>
               <p className="text-xs text-indigo-400 mt-1">vehicle assigned</p>
             </div>
           </div>
 
           {/* Alerts */}
-          {(data.criticalGuests.length > 0 || data.accessibilityGuests.length > 0) && (
+          {(data?.criticalGuests.length > 0 || data?.accessibilityGuests.length > 0) && (
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
               <div className="px-5 py-3 border-b border-gray-100">
                 <h2 className="text-sm font-semibold text-gray-900">Alerts</h2>
               </div>
               <div className="p-4 space-y-2">
-                {data.criticalGuests.map((g) => (
+                {data?.criticalGuests.map((g) => (
                   <div key={g.id} className="flex items-center justify-between bg-red-50 border border-red-100 rounded-lg px-4 py-2.5">
                     <div className="flex items-center gap-3">
                       <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
@@ -311,7 +311,7 @@ export default function ReceptionDashboard() {
                     </div>
                   </div>
                 ))}
-                {data.accessibilityGuests.map((g) => (
+                {data?.accessibilityGuests.map((g) => (
                   <div key={g.id} className="flex items-center justify-between bg-amber-50 border border-amber-100 rounded-lg px-4 py-2.5">
                     <div className="flex items-center gap-3">
                       <span className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0" />
@@ -336,13 +336,13 @@ export default function ReceptionDashboard() {
           )}
 
           {/* Flights Timeline */}
-          {data.flights.length > 0 && (
+          {data?.flights.length > 0 && (
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
               <div className="px-5 py-3 border-b border-gray-100">
                 <h2 className="text-sm font-semibold text-gray-900">Flights Timeline</h2>
               </div>
               <div className="divide-y divide-gray-50">
-                {data.flights.map((f) => (
+                {data?.flights.map((f) => (
                   <div key={f.flightId} className={`px-5 py-3 ${f.flightStatus === 'Cancelled' ? 'opacity-60' : ''}`}>
                     <div className="flex flex-wrap items-center gap-3">
                       <span className="text-sm font-bold text-gray-900">
@@ -381,7 +381,7 @@ export default function ReceptionDashboard() {
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
             <div className="px-5 py-3 border-b border-gray-100 flex flex-wrap items-center gap-3">
               <h2 className="text-sm font-semibold text-gray-900">Guest List</h2>
-              <span className="text-xs text-gray-400">({filteredGuests.length} of {data.guests.length})</span>
+              <span className="text-xs text-gray-400">({filteredGuests.length} of {data?.guests.length})</span>
               <input
                 type="text"
                 placeholder="Search by name or flight..."
@@ -416,7 +416,7 @@ export default function ReceptionDashboard() {
                   {filteredGuests.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="px-4 py-8 text-center text-gray-400 text-sm">
-                        {data.guests.length === 0 ? 'No guests arriving in this date range' : 'No guests match the current filters'}
+                        {data?.guests.length === 0 ? 'No guests arriving in this date range' : 'No guests match the current filters'}
                       </td>
                     </tr>
                   ) : (
