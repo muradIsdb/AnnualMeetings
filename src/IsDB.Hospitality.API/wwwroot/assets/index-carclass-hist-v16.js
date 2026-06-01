@@ -1422,7 +1422,7 @@ function ReceptionDashboard(){
   const alertsSection=alertItems.length>0?s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4 mb-4",children:[s.jsx("h2",{className:"text-base font-semibold text-gray-900 mb-3",children:"Alerts"}),s.jsx("div",{className:"space-y-2",children:alertItems})]}):null;
   const flightsSection=data?.flights&&data?.flights.length>0?s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4 mb-4",children:[
     s.jsx("h2",{className:"text-base font-semibold text-gray-900 mb-3",children:"Flights Timeline"}),
-    s.jsx("div",{className:"space-y-3",children:data?.flights.map(function(fl){return s.jsxs("div",{className:"border border-gray-100 rounded-lg p-3",children:[
+    s.jsx("div",{className:"space-y-3",children:(data?.flights||[]).slice().sort(function(a,b){return new Date(a.scheduledArrival)-new Date(b.scheduledArrival);}).map(function(fl){return s.jsxs("div",{className:"border border-gray-100 rounded-lg p-3",children:[
       s.jsxs("div",{className:"flex items-center justify-between",children:[
         s.jsxs("div",{className:"flex items-center gap-3",children:[
           s.jsx("span",{className:"font-semibold text-gray-900",children:fl.flightNumber||"\u2014"}),
