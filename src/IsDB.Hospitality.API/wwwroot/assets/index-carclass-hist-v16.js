@@ -691,7 +691,11 @@ function HD4() {
   const [loading, setLoading] = N.useState(true);
   const [error, setError] = N.useState(null);
   const [lastUpdated, setLastUpdated] = N.useState(null);
+  const [selectedGuest, setSelectedGuest] = N.useState(null);
+  const [isHotelPending, setIsHotelPending] = N.useState(false);
   const navigate = qt();
+  const queryClient = Ge();
+  const {data: hd4Hotels = []} = ae({queryKey: ["hotels-active"], queryFn: Ad});
 
   const fetchData = N.useCallback(async () => {
     setLoading(true);
@@ -743,6 +747,27 @@ function HD4() {
   }
 
   return s.jsxs("div", { className: "p-6 space-y-6 bg-gray-50 min-h-screen", children: [
+    selectedGuest && s.jsx(EHM4, {
+      guest: selectedGuest,
+      hotels: hd4Hotels,
+      isPending: isHotelPending,
+      onClose: () => setSelectedGuest(null),
+      onConfirm: async (hotelName, roomNumber) => {
+        setIsHotelPending(true);
+        try {
+          await _.patch(`/guests/${selectedGuest.id}/hotel-assignment`, {hotelName, roomNumber});
+          oe.success("Hotel assignment updated");
+          setSelectedGuest(null);
+          queryClient.invalidateQueries({queryKey: ["hotel-summary"]});
+          fetchData();
+        } catch(err) {
+          const msg = err?.response?.data?.message ?? "Failed to update hotel assignment";
+          oe.error(msg);
+        } finally {
+          setIsHotelPending(false);
+        }
+      }
+    }),
     s.jsxs("div", { className: "flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white border-b border-gray-200 px-6 py-4 -mx-6 -mt-6 sticky top-0 z-10 shadow-sm", children: [
       s.jsxs("div", { children: [
         s.jsx("h1", { className: "text-xl font-bold text-gray-900", children: "Hotel Dashboard" }),
@@ -890,7 +915,7 @@ function HD4() {
         ]}),
         s.jsx("div", { className: "divide-y divide-gray-50 max-h-96 overflow-y-auto", children:
           data.guestsWithoutRoom.map(g => s.jsxs("div", { key: g.id, className: "px-5 py-3.5 flex items-center justify-between hover:bg-gray-50 transition-colors", children: [
-            s.jsxs("div", { className: "flex items-center gap-3 cursor-pointer", onClick: () => navigate("/guests/" + g.id), children: [
+            s.jsxs("div", { className: "flex items-center gap-3", children: [
               s.jsx("div", { className: "w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0", children:
                 s.jsx("span", { className: "text-gray-600 font-semibold text-xs", children: g.initials })
               }),
@@ -899,7 +924,7 @@ function HD4() {
                 s.jsx("p", { className: "text-xs text-gray-400", children: (g.hotelName || "Unknown Hotel") + " \xB7 Checked in " + timeAgo(g.checkedInAt) })
               ]})
             ]}),
-            s.jsx("button", { onClick: () => navigate("/hotel/guests"), className: "text-xs bg-green-800 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-green-900 transition-colors", children: "Assign Room" })
+            s.jsx("button", { onClick: () => setSelectedGuest(g), className: "text-xs bg-green-800 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-green-900 transition-colors", children: "Edit Hotel" })
           ]}, g.id))
         })
       ]})
