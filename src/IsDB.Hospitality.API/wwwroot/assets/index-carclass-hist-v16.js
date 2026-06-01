@@ -1408,15 +1408,17 @@ function ReceptionDashboard(){
   ]});
   if(isLoading)return s.jsxs("div",{className:"p-6",children:[filterBar,s.jsx("div",{className:"text-center py-12 text-gray-500",children:"Loading reception data..."})]});
   if(isError||!data)return s.jsxs("div",{className:"p-6",children:[filterBar,s.jsx("div",{className:"bg-red-50 border border-red-200 rounded-xl p-4 text-red-700",children:"Failed to load reception data"})]});
-  const total=(data.scheduled||0)+(data.arrivedAtAirport||0)+(data.receivedByEmbassy||0)+(data.inTransit||0);
-  const kpiCards=s.jsx("div",{className:"grid grid-cols-2 md:grid-cols-5 gap-3 mb-4",children:[
+  const total=data?.totalArriving||0;
+  const checkedIn=Math.max(0,(data?.totalArriving||0)-(data?.scheduled||0)-(data?.arrivedAtAirport||0)-(data?.receivedByEmbassy||0)-(data?.inTransitToHotel||0));
+  const kpiCards=s.jsx("div",{className:"grid grid-cols-2 md:grid-cols-6 gap-3 mb-4",children:[
     s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4",children:[s.jsx("div",{className:"text-2xl font-bold text-gray-900",children:total}),s.jsx("div",{className:"text-sm text-gray-500 mt-1",children:"Total Arriving"})]},0),
     s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4",children:[s.jsx("div",{className:"text-2xl font-bold text-blue-600",children:data?.scheduled||0}),s.jsx("div",{className:"text-sm text-gray-500 mt-1",children:"Scheduled"})]},1),
     s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4",children:[s.jsx("div",{className:"text-2xl font-bold text-amber-600",children:data?.arrivedAtAirport||0}),s.jsx("div",{className:"text-sm text-gray-500 mt-1",children:"Arrived at Airport"})]},2),
     s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4",children:[s.jsx("div",{className:"text-2xl font-bold text-green-600",children:data?.receivedByEmbassy||0}),s.jsx("div",{className:"text-sm text-gray-500 mt-1",children:"Received"})]},3),
-    s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4",children:[s.jsx("div",{className:"text-2xl font-bold text-indigo-600",children:data?.inTransit||0}),s.jsx("div",{className:"text-sm text-gray-500 mt-1",children:"In Transit \u2192 Hotel"})]},4)
+    s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4",children:[s.jsx("div",{className:"text-2xl font-bold text-indigo-600",children:data?.inTransitToHotel||0}),s.jsx("div",{className:"text-sm text-gray-500 mt-1",children:"In Transit \u2192 Hotel"})]},4),
+    s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4",children:[s.jsx("div",{className:"text-2xl font-bold text-gray-600",children:checkedIn}),s.jsx("div",{className:"text-sm text-gray-500 mt-1",children:"Checked In"})]},5)
   ]});
-  const alertItems=(data?.criticalGuests||[]).map(function(g){return s.jsxs("div",{className:"flex items-center justify-between bg-red-50 border border-red-200 rounded-lg px-4 py-2",children:[s.jsxs("div",{children:[s.jsx("span",{className:"font-medium text-red-800",children:g.fullName}),s.jsx("span",{className:"ml-2 text-xs bg-red-200 text-red-800 px-1.5 py-0.5 rounded",children:"Critical"}),!g.vehiclePlate&&s.jsx("span",{className:"ml-2 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded",children:"No Vehicle"})]}),s.jsx("button",{onClick:function(){navigate("/guests/"+g.id);},className:"text-sm text-red-700 hover:underline",children:"View"})]},("c"+g.id));}).concat((data?.accessibilityGuests||[]).map(function(g){return s.jsxs("div",{className:"flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-4 py-2",children:[s.jsxs("div",{children:[s.jsx("span",{className:"font-medium text-amber-800",children:g.fullName}),s.jsx("span",{className:"ml-2 text-xs bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded",children:"Accessibility"}),!g.vehiclePlate&&s.jsx("span",{className:"ml-2 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded",children:"No Vehicle"})]}),s.jsx("button",{onClick:function(){navigate("/guests/"+g.id);},className:"text-sm text-amber-700 hover:underline",children:"View"})]},("a"+g.id));}));
+  const alertItems=(data?.criticalGuests||[]).map(function(g){return s.jsxs("div",{className:"flex items-center justify-between bg-red-50 border border-red-200 rounded-lg px-4 py-2",children:[s.jsxs("div",{children:[s.jsx("span",{className:"font-medium text-red-800",children:g.fullName}),s.jsx("span",{className:"ml-2 text-xs bg-red-200 text-red-800 px-1.5 py-0.5 rounded",children:"Critical"}),!g.activeVehiclePlate&&s.jsx("span",{className:"ml-2 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded",children:"No Vehicle"})]}),s.jsx("button",{onClick:function(){navigate("/guests/"+g.id);},className:"text-sm text-red-700 hover:underline",children:"View"})]},("c"+g.id));}).concat((data?.accessibilityGuests||[]).map(function(g){return s.jsxs("div",{className:"flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-4 py-2",children:[s.jsxs("div",{children:[s.jsx("span",{className:"font-medium text-amber-800",children:g.fullName}),s.jsx("span",{className:"ml-2 text-xs bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded",children:"Accessibility"}),!g.activeVehiclePlate&&s.jsx("span",{className:"ml-2 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded",children:"No Vehicle"})]}),s.jsx("button",{onClick:function(){navigate("/guests/"+g.id);},className:"text-sm text-amber-700 hover:underline",children:"View"})]},("a"+g.id));}));
   const alertsSection=alertItems.length>0?s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4 mb-4",children:[s.jsx("h2",{className:"text-base font-semibold text-gray-900 mb-3",children:"Alerts"}),s.jsx("div",{className:"space-y-2",children:alertItems})]}):null;
   const flightsSection=data?.flights&&data?.flights.length>0?s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4 mb-4",children:[
     s.jsx("h2",{className:"text-base font-semibold text-gray-900 mb-3",children:"Flights Timeline"}),
@@ -1433,12 +1435,12 @@ function ReceptionDashboard(){
   ]}):null;
   const filteredGuests=(data?.guests||[]).filter(function(g){
     const matchSearch=!guestSearch||g.fullName.toLowerCase().includes(guestSearch.toLowerCase());
-    const matchStatus=!statusFilter||g.status===statusFilter;
+    const matchStatus=!statusFilter||g.inboundStatusLabel===statusFilter;
     return matchSearch&&matchStatus;
   });
   const statusBadge=function(st){
-    const map={"Scheduled":"bg-blue-100 text-blue-700","ArrivedAtAirport":"bg-amber-100 text-amber-700","ReceivedByEmbassy":"bg-green-100 text-green-700","VehicleAssigned":"bg-indigo-100 text-indigo-700","CheckedIn":"bg-gray-100 text-gray-700"};
-    const label={"Scheduled":"Scheduled","ArrivedAtAirport":"Arrived","ReceivedByEmbassy":"Received","VehicleAssigned":"In Transit","CheckedIn":"Checked In"};
+    const map={"Scheduled":"bg-blue-100 text-blue-700","Arrived":"bg-amber-100 text-amber-700","Received by Embassy":"bg-green-100 text-green-700","In Transit → Hotel":"bg-indigo-100 text-indigo-700","At Hotel":"bg-gray-100 text-gray-700"};
+    const label={"Scheduled":"Scheduled","Arrived":"Arrived","Received by Embassy":"Received","In Transit → Hotel":"In Transit","At Hotel":"Checked In"};
     return s.jsx("span",{className:"text-xs px-2 py-0.5 rounded-full font-medium "+(map[st]||"bg-gray-100 text-gray-600"),children:label[st]||st});
   };
   const guestListSection=s.jsxs("div",{className:"bg-white rounded-xl border border-gray-200 p-4",children:[
@@ -1449,10 +1451,10 @@ function ReceptionDashboard(){
         s.jsxs("select",{value:statusFilter,onChange:function(e){setStatusFilter(e.target.value);},className:"border border-gray-300 rounded-lg px-2 py-1.5 text-sm",children:[
           s.jsx("option",{value:"",children:"All Statuses"},0),
           s.jsx("option",{value:"Scheduled",children:"Scheduled"},1),
-          s.jsx("option",{value:"ArrivedAtAirport",children:"Arrived"},2),
-          s.jsx("option",{value:"ReceivedByEmbassy",children:"Received"},3),
-          s.jsx("option",{value:"VehicleAssigned",children:"In Transit"},4),
-          s.jsx("option",{value:"CheckedIn",children:"Checked In"},5)
+          s.jsx("option",{value:"Arrived",children:"Arrived at Airport"},2),
+          s.jsx("option",{value:"Received by Embassy",children:"Received"},3),
+          s.jsx("option",{value:"In Transit → Hotel",children:"In Transit"},4),
+          s.jsx("option",{value:"At Hotel",children:"Checked In"},5)
         ]})
       ]})
     ]}),
@@ -1469,8 +1471,8 @@ function ReceptionDashboard(){
         s.jsx("td",{className:"py-2 pr-4 font-medium text-gray-900",children:g.fullName}),
         s.jsx("td",{className:"py-2 pr-4 text-gray-500",children:g.flightNumber||"\u2014"}),
         s.jsx("td",{className:"py-2 pr-4 text-gray-500",children:g.scheduledArrival?new Date(g.scheduledArrival).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"\u2014"}),
-        s.jsx("td",{className:"py-2 pr-4",children:statusBadge(g.status)}),
-        s.jsx("td",{className:"py-2 pr-4 text-gray-500",children:g.vehiclePlate||"\u2014"})
+        s.jsx("td",{className:"py-2 pr-4",children:statusBadge(g.inboundStatusLabel)}),
+        s.jsx("td",{className:"py-2 pr-4 text-gray-500",children:g.activeVehiclePlate||"\u2014"})
       ]},g.id);})})
     ]})}),
     s.jsxs("div",{className:"mt-3 text-xs text-gray-400 flex items-center justify-between",children:[
