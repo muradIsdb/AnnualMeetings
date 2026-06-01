@@ -12,7 +12,7 @@ Produces /tmp/bundle_export_roster.js
 import re
 import sys
 
-WORKING_BUNDLE = "/home/ubuntu/AnnualMeetingsRepo/src/IsDB.Hospitality.API/wwwroot/assets/index-carclass-hist-v16.js"
+WORKING_BUNDLE = "/tmp/bundle_pre_export.js"  # last good bundle (has HD4, V4, all hotel features, no ExportRosterPage)
 NEW_COMPONENT_JS = "/home/ubuntu/new_export_roster.js"
 OUTPUT_BUNDLE = "/tmp/bundle_export_roster.js"
 
@@ -20,16 +20,20 @@ print("Reading source files...")
 content = open(WORKING_BUNDLE, "r", encoding="utf-8").read()
 new_component = open(NEW_COMPONENT_JS, "r", encoding="utf-8").read()
 
-# ── Step 1: Inject component code before T6 nav array ────────────────────────
-T6_MARKER = 'T6=[{to:"/staff"'
-t6_idx = content.find(T6_MARKER)
-if t6_idx == -1:
-    print("ERROR: Could not find T6 nav array marker.")
+# ── Step 1: Inject component code after M6 nav array (safe statement boundary) ─
+# M6 is the last nav array; it ends with '];' followed by 'function O6('
+# This is a safe top-level statement boundary — no trailing comma issues.
+SAFE_MARKER = '];function O6('
+safe_idx = content.find(SAFE_MARKER)
+if safe_idx == -1:
+    print("ERROR: Could not find safe injection marker '];function O6('.")
     sys.exit(1)
-print(f"  T6 nav array found at index {t6_idx}")
+print(f"  Safe injection point found at index {safe_idx}")
 
-# Insert component code just before T6
-content = content[:t6_idx] + new_component.strip() + "\n" + content[t6_idx:]
+# Insert component code after the ']' (i.e., after the semicolon boundary)
+# We insert at safe_idx+1 so we're after ']' and before ';function O6('
+insert_at = safe_idx + 1  # after ']'
+content = content[:insert_at] + ";" + new_component.strip() + content[insert_at:]
 print(f"  Component injected ({len(new_component):,} chars)")
 
 # ── Step 2: Add Export nav item to T6 (Administration section) ───────────────
