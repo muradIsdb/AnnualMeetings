@@ -269,8 +269,8 @@ public class VehiclesController : ApiControllerBase
         int iCarClass = Array.IndexOf(cols, "carclass") >= 0 ? Array.IndexOf(cols, "carclass") : Array.IndexOf(cols, "class");
         int iCarNumber = Array.IndexOf(cols, "carnumber") >= 0 ? Array.IndexOf(cols, "carnumber") : Array.IndexOf(cols, "car#");
 
-        if (iMake < 0 || iModel < 0 || iPlate < 0)
-            return BadRequest(new { message = "CSV must have columns: Make, Model, LicensePlate (or Plate), Color (optional), CarClass (optional)." });
+        if (iMake < 0 || iModel < 0)
+            return BadRequest(new { message = "CSV must have columns: Make, Model, LicensePlate (optional), CarNumber (optional), Color (optional), CarClass (optional)." });
 
         // Pre-load all car classes for name lookup (case-insensitive)
         var allCarClasses = await _db.CarClasses.ToListAsync();
@@ -283,7 +283,7 @@ public class VehiclesController : ApiControllerBase
             if (string.IsNullOrWhiteSpace(line)) continue;
 
             var parts = line.Split(',');
-            if (parts.Length <= Math.Max(iMake, Math.Max(iModel, iPlate)))
+            if (parts.Length <= Math.Max(iMake, iModel))
             {
                 errors.Add($"Line {lineNum}: not enough columns.");
                 skipped++;
@@ -292,12 +292,12 @@ public class VehiclesController : ApiControllerBase
 
             var make = parts[iMake].Trim();
             var model = parts[iModel].Trim();
-            var plate = parts[iPlate].Trim().ToUpper();
+            var plate = iPlate >= 0 && parts.Length > iPlate ? parts[iPlate].Trim().ToUpper() : null;
             var color = iColor >= 0 && parts.Length > iColor ? parts[iColor].Trim() : null;
             var carClassName = iCarClass >= 0 && parts.Length > iCarClass ? parts[iCarClass].Trim() : null;
             var carNumber = iCarNumber >= 0 && parts.Length > iCarNumber ? parts[iCarNumber].Trim() : null;
             // Skip comment lines (lines starting with #)
-            if (make.StartsWith("#") || model.StartsWith("#") || plate.StartsWith("#")) { skipped++; continue; }
+            if (make.StartsWith("#") || model.StartsWith("#")) { skipped++; continue; }
             // Look up car class by name (case-insensitive)
             Guid? carClassId = null;
             if (!string.IsNullOrEmpty(carClassName))
@@ -310,15 +310,15 @@ public class VehiclesController : ApiControllerBase
                     errors.Add($"Line {lineNum}: CarClass '{carClassName}' not found — vehicle imported without class.");
             }
 
-            if (string.IsNullOrEmpty(make) || string.IsNullOrEmpty(model) || string.IsNullOrEmpty(plate))
+            if (string.IsNullOrEmpty(make) || string.IsNullOrEmpty(model))
             {
-                errors.Add($"Line {lineNum}: Make, Model, and Plate are required.");
+                errors.Add($"Line {lineNum}: Make and Model are required.");
                 skipped++;
                 continue;
             }
 
-            // Skip duplicates by plate
-            if (await _db.Vehicles.AnyAsync(v => v.LicensePlate == plate))
+            // Skip duplicates by plate (only when a plate is provided)
+            if (!string.IsNullOrEmpty(plate) && await _db.Vehicles.AnyAsync(v => v.LicensePlate == plate))
             {
                 errors.Add($"Line {lineNum}: Plate '{plate}' already exists — skipped.");
                 skipped++;
@@ -330,9 +330,10 @@ public class VehiclesController : ApiControllerBase
                 Id = Guid.NewGuid(),
                 Make = make,
                 Model = model,
-                LicensePlate = plate,
+                LicensePlate = string.IsNullOrEmpty(plate) ? null : plate,
                 Color = string.IsNullOrEmpty(color) ? null : color,
                 CarNumber = string.IsNullOrEmpty(carNumber) ? null : carNumber,
+                // CarNumber is already optional — null when not provided
                 // Default: NotProvided — set to Available when the vehicle physically arrives on site
                 Status = VehicleStatus.NotProvided,
                 IsActive = true,
