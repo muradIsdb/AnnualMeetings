@@ -1365,7 +1365,6 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                         .HasColumnType("boolean");
 
                     b.Property<string>("LicensePlate")
-                        .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("text");
 
@@ -1394,7 +1393,8 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.HasIndex("CurrentGuestId");
 
                     b.HasIndex("LicensePlate")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"LicensePlate\" IS NOT NULL");
 
                     b.ToTable("Vehicles");
                 });

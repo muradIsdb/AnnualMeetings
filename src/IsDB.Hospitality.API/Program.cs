@@ -142,6 +142,22 @@ using (var scope = app.Services.CreateScope())
         }
         await dbConn.CloseAsync();
 
+        // ALWAYS ensure LicensePlate is nullable, regardless of which DB path is taken.
+        // This runs before MigrateAsync() so the EF migration can succeed if it hasn't run yet.
+        logger.LogInformation("Ensuring Vehicles.LicensePlate is nullable (idempotent pre-check)...");
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Vehicles' AND column_name = 'LicensePlate'
+                    AND is_nullable = 'NO'
+                ) THEN
+                    ALTER TABLE ""Vehicles"" ALTER COLUMN ""LicensePlate"" DROP NOT NULL;
+                END IF;
+            END $$;
+        ");
+        logger.LogInformation("LicensePlate nullable pre-check complete.");
+
         if (isFreshDatabase || isEfCoreCreatedDb)
         {
             // Fresh or EF Core-managed database: run MigrateAsync() directly.
@@ -576,6 +592,26 @@ using (var scope = app.Services.CreateScope())
                     ALTER TABLE ""EventsAirConfigs"" ADD COLUMN ""OAuthScope"" text NOT NULL DEFAULT '';
                 END IF;
             END $$;
+        ");
+
+        // Make LicensePlate nullable in Vehicles (MakeVehicleLicensePlateOptional migration)
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Vehicles' AND column_name = 'LicensePlate'
+                    AND is_nullable = 'NO'
+                ) THEN
+                    ALTER TABLE ""Vehicles"" ALTER COLUMN ""LicensePlate"" DROP NOT NULL;
+                END IF;
+            END $$;
+            DROP INDEX IF EXISTS ""IX_Vehicles_LicensePlate"";
+            CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Vehicles_LicensePlate""
+                ON ""Vehicles""(""LicensePlate"")
+                WHERE ""LicensePlate"" IS NOT NULL;
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260601100000_MakeVehicleLicensePlateOptional', '9.0.0')
+            ON CONFLICT DO NOTHING;
         ");
 
         // Apply all remaining pending migrations
