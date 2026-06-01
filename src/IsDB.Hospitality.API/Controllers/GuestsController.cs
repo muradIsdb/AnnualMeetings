@@ -1659,6 +1659,139 @@ public class GuestsController : ApiControllerBase
                 break;
         }
     }
+
+    // ─── Export Roster ────────────────────────────────────────────────────────
+    // GET /api/guests/export
+    // Admin-only: export filtered guest roster as CSV.
+    // Query params:
+    //   registrationTypes  – comma-separated list of RegistrationTypeName values
+    //   ranks              – comma-separated list of RankValue values
+    //   deservedCarClassIds – comma-separated list of CarClass GUIDs
+    //   columns            – comma-separated list of column keys to include
+    // ──────────────────────────────────────────────────────────────────────────
+    [HttpGet("export")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> ExportRosterCsv(
+        [FromServices] AppDbContext db,
+        [FromQuery] string? registrationTypes = null,
+        [FromQuery] string? ranks = null,
+        [FromQuery] string? deservedCarClassIds = null,
+        [FromQuery] string? columns = null,
+        CancellationToken ct = default)
+    {
+        // Parse filter lists
+        var regTypes = ParseList(registrationTypes);
+        var rankList = ParseList(ranks);
+        var classIds = ParseList(deservedCarClassIds)
+            .Select(s => Guid.TryParse(s, out var g) ? (Guid?)g : null)
+            .Where(g => g.HasValue).Select(g => g!.Value).ToList();
+
+        // Parse requested columns (default: all)
+        var allColumns = new[] {
+            "title","name","rank","country","registrationType","deservedCarClass",
+            "arrivalFlight","arrivalAirline","arrivalDateTime","arrivalRoute",
+            "departureFlight","departureAirline","departureDatetime","departureRoute",
+            "carNumber","driverName","driverPhone","hotelName","roomNumber"
+        };
+        var requestedCols = string.IsNullOrWhiteSpace(columns)
+            ? new HashSet<string>(allColumns)
+            : new HashSet<string>(ParseList(columns));
+
+        // Build query with required joins
+        var guests = await db.Guests
+            .Where(g => g.IsActive)
+            .Include(g => g.TravelBookings).ThenInclude(tb => tb.Flight)
+            .Include(g => g.VehicleAssignments.Where(va => va.IsActive)).ThenInclude(va => va.Vehicle).ThenInclude(v => v.Driver)
+            .Include(g => g.DeservedCarClass)
+            .OrderBy(g => g.LastName).ThenBy(g => g.FirstName)
+            .ToListAsync(ct);
+
+        // Apply filters
+        if (regTypes.Count > 0)
+            guests = guests.Where(g => g.RegistrationTypeName != null && regTypes.Contains(g.RegistrationTypeName)).ToList();
+        if (rankList.Count > 0)
+            guests = guests.Where(g => g.RankValue != null && rankList.Contains(g.RankValue)).ToList();
+        if (classIds.Count > 0)
+            guests = guests.Where(g => g.DeservedCarClassId.HasValue && classIds.Contains(g.DeservedCarClassId.Value)).ToList();
+
+        // Build CSV
+        var sb = new StringBuilder();
+
+        // Header row — only requested columns
+        var headers = new List<string>();
+        if (requestedCols.Contains("title"))           headers.Add("Title");
+        if (requestedCols.Contains("name"))            headers.Add("Name");
+        if (requestedCols.Contains("rank"))            headers.Add("Rank");
+        if (requestedCols.Contains("country"))         headers.Add("Country");
+        if (requestedCols.Contains("registrationType")) headers.Add("Registration Type");
+        if (requestedCols.Contains("deservedCarClass")) headers.Add("Deserve Car Class");
+        if (requestedCols.Contains("arrivalFlight"))   headers.Add("Arrival Flight No.");
+        if (requestedCols.Contains("arrivalAirline"))  headers.Add("Arrival Airline");
+        if (requestedCols.Contains("arrivalDateTime")) headers.Add("Arrival Date/Time");
+        if (requestedCols.Contains("arrivalRoute"))    headers.Add("Arrival Route");
+        if (requestedCols.Contains("departureFlight")) headers.Add("Departure Flight No.");
+        if (requestedCols.Contains("departureAirline")) headers.Add("Departure Airline");
+        if (requestedCols.Contains("departureDatetime")) headers.Add("Departure Date/Time");
+        if (requestedCols.Contains("departureRoute"))  headers.Add("Departure Route");
+        if (requestedCols.Contains("carNumber"))       headers.Add("Car Number");
+        if (requestedCols.Contains("driverName"))      headers.Add("Driver Name");
+        if (requestedCols.Contains("driverPhone"))     headers.Add("Driver Phone");
+        if (requestedCols.Contains("hotelName"))       headers.Add("Hotel Name");
+        if (requestedCols.Contains("roomNumber"))      headers.Add("Room Number");
+        sb.AppendLine(string.Join(",", headers));
+
+        // Data rows
+        foreach (var g in guests)
+        {
+            var arrivalBooking  = g.TravelBookings.FirstOrDefault(tb => tb.IsArrival);
+            var departureBooking = g.TravelBookings.FirstOrDefault(tb => !tb.IsArrival);
+            var activeAssignment = g.VehicleAssignments.FirstOrDefault(va => va.IsActive);
+            var vehicle = activeAssignment?.Vehicle;
+            var driver  = vehicle?.Driver;
+
+            var row = new List<string>();
+            if (requestedCols.Contains("title"))           row.Add(EscapeRosterCsv(g.Title ?? ""));
+            if (requestedCols.Contains("name"))            row.Add(EscapeRosterCsv($"{g.FirstName} {g.LastName}".Trim()));
+            if (requestedCols.Contains("rank"))            row.Add(EscapeRosterCsv(g.RankValue ?? ""));
+            if (requestedCols.Contains("country"))         row.Add(EscapeRosterCsv(g.Country ?? ""));
+            if (requestedCols.Contains("registrationType")) row.Add(EscapeRosterCsv(g.RegistrationTypeName ?? ""));
+            if (requestedCols.Contains("deservedCarClass")) row.Add(EscapeRosterCsv(g.DeservedCarClass?.Name ?? ""));
+            if (requestedCols.Contains("arrivalFlight"))   row.Add(EscapeRosterCsv(arrivalBooking?.Flight?.FlightNumber ?? ""));
+            if (requestedCols.Contains("arrivalAirline"))  row.Add(EscapeRosterCsv(arrivalBooking?.Flight?.AirlineName ?? ""));
+            if (requestedCols.Contains("arrivalDateTime")) row.Add(EscapeRosterCsv(arrivalBooking?.Flight?.ScheduledArrival.ToString("yyyy-MM-dd HH:mm") ?? ""));
+            if (requestedCols.Contains("arrivalRoute"))    row.Add(EscapeRosterCsv($"{arrivalBooking?.Flight?.DeparturePortIataCode ?? ""} → {arrivalBooking?.Flight?.ArrivalPortIataCode ?? ""}".Trim(' ', '→', ' ')));
+            if (requestedCols.Contains("departureFlight")) row.Add(EscapeRosterCsv(departureBooking?.Flight?.FlightNumber ?? ""));
+            if (requestedCols.Contains("departureAirline")) row.Add(EscapeRosterCsv(departureBooking?.Flight?.AirlineName ?? ""));
+            if (requestedCols.Contains("departureDatetime")) row.Add(EscapeRosterCsv(departureBooking?.Flight?.ScheduledDeparture.ToString("yyyy-MM-dd HH:mm") ?? ""));
+            if (requestedCols.Contains("departureRoute"))  row.Add(EscapeRosterCsv($"{departureBooking?.Flight?.DeparturePortIataCode ?? ""} → {departureBooking?.Flight?.ArrivalPortIataCode ?? ""}".Trim(' ', '→', ' ')));
+            if (requestedCols.Contains("carNumber"))       row.Add(EscapeRosterCsv(vehicle?.CarNumber ?? ""));
+            if (requestedCols.Contains("driverName"))      row.Add(EscapeRosterCsv(driver?.FullName ?? vehicle?.DriverName ?? ""));
+            if (requestedCols.Contains("driverPhone"))     row.Add(EscapeRosterCsv(driver?.Phone ?? vehicle?.DriverPhone ?? ""));
+            if (requestedCols.Contains("hotelName"))       row.Add(EscapeRosterCsv(g.HotelName ?? ""));
+            if (requestedCols.Contains("roomNumber"))      row.Add(EscapeRosterCsv(g.RoomNumber ?? ""));
+            sb.AppendLine(string.Join(",", row));
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(sb.ToString());
+        var fileName = $"roster_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
+        return File(bytes, "text/csv", fileName);
+    }
+
+    private static List<string> ParseList(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return new List<string>();
+        return value.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => s.Trim())
+                    .Where(s => !string.IsNullOrEmpty(s))
+                    .ToList();
+    }
+
+    private static string EscapeRosterCsv(string value)
+    {
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+            return $"\"{ value.Replace("\"", "\"\"")}\"";
+        return value;
+    }
 }
 public record UpdateStatusRequest(GuestStatus Status, string? Notes = null);
 public record CompleteChecklistRequest(string? Notes = null);
