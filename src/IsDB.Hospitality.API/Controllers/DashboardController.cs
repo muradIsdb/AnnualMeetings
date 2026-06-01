@@ -23,6 +23,17 @@ public class DashboardController : ApiControllerBase
     }
 
     /// <summary>
+    /// Returns hotel-focused summary data: occupancy, en-route guests, departure status, recent check-ins.
+    /// Used by the Hotel Dashboard (Admin and Hotel roles).
+    /// </summary>
+    [HttpGet("hotel-summary")]
+    public async Task<ActionResult<HotelSummaryDto>> GetHotelSummary()
+    {
+        var result = await Mediator.Send(new GetHotelSummaryQuery());
+        return Ok(result);
+    }
+
+    /// <summary>
     /// Returns reception-focused summary data filtered by inbound flight ScheduledArrival date range.
     /// Used by the Reception Dashboard (Admin and Airport roles).
     /// </summary>
