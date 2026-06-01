@@ -21,4 +21,21 @@ public class DashboardController : ApiControllerBase
         var result = await Mediator.Send(new GetRegistrationTypeStatsQuery());
         return Ok(result);
     }
+
+    /// <summary>
+    /// Returns reception-focused summary data filtered by inbound flight ScheduledArrival date range.
+    /// Used by the Reception Dashboard (Admin and Airport roles).
+    /// </summary>
+    [HttpGet("reception-summary")]
+    public async Task<ActionResult<ReceptionSummaryDto>> GetReceptionSummary(
+        [FromQuery] string? from = null,
+        [FromQuery] string? to = null)
+    {
+        var fromDate = !string.IsNullOrWhiteSpace(from) && DateTime.TryParse(from, out var f)
+            ? f : DateTime.UtcNow.Date;
+        var toDate = !string.IsNullOrWhiteSpace(to) && DateTime.TryParse(to, out var t)
+            ? t : fromDate;
+        var result = await Mediator.Send(new GetReceptionSummaryQuery(fromDate, toDate));
+        return Ok(result);
+    }
 }
