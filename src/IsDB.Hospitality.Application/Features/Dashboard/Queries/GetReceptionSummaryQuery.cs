@@ -75,10 +75,24 @@ public class GetReceptionSummaryQueryHandler : IRequestHandler<GetReceptionSumma
         };
 
         int total      = guestBookings.Count;
+        
+        // Arrival (current status)
         int scheduled  = guestBookings.Count(x => x.Guest.InboundStatus == InboundStatus.ArrivalScheduled);
         int arrived    = guestBookings.Count(x => x.Guest.InboundStatus == InboundStatus.Arrived);
         int received   = guestBookings.Count(x => x.Guest.InboundStatus == InboundStatus.ReceivedByEmbassyTeam);
         int inTransit  = guestBookings.Count(x => x.Guest.InboundStatus == InboundStatus.VehicleAssigned);
+        int atHotel    = guestBookings.Count(x => x.Guest.InboundStatus == InboundStatus.AtHotel);
+        
+        // Arrival (cumulative)
+        // EverArrived: Any status >= Arrived (1)
+        int everArrived = guestBookings.Count(x => (int)x.Guest.InboundStatus >= (int)InboundStatus.Arrived);
+        // EverReceived: Any status >= ReceivedByEmbassyTeam (2)
+        int everReceived = guestBookings.Count(x => (int)x.Guest.InboundStatus >= (int)InboundStatus.ReceivedByEmbassyTeam);
+        
+        // Departure (current status)
+        int inTransferToAirport = guestBookings.Count(x => x.Guest.OutboundStatus == OutboundStatus.InTransferToAirport);
+        int atAirport           = guestBookings.Count(x => x.Guest.OutboundStatus == OutboundStatus.AtAirport);
+        int boardingCompleted   = guestBookings.Count(x => x.Guest.OutboundStatus == OutboundStatus.BoardingCompleted);
 
         // ── 5. Alert guests ──────────────────────────────────────────────────────
         var criticalGuests = guestBookings
@@ -169,6 +183,12 @@ public class GetReceptionSummaryQueryHandler : IRequestHandler<GetReceptionSumma
             ArrivedAtAirport    = arrived,
             ReceivedByEmbassy   = received,
             InTransitToHotel    = inTransit,
+            AtHotel             = atHotel,
+            EverArrived         = everArrived,
+            EverReceived        = everReceived,
+            InTransferToAirport = inTransferToAirport,
+            AtAirport           = atAirport,
+            BoardingCompleted   = boardingCompleted,
             CriticalGuests      = criticalGuests,
             AccessibilityGuests = accessibilityGuests,
             Flights             = flights,

@@ -2,12 +2,22 @@ namespace IsDB.Hospitality.Application.DTOs.Dashboard;
 
 public class ReceptionSummaryDto
 {
-    // ── KPI counts ────────────────────────────────────────────────────────────
+    // ── Arrival KPI counts ──────────────────────────────────────────────────
     public int TotalArriving { get; set; }
     public int Scheduled { get; set; }
     public int ArrivedAtAirport { get; set; }
     public int ReceivedByEmbassy { get; set; }
     public int InTransitToHotel { get; set; }
+    public int AtHotel { get; set; }
+    
+    // ── Cumulative Arrival counts ───────────────────────────────────────────
+    public int EverArrived { get; set; }
+    public int EverReceived { get; set; }
+    
+    // ── Departure KPI counts ────────────────────────────────────────────────
+    public int InTransferToAirport { get; set; }
+    public int AtAirport { get; set; }
+    public int BoardingCompleted { get; set; }
 
     // ── Alerts ────────────────────────────────────────────────────────────────
     public List<ReceptionAlertGuestDto> CriticalGuests { get; set; } = new();
