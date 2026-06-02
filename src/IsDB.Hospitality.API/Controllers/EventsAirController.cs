@@ -636,4 +636,84 @@ public class EventsAirController : ApiControllerBase
             pageSize
         });
     }
+
+    // GET /api/eventsair/events
+    // Returns all EventsAir events whose name contains "annual" (case-insensitive),
+    // sorted by startDate descending. Used to populate the Event Code dropdown in the config UI.
+    [HttpGet("events")]
+    public async Task<ActionResult<List<Application.DTOs.EventsAir.EventsAirEventDto>>> GetEvents()
+    {
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync();
+        if (config == null || string.IsNullOrWhiteSpace(config.ClientId) || string.IsNullOrWhiteSpace(config.ClientSecret))
+        {
+            return Ok(new List<Application.DTOs.EventsAir.EventsAirEventDto>());
+        }
+
+        try
+        {
+            var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+                config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+
+            var client = _httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(30);
+
+            // Query EventsAir for events whose name contains "annual"
+            var graphqlQuery = @"{
+  events(
+    input: { where: { name: { comparisonType: CONTAINS, value: \""annual\"" } } }
+    limit: 200
+    offset: 0
+  ) {
+    uniqueCode
+    name
+    startDate
+    endDate
+  }
+}";
+
+            var queryBody = System.Text.Json.JsonSerializer.Serialize(new { query = graphqlQuery });
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
+            {
+                Headers = { { "Authorization", $"Bearer {token}" } },
+                Content = new StringContent(queryBody, System.Text.Encoding.UTF8, "application/json")
+            };
+
+            var response = await client.SendAsync(req);
+            response.EnsureSuccessStatusCode();
+
+            var json = await response.Content.ReadAsStringAsync();
+            var doc = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
+
+            var eventsArray = doc.GetProperty("data").GetProperty("events");
+            var result = new List<Application.DTOs.EventsAir.EventsAirEventDto>();
+
+            foreach (var ev in eventsArray.EnumerateArray())
+            {
+                var uniqueCode = ev.TryGetProperty("uniqueCode", out var uc) ? uc.GetString() ?? "" : "";
+                var name = ev.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                var startDate = ev.TryGetProperty("startDate", out var sd) ? sd.GetString() : null;
+                var endDate = ev.TryGetProperty("endDate", out var ed) ? ed.GetString() : null;
+
+                result.Add(new Application.DTOs.EventsAir.EventsAirEventDto
+                {
+                    UniqueCode = uniqueCode,
+                    Name = name,
+                    StartDate = startDate,
+                    EndDate = endDate
+                });
+            }
+
+            // Sort by startDate descending (most recent first)
+            result = result
+                .OrderByDescending(e => e.StartDate ?? "")
+                .ToList();
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            // Return empty list on error so the UI can fall back gracefully
+            return Ok(new List<Application.DTOs.EventsAir.EventsAirEventDto>());
+        }
+    }
 }
