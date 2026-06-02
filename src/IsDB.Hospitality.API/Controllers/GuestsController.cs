@@ -1587,6 +1587,52 @@ public class GuestsController : ApiControllerBase
         return Ok(new { acknowledged = bookings.Count });
     }
 
+    /// <summary>Update hotel name and/or room number for a guest already at hotel. Admin and Hotel roles only.</summary>
+    [HttpPatch("{id:guid}/hotel-assignment")]
+    public async Task<IActionResult> UpdateHotelAssignment(
+        Guid id,
+        [FromBody] UpdateHotelAssignmentRequest req,
+        [FromServices] AppDbContext db,
+        CancellationToken ct)
+    {
+        var callerRole = GetCallerRole();
+        var isAdmin = callerRole == UserRole.Admin;
+        var isHotel = callerRole == UserRole.Hotel;
+        if (!isAdmin && !isHotel)
+            return Forbid();
+
+        var guest = await db.Guests.FindAsync(new object[] { id }, ct);
+        if (guest == null) return NotFound();
+
+        if (guest.InboundStatus != InboundStatus.AtHotel)
+            return BadRequest(new { message = "Hotel assignment can only be updated after the guest has arrived at the hotel." });
+
+        // Build diff notes
+        var parts = new List<string>();
+        if (req.HotelName != null && req.HotelName != guest.HotelName)
+            parts.Add($"Hotel: {guest.HotelName ?? "(none)"} \u2192 {req.HotelName}");
+        if (req.RoomNumber != null && req.RoomNumber != guest.RoomNumber)
+            parts.Add($"Room: {guest.RoomNumber ?? "(none)"} \u2192 {req.RoomNumber}");
+
+        if (parts.Count == 0)
+            return Ok(new { message = "No changes detected." });
+
+        // Apply changes
+        if (req.HotelName != null) guest.HotelName = string.IsNullOrWhiteSpace(req.HotelName) ? null : req.HotelName.Trim();
+        if (req.RoomNumber != null) guest.RoomNumber = string.IsNullOrWhiteSpace(req.RoomNumber) ? null : req.RoomNumber.Trim();
+        guest.UpdatedAt = DateTime.UtcNow;
+
+        // Record history
+        await AddHistoryEntry(db, guest.Id, StatusTrack.Inbound,
+            (int)InboundStatus.AtHotel,
+            "Hotel Assignment Updated",
+            CurrentUserId, GetCallerName(), callerRole,
+            false, string.Join(", ", parts));
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Hotel assignment updated.", notes = string.Join(", ", parts) });
+    }
+
     private async Task SendUndoOutboundNotification(
         AppDbContext db, Guest guest, int undoneStatusValue, CancellationToken ct)
     {
@@ -1613,6 +1659,161 @@ public class GuestsController : ApiControllerBase
                 break;
         }
     }
+
+    // ─── Export Roster ────────────────────────────────────────────────────────
+    // GET /api/guests/export
+    // Admin-only: export filtered guest roster as CSV.
+    // Query params:
+    //   registrationTypes  – comma-separated list of RegistrationTypeName values
+    //   ranks              – comma-separated list of RankValue values
+    //   deservedCarClassIds – comma-separated list of CarClass GUIDs
+    //   columns            – comma-separated list of column keys to include
+    // ──────────────────────────────────────────────────────────────────────────
+    [HttpGet("export")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> ExportRosterCsv(
+        [FromServices] AppDbContext db,
+        [FromQuery] string? registrationTypes = null,
+        [FromQuery] string? ranks = null,
+        [FromQuery] string? deservedCarClassIds = null,
+        [FromQuery] string? columns = null,
+        CancellationToken ct = default)
+    {
+        // Parse filter lists
+        var regTypes = ParseList(registrationTypes);
+        var rankList = ParseList(ranks);
+        var classIds = ParseList(deservedCarClassIds)
+            .Select(s => Guid.TryParse(s, out var g) ? (Guid?)g : null)
+            .Where(g => g.HasValue).Select(g => g!.Value).ToList();
+
+        // Parse requested columns (default: all)
+        var allColumns = new[] {
+            "title","name","rank","country","registrationType","deservedCarClass",
+            "arrivalFlight","arrivalAirline","arrivalDateTime","arrivalRoute",
+            "departureFlight","departureAirline","departureDatetime","departureRoute",
+            "carNumber","driverName","driverPhone","assignedCarClass","assignmentType","hotelName","roomNumber"
+        };
+        var requestedCols = string.IsNullOrWhiteSpace(columns)
+            ? new HashSet<string>(allColumns)
+            : new HashSet<string>(ParseList(columns));
+
+        // Build query with required joins
+        var guests = await db.Guests
+            .Where(g => g.IsActive)
+            .Include(g => g.TravelBookings).ThenInclude(tb => tb.Flight)
+            .Include(g => g.VehicleAssignments.Where(va => va.IsActive)).ThenInclude(va => va.Vehicle).ThenInclude(v => v.Driver)
+            .Include(g => g.VehicleAssignments.Where(va => va.IsActive)).ThenInclude(va => va.Vehicle).ThenInclude(v => v.CarClass)
+            .Include(g => g.DeservedCarClass)
+            .OrderBy(g => g.LastName).ThenBy(g => g.FirstName)
+            .ToListAsync(ct);
+
+        // Sentinel for null/empty values
+        const string Unset = "__UNSET__";
+
+        // Apply filters
+        if (regTypes.Count > 0)
+            guests = guests.Where(g => g.RegistrationTypeName != null && regTypes.Contains(g.RegistrationTypeName)).ToList();
+        if (rankList.Count > 0)
+        {
+            var includeUnset = rankList.Contains(Unset);
+            var realRanks    = rankList.Where(r => r != Unset).ToList();
+            guests = guests.Where(g =>
+                (includeUnset && string.IsNullOrWhiteSpace(g.RankValue)) ||
+                (realRanks.Count > 0 && !string.IsNullOrWhiteSpace(g.RankValue) && realRanks.Contains(g.RankValue))
+            ).ToList();
+        }
+        if (classIds.Count > 0 || (ParseList(deservedCarClassIds).Contains(Unset)))
+        {
+            var rawClassList  = ParseList(deservedCarClassIds);
+            var includeUnset  = rawClassList.Contains(Unset);
+            guests = guests.Where(g =>
+                (includeUnset && !g.DeservedCarClassId.HasValue) ||
+                (classIds.Count > 0 && g.DeservedCarClassId.HasValue && classIds.Contains(g.DeservedCarClassId.Value))
+            ).ToList();
+        }
+
+        // Build CSV
+        var sb = new StringBuilder();
+
+        // Header row — only requested columns
+        var headers = new List<string>();
+        if (requestedCols.Contains("title"))           headers.Add("Title");
+        if (requestedCols.Contains("name"))            headers.Add("Name");
+        if (requestedCols.Contains("rank"))            headers.Add("Rank");
+        if (requestedCols.Contains("country"))         headers.Add("Country");
+        if (requestedCols.Contains("registrationType")) headers.Add("Registration Type");
+        if (requestedCols.Contains("deservedCarClass")) headers.Add("Deserve Car Class");
+        if (requestedCols.Contains("arrivalFlight"))   headers.Add("Arrival Flight No.");
+        if (requestedCols.Contains("arrivalAirline"))  headers.Add("Arrival Airline");
+        if (requestedCols.Contains("arrivalDateTime")) headers.Add("Arrival Date/Time");
+        if (requestedCols.Contains("arrivalRoute"))    headers.Add("Arrival Route");
+        if (requestedCols.Contains("departureFlight")) headers.Add("Departure Flight No.");
+        if (requestedCols.Contains("departureAirline")) headers.Add("Departure Airline");
+        if (requestedCols.Contains("departureDatetime")) headers.Add("Departure Date/Time");
+        if (requestedCols.Contains("departureRoute"))  headers.Add("Departure Route");
+        if (requestedCols.Contains("carNumber"))       headers.Add("Car Number");
+        if (requestedCols.Contains("driverName"))      headers.Add("Driver Name");
+        if (requestedCols.Contains("driverPhone"))     headers.Add("Driver Phone");
+        if (requestedCols.Contains("assignedCarClass")) headers.Add("Assigned Car Class");
+        if (requestedCols.Contains("assignmentType"))  headers.Add("Assignment Type");
+        if (requestedCols.Contains("hotelName"))       headers.Add("Hotel Name");
+        if (requestedCols.Contains("roomNumber"))      headers.Add("Room Number");
+        sb.AppendLine(string.Join(",", headers));
+
+        // Data rows
+        foreach (var g in guests)
+        {
+            var arrivalBooking  = g.TravelBookings.FirstOrDefault(tb => tb.IsArrival);
+            var departureBooking = g.TravelBookings.FirstOrDefault(tb => !tb.IsArrival);
+            var activeAssignment = g.VehicleAssignments.FirstOrDefault(va => va.IsActive);
+            var vehicle = activeAssignment?.Vehicle;
+            var driver  = vehicle?.Driver;
+
+            var row = new List<string>();
+            if (requestedCols.Contains("title"))           row.Add(EscapeRosterCsv(g.Title ?? ""));
+            if (requestedCols.Contains("name"))            row.Add(EscapeRosterCsv($"{g.FirstName} {g.LastName}".Trim()));
+            if (requestedCols.Contains("rank"))            row.Add(EscapeRosterCsv(g.RankValue ?? ""));
+            if (requestedCols.Contains("country"))         row.Add(EscapeRosterCsv(g.Country ?? ""));
+            if (requestedCols.Contains("registrationType")) row.Add(EscapeRosterCsv(g.RegistrationTypeName ?? ""));
+            if (requestedCols.Contains("deservedCarClass")) row.Add(EscapeRosterCsv(g.DeservedCarClass?.Name ?? ""));
+            if (requestedCols.Contains("arrivalFlight"))   row.Add(EscapeRosterCsv(arrivalBooking?.Flight?.FlightNumber ?? ""));
+            if (requestedCols.Contains("arrivalAirline"))  row.Add(EscapeRosterCsv(arrivalBooking?.Flight?.AirlineName ?? ""));
+            if (requestedCols.Contains("arrivalDateTime")) row.Add(EscapeRosterCsv(arrivalBooking?.Flight?.ScheduledArrival.ToString("yyyy-MM-dd HH:mm") ?? ""));
+            if (requestedCols.Contains("arrivalRoute"))    row.Add(EscapeRosterCsv($"{arrivalBooking?.Flight?.DeparturePortIataCode ?? ""} → {arrivalBooking?.Flight?.ArrivalPortIataCode ?? ""}".Trim(' ', '→', ' ')));
+            if (requestedCols.Contains("departureFlight")) row.Add(EscapeRosterCsv(departureBooking?.Flight?.FlightNumber ?? ""));
+            if (requestedCols.Contains("departureAirline")) row.Add(EscapeRosterCsv(departureBooking?.Flight?.AirlineName ?? ""));
+            if (requestedCols.Contains("departureDatetime")) row.Add(EscapeRosterCsv(departureBooking?.Flight?.ScheduledDeparture.ToString("yyyy-MM-dd HH:mm") ?? ""));
+            if (requestedCols.Contains("departureRoute"))  row.Add(EscapeRosterCsv($"{departureBooking?.Flight?.DeparturePortIataCode ?? ""} → {departureBooking?.Flight?.ArrivalPortIataCode ?? ""}".Trim(' ', '→', ' ')));
+            if (requestedCols.Contains("carNumber"))       row.Add(EscapeRosterCsv(vehicle?.CarNumber ?? ""));
+            if (requestedCols.Contains("driverName"))      row.Add(EscapeRosterCsv(driver?.FullName ?? vehicle?.DriverName ?? ""));
+            if (requestedCols.Contains("driverPhone"))     row.Add(EscapeRosterCsv(driver?.Phone ?? vehicle?.DriverPhone ?? ""));
+            if (requestedCols.Contains("assignedCarClass")) row.Add(EscapeRosterCsv(vehicle?.CarClass?.Name ?? ""));
+            if (requestedCols.Contains("assignmentType"))  row.Add(EscapeRosterCsv(activeAssignment != null ? activeAssignment.AssignmentType.ToString() : ""));
+            if (requestedCols.Contains("hotelName"))       row.Add(EscapeRosterCsv(g.HotelName ?? ""));
+            if (requestedCols.Contains("roomNumber"))      row.Add(EscapeRosterCsv(g.RoomNumber ?? ""));
+            sb.AppendLine(string.Join(",", row));
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(sb.ToString());
+        var fileName = $"roster_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv";
+        return File(bytes, "text/csv", fileName);
+    }
+
+    private static List<string> ParseList(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return new List<string>();
+        return value.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => s.Trim())
+                    .Where(s => !string.IsNullOrEmpty(s))
+                    .ToList();
+    }
+
+    private static string EscapeRosterCsv(string value)
+    {
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+            return $"\"{ value.Replace("\"", "\"\"")}\"";
+        return value;
+    }
 }
 public record UpdateStatusRequest(GuestStatus Status, string? Notes = null);
 public record CompleteChecklistRequest(string? Notes = null);
@@ -1620,3 +1821,4 @@ public record BulkAssignCarClassRequest(List<Guid> GuestIds, Guid? CarClassId);
 public record SetStatusRequest(InboundStatus Status, string? Notes = null, string? HotelName = null, string? RoomNumber = null);
 public record SetOutboundStatusRequest(OutboundStatus Status, string? Notes = null);
 public record ForceStatusRequest(StatusTrack Track, int StatusValue, string? Notes = null);
+public record UpdateHotelAssignmentRequest(string? HotelName, string? RoomNumber);

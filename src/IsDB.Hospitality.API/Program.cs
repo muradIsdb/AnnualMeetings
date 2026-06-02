@@ -66,10 +66,16 @@ builder.Services.AddCors(options =>
     });
 });
 
+// In-memory cache for ActiveUserFilter (IsActive check)
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IsDB.Hospitality.API.Filters.ActiveUserFilter>();
+
 builder.Services.AddControllers(options =>
 {
     options.Conventions.Add(new Microsoft.AspNetCore.Mvc.ApplicationModels.RouteTokenTransformerConvention(
         new SlugifyParameterTransformer()));
+    // Globally enforce IsActive check on every authenticated request
+    options.Filters.AddService<IsDB.Hospitality.API.Filters.ActiveUserFilter>();
 });
 builder.Services.AddRouting(options => options.LowercaseUrls = true);
 builder.Services.AddEndpointsApiExplorer();
