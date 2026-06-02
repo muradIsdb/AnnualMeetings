@@ -657,21 +657,12 @@ public class EventsAirController : ApiControllerBase
             var client = _httpClientFactory.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(30);
 
-            // Query EventsAir for events whose name contains "annual"
-            var graphqlQuery = @"{
-  events(
-    input: { where: { name: { comparisonType: CONTAINS, value: \""annual\"" } } }
-    limit: 200
-    offset: 0
-  ) {
-    uniqueCode
-    name
-    startDate
-    endDate
-  }
-}";
-
-            var queryBody = System.Text.Json.JsonSerializer.Serialize(new { query = graphqlQuery });
+            // Query EventsAir for events whose name contains "Annual" (case-sensitive CONTAINS)
+            // We build the JSON body manually to avoid escaping issues with verbatim strings
+            var queryBody = "{\"query\":\"{events(input:{where:{name:{comparisonType:CONTAINS,value:\\\"Annual\\\"}}}limit:200 offset:0){uniqueCode name startDate endDate}}\"}";
+            // Use JsonSerializer to build a clean query body
+            var gqlQuery = "{ events(input: { where: { name: { comparisonType: CONTAINS, value: \"Annual\" } } } limit: 200 offset: 0) { uniqueCode name startDate endDate } }";
+            queryBody = System.Text.Json.JsonSerializer.Serialize(new { query = gqlQuery });
             var req = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
             {
                 Headers = { { "Authorization", $"Bearer {token}" } },
@@ -703,6 +694,41 @@ public class EventsAirController : ApiControllerBase
                 });
             }
 
+            // If no results with "Annual" filter, try without filter as fallback
+            if (result.Count == 0)
+            {
+                var gqlQueryAll = "{ events(limit: 200 offset: 0) { uniqueCode name startDate endDate } }";
+                var queryBodyAll = System.Text.Json.JsonSerializer.Serialize(new { query = gqlQueryAll });
+                var req2 = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
+                {
+                    Headers = { { "Authorization", $"Bearer {token}" } },
+                    Content = new StringContent(queryBodyAll, System.Text.Encoding.UTF8, "application/json")
+                };
+                var response2 = await client.SendAsync(req2);
+                if (response2.IsSuccessStatusCode)
+                {
+                    var json2 = await response2.Content.ReadAsStringAsync();
+                    var doc2 = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json2);
+                    if (doc2.TryGetProperty("data", out var data2) && data2.TryGetProperty("events", out var eventsArray2))
+                    {
+                        foreach (var ev in eventsArray2.EnumerateArray())
+                        {
+                            var uniqueCode = ev.TryGetProperty("uniqueCode", out var uc) ? uc.GetString() ?? "" : "";
+                            var name = ev.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                            var startDate = ev.TryGetProperty("startDate", out var sd) ? sd.GetString() : null;
+                            var endDate = ev.TryGetProperty("endDate", out var ed) ? ed.GetString() : null;
+                            result.Add(new Application.DTOs.EventsAir.EventsAirEventDto
+                            {
+                                UniqueCode = uniqueCode,
+                                Name = name,
+                                StartDate = startDate,
+                                EndDate = endDate
+                            });
+                        }
+                    }
+                }
+            }
+
             // Sort by startDate descending (most recent first)
             result = result
                 .OrderByDescending(e => e.StartDate ?? "")
@@ -713,6 +739,7 @@ public class EventsAirController : ApiControllerBase
         catch (Exception ex)
         {
             // Return empty list on error so the UI can fall back gracefully
+            _ = ex; // suppress unused variable warning
             return Ok(new List<Application.DTOs.EventsAir.EventsAirEventDto>());
         }
     }
