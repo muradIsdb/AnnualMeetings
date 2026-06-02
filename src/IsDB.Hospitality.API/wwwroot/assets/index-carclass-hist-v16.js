@@ -1136,7 +1136,7 @@ function ExportRosterPage() {
       if (selCarClassIds.size > 0) params.deservedCarClassIds = Array.from(selCarClassIds).join(",");
       params.columns = Array.from(selCols).join(",");
       const date = new Date().toISOString().slice(0, 10);
-      await Sv("/api/guests/export", "roster-" + date + ".csv", params);
+      await Sv("/guests/export", "roster-" + date + ".csv", params);
     } finally {
       setExporting(false);
     }
