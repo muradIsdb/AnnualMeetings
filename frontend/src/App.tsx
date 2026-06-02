@@ -130,7 +130,7 @@ export default function App() {
 
           {/* Transport Module */}
           <Route path="transport/dashboard" element={
-            <ProtectedRoute allowedRoles={[UserRole.Transport, UserRole.Admin]}>
+            <ProtectedRoute allowedRoles={[UserRole.Transport, UserRole.ControlRoom, UserRole.Admin]}>
               <TransportRoleDashboard />
             </ProtectedRoute>
           } />
@@ -182,7 +182,7 @@ export default function App() {
 
           {/* ── Liaison Module (read-only) ── */}
           <Route path="liaison/dashboard" element={
-            <ProtectedRoute allowedRoles={[UserRole.Liaison, UserRole.Admin]}>
+            <ProtectedRoute allowedRoles={[UserRole.Liaison, UserRole.ControlRoom, UserRole.Admin]}>
               <LiaisonDashboard />
             </ProtectedRoute>
           } />
