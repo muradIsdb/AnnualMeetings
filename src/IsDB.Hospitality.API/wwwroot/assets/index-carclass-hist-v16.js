@@ -953,6 +953,8 @@ const _EXPORT_ALL_COLUMNS = [
   { key: "carNumber",         label: "Car Number" },
   { key: "driverName",        label: "Driver Name" },
   { key: "driverPhone",       label: "Driver Phone" },
+  { key: "assignedCarClass",  label: "Assigned Car Class" },
+  { key: "assignmentType",    label: "Assignment Type" },
   { key: "hotelName",         label: "Hotel Name" },
   { key: "roomNumber",        label: "Room Number" },
 ];

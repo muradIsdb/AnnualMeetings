@@ -1691,7 +1691,7 @@ public class GuestsController : ApiControllerBase
             "title","name","rank","country","registrationType","deservedCarClass",
             "arrivalFlight","arrivalAirline","arrivalDateTime","arrivalRoute",
             "departureFlight","departureAirline","departureDatetime","departureRoute",
-            "carNumber","driverName","driverPhone","hotelName","roomNumber"
+            "carNumber","driverName","driverPhone","assignedCarClass","assignmentType","hotelName","roomNumber"
         };
         var requestedCols = string.IsNullOrWhiteSpace(columns)
             ? new HashSet<string>(allColumns)
@@ -1702,6 +1702,7 @@ public class GuestsController : ApiControllerBase
             .Where(g => g.IsActive)
             .Include(g => g.TravelBookings).ThenInclude(tb => tb.Flight)
             .Include(g => g.VehicleAssignments.Where(va => va.IsActive)).ThenInclude(va => va.Vehicle).ThenInclude(v => v.Driver)
+            .Include(g => g.VehicleAssignments.Where(va => va.IsActive)).ThenInclude(va => va.Vehicle).ThenInclude(v => v.CarClass)
             .Include(g => g.DeservedCarClass)
             .OrderBy(g => g.LastName).ThenBy(g => g.FirstName)
             .ToListAsync(ct);
@@ -1753,6 +1754,8 @@ public class GuestsController : ApiControllerBase
         if (requestedCols.Contains("carNumber"))       headers.Add("Car Number");
         if (requestedCols.Contains("driverName"))      headers.Add("Driver Name");
         if (requestedCols.Contains("driverPhone"))     headers.Add("Driver Phone");
+        if (requestedCols.Contains("assignedCarClass")) headers.Add("Assigned Car Class");
+        if (requestedCols.Contains("assignmentType"))  headers.Add("Assignment Type");
         if (requestedCols.Contains("hotelName"))       headers.Add("Hotel Name");
         if (requestedCols.Contains("roomNumber"))      headers.Add("Room Number");
         sb.AppendLine(string.Join(",", headers));
@@ -1784,6 +1787,8 @@ public class GuestsController : ApiControllerBase
             if (requestedCols.Contains("carNumber"))       row.Add(EscapeRosterCsv(vehicle?.CarNumber ?? ""));
             if (requestedCols.Contains("driverName"))      row.Add(EscapeRosterCsv(driver?.FullName ?? vehicle?.DriverName ?? ""));
             if (requestedCols.Contains("driverPhone"))     row.Add(EscapeRosterCsv(driver?.Phone ?? vehicle?.DriverPhone ?? ""));
+            if (requestedCols.Contains("assignedCarClass")) row.Add(EscapeRosterCsv(vehicle?.CarClass?.Name ?? ""));
+            if (requestedCols.Contains("assignmentType"))  row.Add(EscapeRosterCsv(activeAssignment != null ? activeAssignment.AssignmentType.ToString() : ""));
             if (requestedCols.Contains("hotelName"))       row.Add(EscapeRosterCsv(g.HotelName ?? ""));
             if (requestedCols.Contains("roomNumber"))      row.Add(EscapeRosterCsv(g.RoomNumber ?? ""));
             sb.AppendLine(string.Join(",", row));
