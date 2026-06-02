@@ -661,7 +661,7 @@ public class EventsAirController : ApiControllerBase
             // We build the JSON body manually to avoid escaping issues with verbatim strings
             var queryBody = "{\"query\":\"{events(input:{where:{name:{comparisonType:CONTAINS,value:\\\"Annual\\\"}}}limit:200 offset:0){uniqueCode name startDate endDate}}\"}";
             // Use JsonSerializer to build a clean query body
-            var gqlQuery = "{ events(input: { where: { name: { comparisonType: CONTAINS, value: \"Annual\" } } } limit: 200 offset: 0) { uniqueCode name startDate endDate } }";
+            var gqlQuery = "{ events(input: { where: { name: { comparisonType: CONTAINS, value: \"Annual\" } } } limit: 200 offset: 0) { id name startDate endDate } }";
             queryBody = System.Text.Json.JsonSerializer.Serialize(new { query = gqlQuery });
             var req = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
             {
@@ -680,7 +680,7 @@ public class EventsAirController : ApiControllerBase
 
             foreach (var ev in eventsArray.EnumerateArray())
             {
-                var uniqueCode = ev.TryGetProperty("uniqueCode", out var uc) ? uc.GetString() ?? "" : "";
+                var uniqueCode = ev.TryGetProperty("id", out var uc) ? uc.GetString() ?? "" : "";
                 var name = ev.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
                 var startDate = ev.TryGetProperty("startDate", out var sd) ? sd.GetString() : null;
                 var endDate = ev.TryGetProperty("endDate", out var ed) ? ed.GetString() : null;
@@ -697,7 +697,7 @@ public class EventsAirController : ApiControllerBase
             // If no results with "Annual" filter, try without filter as fallback
             if (result.Count == 0)
             {
-                var gqlQueryAll = "{ events(limit: 200 offset: 0) { uniqueCode name startDate endDate } }";
+                var gqlQueryAll = "{ events(limit: 200 offset: 0) { id name startDate endDate } }";
                 var queryBodyAll = System.Text.Json.JsonSerializer.Serialize(new { query = gqlQueryAll });
                 var req2 = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
                 {
@@ -713,7 +713,7 @@ public class EventsAirController : ApiControllerBase
                     {
                         foreach (var ev in eventsArray2.EnumerateArray())
                         {
-                            var uniqueCode = ev.TryGetProperty("uniqueCode", out var uc) ? uc.GetString() ?? "" : "";
+                            var uniqueCode = ev.TryGetProperty("id", out var uc) ? uc.GetString() ?? "" : "";
                             var name = ev.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
                             var startDate = ev.TryGetProperty("startDate", out var sd) ? sd.GetString() : null;
                             var endDate = ev.TryGetProperty("endDate", out var ed) ? ed.GetString() : null;
