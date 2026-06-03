@@ -178,6 +178,7 @@ export interface DashboardSummary {
   fleetByClass?: FleetClassSummary[];
   // Extended fields from backend DashboardSummaryDto
   arrivingCount?: number;
+  atAirportCount?: number;
   receivedByEmbassyCount?: number;
   onTheWayToHotelCount?: number;
   atHotelCount?: number;

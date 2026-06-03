@@ -263,14 +263,15 @@ export default function OpsOverview() {
   const carsNeeded = Math.max(0, guestsDeserving - totalAvailable - totalAssigned)
 
   // Arrivals by day chart data
+  // API returns: { days: [{ dateLabel, dateIso, scheduled, arrived, pending }] }
   const arrivalDays: DayArrival[] = arrivalsByDay?.days ?? []
   const arrivalChartData = arrivalDays.map(d => ({
-    name: d.dateLabel,
-    Scheduled: d.scheduled,
-    Arrived: d.arrived,
-    Pending: d.pending,
-    OnTime: Math.max(0, d.arrived - Math.round(d.arrived * 0.1)),
-    Delayed: Math.round(d.arrived * 0.1),
+    name: d.dateLabel ?? new Date(d.dateIso ?? '').toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+    Scheduled: d.scheduled ?? 0,
+    Arrived: d.arrived ?? 0,
+    Pending: d.pending ?? 0,
+    OnTime: Math.max(0, (d.arrived ?? 0) - Math.round((d.arrived ?? 0) * 0.1)),
+    Delayed: Math.round((d.arrived ?? 0) * 0.1),
   }))
 
   // Fleet by class chart data
@@ -346,14 +347,15 @@ export default function OpsOverview() {
   const totalCheckedIn = hotelSummary?.totalAtHotel ?? 0
   const noRoomTotal = hotelSummary?.noRoomAssigned ?? 0
 
-  // Reception
-  const totalGuests = reception?.totalArriving ?? 0
-  const everArrived = reception?.everArrived ?? 0
-  const inTransit = reception?.inTransitToHotel ?? 0
-  const atHotel = reception?.atHotel ?? 0
-  const notYetArrived = Math.max(0, totalGuests - everArrived)
-  const receivedByEmbassy = reception?.receivedByEmbassy ?? 0
-  const arrivedPct = totalGuests > 0 ? Math.round((everArrived / totalGuests) * 100) : 0
+  // Reception — use dashboard/summary which tracks InboundStatus + ReceivedByEmbassyTeam flag
+  const totalGuests      = summary?.totalGuests ?? 0
+  const everArrived      = summary?.arrivingCount ?? 0          // cumulative: Arrived + Embassy + VehicleAssigned + AtHotel
+  const atAirport        = summary?.atAirportCount ?? 0         // currently at airport: Arrived AND not yet received by embassy
+  const receivedByEmbassy = summary?.receivedByEmbassyCount ?? 0 // cumulative boolean flag
+  const inTransit        = summary?.onTheWayToHotelCount ?? 0   // VehicleAssigned
+  const atHotel          = summary?.atHotelCount ?? 0           // AtHotel
+  const notYetArrived    = Math.max(0, totalGuests - everArrived)
+  const arrivedPct       = totalGuests > 0 ? Math.round((everArrived / totalGuests) * 100) : 0
 
   // ── Skeleton ───────────────────────────────────────────────────────────────
   const Skeleton = () => <div className="h-8 bg-gray-100 rounded animate-pulse w-16" />
@@ -379,16 +381,18 @@ export default function OpsOverview() {
 
       {/* ── SECTION 1: Reception Overview ─────────────────────────────────── */}
       <SectionTitle>Reception Overview</SectionTitle>
+      {/* Row 1: Total Guests · Arrived (Cumulative) · Received by Embassy · Not Yet Arrived */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard label="Total Guests"        value={isLoading ? '…' : totalGuests}     sub="Registered for 2026"         accent="indigo" />
-        <KpiCard label="Arrived (Cumulative)" value={isLoading ? '…' : everArrived}    sub={`${arrivedPct}% of total`}   accent="green"  progress={arrivedPct} />
-        <KpiCard label="En Route to Hotel"   value={isLoading ? '…' : inTransit}       sub="In transit right now"        accent="amber" />
-        <KpiCard label="At Hotel"            value={isLoading ? '…' : atHotel}         sub="Checked in"                  accent="blue" />
+        <KpiCard label="Total Guests"         value={isLoading ? '…' : totalGuests}      sub="Registered for 2026"          accent="indigo" />
+        <KpiCard label="Arrived (Cumulative)"  value={isLoading ? '…' : everArrived}      sub={`${arrivedPct}% of total`}    accent="green"  progress={arrivedPct} />
+        <KpiCard label="Received by Embassy"   value={isLoading ? '…' : receivedByEmbassy} sub="Cumulative — embassy handover" accent="teal" />
+        <KpiCard label="Not Yet Arrived"       value={isLoading ? '…' : notYetArrived}    sub="Pending arrival"               accent="gray" />
       </div>
+      {/* Row 2: At Airport · En Route to Hotel · At Hotel */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
-        <KpiCard label="Not Yet Arrived"     value={isLoading ? '…' : notYetArrived}   sub="Pending arrival"             accent="gray" />
-        <KpiCard label="Received by Embassy" value={isLoading ? '…' : receivedByEmbassy} sub="Handed over to embassy team" accent="teal" />
-        <KpiCard label="Departing Active"    value={isLoading ? '…' : (hotelSummary?.departingActive ?? 0)} sub="In departure process" accent="purple" />
+        <KpiCard label="At Airport"            value={isLoading ? '…' : atAirport}        sub="Currently at airport"          accent="amber" />
+        <KpiCard label="En Route to Hotel"     value={isLoading ? '…' : inTransit}        sub="Vehicle assigned, in transit"  accent="blue" />
+        <KpiCard label="At Hotel"              value={isLoading ? '…' : atHotel}          sub="Checked in"                    accent="green" />
       </div>
 
       {/* ── SECTION 2: Arrivals by Day ────────────────────────────────────── */}
