@@ -1,6 +1,7 @@
 using IsDB.Hospitality.Application.DTOs.EventsAir;
 using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Domain.Entities;
+using IsDB.Hospitality.Domain.Enums;
 using IsDB.Hospitality.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -142,10 +143,13 @@ public class EventsAirController : ApiControllerBase
                              !string.IsNullOrEmpty(previousEventCode) &&
                              request.EventCode != previousEventCode;
         bool newEventHasCarClasses = false;
+        bool newEventHasVehicles = false;
         if (eventSwitched)
         {
             newEventHasCarClasses = await _db.CarClasses
                 .AnyAsync(c => c.EventCode == request.EventCode, CancellationToken.None);
+            newEventHasVehicles = await _db.Vehicles
+                .AnyAsync(v => v.IsActive && v.EventCode == request.EventCode, CancellationToken.None);
         }
 
         var dto = new EventsAirConfigDto
@@ -173,6 +177,7 @@ public class EventsAirController : ApiControllerBase
             config = dto,
             eventSwitched,
             newEventHasCarClasses,
+            newEventHasVehicles,
             previousEventCode
         });
     }
@@ -204,11 +209,31 @@ public class EventsAirController : ApiControllerBase
             h.ActualOccupiedGuest = 0;
         }
 
-        // 3. Optionally copy Car Classes from previous event
+        // 3. Stamp all NULL-EventCode fleet records with previousEventCode so they are scoped to the old event
+        if (!string.IsNullOrEmpty(previousEventCode))
+        {
+            var nullEventVehicles = await _db.Vehicles.Where(v => v.EventCode == null).ToListAsync(ct);
+            foreach (var v in nullEventVehicles)
+                v.EventCode = previousEventCode;
+
+            var nullEventDrivers = await _db.Drivers.Where(d => d.EventCode == null).ToListAsync(ct);
+            foreach (var d in nullEventDrivers)
+                d.EventCode = previousEventCode;
+
+            var nullEventCarClasses = await _db.CarClasses.Where(c => c.EventCode == null).ToListAsync(ct);
+            foreach (var c in nullEventCarClasses)
+                c.EventCode = previousEventCode;
+
+            var nullEventCarClassRules = await _db.CarClassRules.Where(r => r.EventCode == null).ToListAsync(ct);
+            foreach (var r in nullEventCarClassRules)
+                r.EventCode = previousEventCode;
+        }
+
+        // 4. Optionally copy Car Classes from previous event
         if (request.CopyCarClasses && !string.IsNullOrEmpty(previousEventCode))
         {
             var previousCarClasses = await _db.CarClasses
-                .Where(c => c.EventCode == previousEventCode || c.EventCode == null)
+                .Where(c => c.EventCode == previousEventCode)
                 .ToListAsync(ct);
 
             foreach (var cc in previousCarClasses)
@@ -233,6 +258,64 @@ public class EventsAirController : ApiControllerBase
             }
         }
 
+        // 5. Optionally copy Fleet (vehicles + drivers) from previous event
+        if (request.CopyFleet && !string.IsNullOrEmpty(previousEventCode))
+        {
+            var previousVehicles = await _db.Vehicles
+                .Where(v => v.IsActive && v.EventCode == previousEventCode)
+                .ToListAsync(ct);
+
+            foreach (var v in previousVehicles)
+            {
+                bool alreadyExists = await _db.Vehicles
+                    .AnyAsync(x => x.EventCode == newEventCode &&
+                                   x.LicensePlate == v.LicensePlate &&
+                                   x.CarNumber == v.CarNumber, ct);
+                if (!alreadyExists)
+                {
+                    _db.Vehicles.Add(new Vehicle
+                    {
+                        Id = Guid.NewGuid(),
+                        LicensePlate = v.LicensePlate,
+                        Make = v.Make,
+                        Model = v.Model,
+                        Color = v.Color,
+                        CarNumber = v.CarNumber,
+                        BarcodeValue = v.BarcodeValue,
+                        Status = Domain.Enums.VehicleStatus.Available,
+                        IsActive = true,
+                        EventCode = newEventCode,
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow
+                    });
+                }
+            }
+
+            var previousDrivers = await _db.Drivers
+                .Where(d => d.IsActive && d.EventCode == previousEventCode)
+                .ToListAsync(ct);
+
+            foreach (var d in previousDrivers)
+            {
+                bool alreadyExists = await _db.Drivers
+                    .AnyAsync(x => x.EventCode == newEventCode && x.FullName == d.FullName, ct);
+                if (!alreadyExists)
+                {
+                    _db.Drivers.Add(new Driver
+                    {
+                        Id = Guid.NewGuid(),
+                        FullName = d.FullName,
+                        Phone = d.Phone,
+                        Status = Domain.Enums.DriverStatus.Available,
+                        IsActive = true,
+                        EventCode = newEventCode,
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow
+                    });
+                }
+            }
+        }
+
         await _db.SaveChangesAsync(ct);
 
         return Ok(new { success = true, message = "Event switch applied successfully." });
@@ -240,7 +323,8 @@ public class EventsAirController : ApiControllerBase
 
     public record ApplyEventSwitchRequest(
         string PreviousEventCode,
-        bool CopyCarClasses
+        bool CopyCarClasses,
+        bool CopyFleet = false
     );
 
     // POST /api/eventsair/test-connection
