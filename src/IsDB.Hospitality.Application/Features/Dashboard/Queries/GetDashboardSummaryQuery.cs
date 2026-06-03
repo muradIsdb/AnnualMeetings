@@ -37,6 +37,9 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
             g.InboundStatus == InboundStatus.AtHotel, cancellationToken);
         // receivedByEmbassy = cumulative: all guests who ever had embassy flag set (boolean, not enum)
         var receivedByEmbassy = await activeGuests.CountAsync(g => g.ReceivedByEmbassyTeam, cancellationToken);
+        // atAirport = guests currently at airport: InboundStatus==Arrived AND not yet received by embassy
+        var atAirport         = await activeGuests.CountAsync(g =>
+            g.InboundStatus == InboundStatus.Arrived && !g.ReceivedByEmbassyTeam, cancellationToken);
         var onTheWayToHotel   = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.VehicleAssigned, cancellationToken);
         var atHotel           = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.AtHotel, cancellationToken);
         var departing         = await activeGuests.CountAsync(g =>
@@ -163,6 +166,7 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
         {
             TotalGuests                       = totalGuests,
             ArrivingCount                     = arrivingCount,
+            AtAirportCount                    = atAirport,
             ReceivedByEmbassyCount            = receivedByEmbassy,
             OnTheWayToHotelCount              = onTheWayToHotel,
             AtHotelCount                      = atHotel,

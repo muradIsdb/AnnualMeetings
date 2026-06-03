@@ -8,6 +8,8 @@ public class DashboardSummaryDto
 {
     public int TotalGuests { get; set; }
     public int ArrivingCount { get; set; }
+    /// <summary>Guests with InboundStatus==Arrived AND ReceivedByEmbassyTeam==false (currently at airport, not yet handed over).</summary>
+    public int AtAirportCount { get; set; }
     public int ReceivedByEmbassyCount { get; set; }
     public int OnTheWayToHotelCount { get; set; }
     public int AtHotelCount { get; set; }
