@@ -318,6 +318,88 @@ public static class EventsAirSyncHelpers
         return result;
     }
 
+    // ─── Fetch travel bookings per-contact (batched aliases) ─────────────────
+    // Used when the global travelBookings query hangs (e.g. 2026 event).
+    // Batches contactIds 10 at a time using GraphQL field aliases.
+    public static async Task<List<EventsAirTravelDto>> FetchTravelBookingsByContactsAsync(
+        string baseUrl, string eventCode, string accessToken,
+        IHttpClientFactory httpClientFactory,
+        IEnumerable<string> contactIds,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<EventsAirTravelDto>();
+        var client = httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromMinutes(5);
+        const int batchSize = 10;
+        var idList = contactIds.Where(id => !string.IsNullOrEmpty(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        for (int i = 0; i < idList.Count; i += batchSize)
+        {
+            var batch = idList.Skip(i).Take(batchSize).ToList();
+            // Build a single GraphQL query with one alias per contact
+            var contactFragments = string.Join(" ",
+                batch.Select((id, idx) =>
+                    $"c{idx}: contact(id: \"{id}\") {{ id travelBookings {{ id travelType {{ name }} flightNumber carrier {{ name }} arrivalDate departureDate eta etd departurePort {{ name }} arrivalPort {{ name }} class bookingNotes comment }} }}"));
+            var queryBody = JsonSerializer.Serialize(new
+            {
+                query = $"{{ event(id: \"{eventCode}\") {{ {contactFragments} }} }}"
+            });
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/graphql")
+            {
+                Headers = { Authorization = new AuthenticationHeaderValue("Bearer", accessToken) },
+                Content = new StringContent(queryBody, Encoding.UTF8, "application/json")
+            };
+            HttpResponseMessage response;
+            string json;
+            try
+            {
+                response = await client.SendAsync(req, cancellationToken);
+                json = await response.Content.ReadAsStringAsync(cancellationToken);
+            }
+            catch { continue; }
+            if (!response.IsSuccessStatusCode) continue;
+            JsonElement doc;
+            try { doc = JsonSerializer.Deserialize<JsonElement>(json); }
+            catch { continue; }
+            if (!doc.TryGetProperty("data", out var data) ||
+                !data.TryGetProperty("event", out var eventObj)) continue;
+            // Each alias is c0, c1, ... cN
+            for (int idx = 0; idx < batch.Count; idx++)
+            {
+                var aliasKey = $"c{idx}";
+                var contactId = batch[idx];
+                if (!eventObj.TryGetProperty(aliasKey, out var contactObj) ||
+                    contactObj.ValueKind != JsonValueKind.Object) continue;
+                if (!contactObj.TryGetProperty("travelBookings", out var bookings)) continue;
+                foreach (var booking in bookings.EnumerateArray())
+                {
+                    result.Add(new EventsAirTravelDto
+                    {
+                        Id = booking.TryGetProperty("id", out var bid) ? bid.GetString() ?? "" : "",
+                        ContactId = contactId,
+                        TravelTypeName = booking.TryGetProperty("travelType", out var tt) && tt.ValueKind == JsonValueKind.Object
+                            ? (tt.TryGetProperty("name", out var ttn) ? ttn.GetString() : null) : null,
+                        FlightNumber = booking.TryGetProperty("flightNumber", out var fn) && fn.ValueKind != JsonValueKind.Null ? fn.GetString() : null,
+                        CarrierName = booking.TryGetProperty("carrier", out var cr) && cr.ValueKind == JsonValueKind.Object
+                            ? (cr.TryGetProperty("name", out var crn) ? crn.GetString() : null) : null,
+                        ArrivalDate = booking.TryGetProperty("arrivalDate", out var ad) && ad.ValueKind != JsonValueKind.Null ? ad.GetString() : null,
+                        DepartureDate = booking.TryGetProperty("departureDate", out var dd) && dd.ValueKind != JsonValueKind.Null ? dd.GetString() : null,
+                        Eta = booking.TryGetProperty("eta", out var eta) && eta.ValueKind != JsonValueKind.Null ? eta.GetString() : null,
+                        Etd = booking.TryGetProperty("etd", out var etd) && etd.ValueKind != JsonValueKind.Null ? etd.GetString() : null,
+                        DeparturePortName = booking.TryGetProperty("departurePort", out var dp) && dp.ValueKind == JsonValueKind.Object
+                            ? (dp.TryGetProperty("name", out var dpn) ? dpn.GetString() : null) : null,
+                        ArrivalPortName = booking.TryGetProperty("arrivalPort", out var ap) && ap.ValueKind == JsonValueKind.Object
+                            ? (ap.TryGetProperty("name", out var apn) ? apn.GetString() : null) : null,
+                        SeatClass = booking.TryGetProperty("class", out var sc) && sc.ValueKind != JsonValueKind.Null ? sc.GetString() : null,
+                        BookingNotes = booking.TryGetProperty("bookingNotes", out var bn) && bn.ValueKind != JsonValueKind.Null ? bn.GetString() : null,
+                        Comment = booking.TryGetProperty("comment", out var cmt) && cmt.ValueKind != JsonValueKind.Null ? cmt.GetString() : null
+                    });
+                }
+            }
+        }
+        return result;
+    }
+
     // ─── Fetch custom field values ────────────────────────────────────────────
 
     private static async Task<Dictionary<string, string>> FetchCustomFieldValuesAsync(

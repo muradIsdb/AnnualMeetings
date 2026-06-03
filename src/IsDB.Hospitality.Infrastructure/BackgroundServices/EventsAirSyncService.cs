@@ -292,8 +292,9 @@ public class EventsAirSyncService : BackgroundService
             // ══════════════════════════════════════════════════════════════════
             try
             {
-                var travelBookings = await EventsAirSyncHelpers.FetchTravelBookingsAsync(
-                    apiBaseUrl, eventCode, token, httpClientFactory, cancellationToken);
+                // Use per-contact batched query (avoids hanging global travelBookings query)
+                var travelBookings = await EventsAirSyncHelpers.FetchTravelBookingsByContactsAsync(
+                    apiBaseUrl, eventCode, token, httpClientFactory, syncedContactIds, cancellationToken);
 
                 // ── Bulk-load active guests with their travel bookings + flights ──
                 var guestsByContactId = await db.Guests

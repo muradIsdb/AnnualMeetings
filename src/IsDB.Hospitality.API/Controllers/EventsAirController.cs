@@ -601,13 +601,12 @@ public class EventsAirController : ApiControllerBase
                     }
                 }
             }
-            await _db.SaveChangesAsync(cancellationToken);
-
-            // ── Pass 3: Travel bookings ───────────────────────────────────────────────
+            await _db.SaveChangesAsync(cancellationToken);            // ── Pass 3: Travel bookings ─────────────────────────────────────────────────
             try
             {
-                var travelBookings = await Application.Common.Models.EventsAirSyncHelpers.FetchTravelBookingsAsync(
-                    config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, cancellationToken);
+                // Use per-contact batched query (avoids hanging global travelBookings query)
+                var travelBookings = await Application.Common.Models.EventsAirSyncHelpers.FetchTravelBookingsByContactsAsync(
+                    config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, syncedContactIds, cancellationToken);
 
                 foreach (var tbDto in travelBookings)
                 {
