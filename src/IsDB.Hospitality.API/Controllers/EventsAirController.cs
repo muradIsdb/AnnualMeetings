@@ -1041,6 +1041,73 @@ public class EventsAirController : ApiControllerBase
         });
     }
 
+    // GET /api/eventsair/debug-travel-contact?contactId=xxx
+    // Queries travel bookings for a specific contact to diagnose sync issues
+    [HttpGet("debug-travel-contact")]
+    public async Task<IActionResult> DebugTravelContact([FromQuery] string contactId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(contactId))
+            return BadRequest(new { message = "contactId query parameter is required." });
+        var config = await _appDb.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive)
+            return BadRequest(new { message = "EventsAir not configured or inactive." });
+        var oAuthScope = await GetOAuthScopeAsync();
+        string token;
+        try
+        {
+            var tokenClient = _httpClientFactory.CreateClient();
+            var tokenReq = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string,string>("grant_type", "client_credentials"),
+                new KeyValuePair<string,string>("client_id", config.ClientId),
+                new KeyValuePair<string,string>("client_secret", config.ClientSecret),
+                new KeyValuePair<string,string>("scope", !string.IsNullOrWhiteSpace(oAuthScope)
+                    ? oAuthScope
+                    : "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default")
+            });
+            var tokenResp = await tokenClient.PostAsync(config.TokenEndpoint, tokenReq, cancellationToken);
+            tokenResp.EnsureSuccessStatusCode();
+            var tokenJson = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                await tokenResp.Content.ReadAsStringAsync(cancellationToken));
+            token = tokenJson.GetProperty("access_token").GetString()!;
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = "Failed to get token", detail = ex.Message });
+        }
+        var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(25);
+        // Query 1: travelBookings filtered by contactId
+        var query1 = $"{{ event(id: \"{config.EventCode}\") {{ travelBookings(input: {{ contactId: \"{contactId}\" }}, limit: 10, offset: 0) {{ id contact {{ id }} travelType {{ name }} flightNumber carrier {{ name }} arrivalDate departureDate eta etd departurePort {{ name }} arrivalPort {{ name }} }} }} }}";
+        var req1 = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
+        {
+            Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
+            Content = new System.Net.Http.StringContent(
+                System.Text.Json.JsonSerializer.Serialize(new { query = query1 }),
+                System.Text.Encoding.UTF8, "application/json")
+        };
+        var resp1 = await client.SendAsync(req1, cancellationToken);
+        var json1 = await resp1.Content.ReadAsStringAsync(cancellationToken);
+        // Query 2: contact directly with travelBookings nested
+        var query2 = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName travelBookings {{ id travelType {{ name }} flightNumber arrivalDate departureDate eta etd departurePort {{ name }} arrivalPort {{ name }} }} }} }} }}";
+        var req2 = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
+        {
+            Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
+            Content = new System.Net.Http.StringContent(
+                System.Text.Json.JsonSerializer.Serialize(new { query = query2 }),
+                System.Text.Encoding.UTF8, "application/json")
+        };
+        var resp2 = await client.SendAsync(req2, cancellationToken);
+        var json2 = await resp2.Content.ReadAsStringAsync(cancellationToken);
+        return Ok(new
+        {
+            eventCode = config.EventCode,
+            contactId,
+            travelBookingsQuery = new { httpStatus = (int)resp1.StatusCode, raw = json1 },
+            contactNestedQuery = new { httpStatus = (int)resp2.StatusCode, raw = json2 }
+        });
+    }
+
     // GET /api/eventsair/debug-schema
     // Introspects the EventsAir GraphQL schema to find available fields on the Event type
     [HttpGet("debug-schema")]
