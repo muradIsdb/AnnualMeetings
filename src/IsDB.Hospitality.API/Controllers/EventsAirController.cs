@@ -1004,27 +1004,40 @@ public class EventsAirController : ApiControllerBase
         };
         var response = await client.SendAsync(req, cancellationToken);
         var rawJson = await response.Content.ReadAsStringAsync(cancellationToken);
-        // Also run full fetch
-        var allBookings = await Application.Common.Models.EventsAirSyncHelpers.FetchTravelBookingsAsync(
-            config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, cancellationToken);
+        // Parse the first page to extract sample records
+        var samples = new List<object>();
+        try
+        {
+            var doc = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(rawJson);
+            if (doc.TryGetProperty("data", out var data) &&
+                data.TryGetProperty("event", out var evt) &&
+                evt.TryGetProperty("travelBookings", out var bookings))
+            {
+                foreach (var b in bookings.EnumerateArray())
+                {
+                    samples.Add(new
+                    {
+                        id = b.TryGetProperty("id", out var id) ? id.GetString() : null,
+                        contactId = b.TryGetProperty("contact", out var c) && c.ValueKind == System.Text.Json.JsonValueKind.Object
+                            ? (c.TryGetProperty("id", out var cid) ? cid.GetString() : null) : null,
+                        travelType = b.TryGetProperty("travelType", out var tt) && tt.ValueKind == System.Text.Json.JsonValueKind.Object
+                            ? (tt.TryGetProperty("name", out var ttn) ? ttn.GetString() : null) : null,
+                        flightNumber = b.TryGetProperty("flightNumber", out var fn) && fn.ValueKind != System.Text.Json.JsonValueKind.Null ? fn.GetString() : null,
+                        arrivalDate = b.TryGetProperty("arrivalDate", out var ad) && ad.ValueKind != System.Text.Json.JsonValueKind.Null ? ad.GetString() : null,
+                        eta = b.TryGetProperty("eta", out var eta) && eta.ValueKind != System.Text.Json.JsonValueKind.Null ? eta.GetString() : null,
+                        departureDate = b.TryGetProperty("departureDate", out var dd) && dd.ValueKind != System.Text.Json.JsonValueKind.Null ? dd.GetString() : null,
+                    });
+                }
+            }
+        }
+        catch { }
         return Ok(new
         {
             eventCode = config.EventCode,
             httpStatus = (int)response.StatusCode,
             rawFirstPage = rawJson,
-            totalFetched = allBookings.Count,
-            samples = allBookings.Take(5).Select(t => new
-            {
-                t.ContactId,
-                t.TravelTypeName,
-                t.FlightNumber,
-                t.ArrivalDate,
-                t.Eta,
-                t.DepartureDate,
-                t.Etd,
-                t.ArrivalPortName,
-                t.DeparturePortName
-            })
+            samplesCount = samples.Count,
+            samples
         });
     }
 }
