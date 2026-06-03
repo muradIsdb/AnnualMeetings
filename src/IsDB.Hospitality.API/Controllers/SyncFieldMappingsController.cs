@@ -1,5 +1,6 @@
 using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Domain.Entities;
+using IsDB.Hospitality.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -10,26 +11,42 @@ namespace IsDB.Hospitality.API.Controllers;
 /// Manages configurable EventsAir custom field sync filters (e.g. "Rank").
 /// Each SyncFieldMapping represents one custom contact field in EventsAir,
 /// identified by its GUID, and holds a set of manually-defined values to filter on during sync.
+/// Field mappings are scoped to an EventCode; NULL EventCode means global (applies to all events).
 /// </summary>
 [Authorize(Roles = "Admin")]
 [Route("api/sync-field-mappings")]
 public class SyncFieldMappingsController : ApiControllerBase
 {
     private readonly IAppDbContext _context;
+    private readonly AppDbContext _appDb;
 
-    public SyncFieldMappingsController(IAppDbContext context)
+    public SyncFieldMappingsController(IAppDbContext context, AppDbContext appDb)
     {
         _context = context;
+        _appDb = appDb;
     }
 
     // ── Field Mapping CRUD ────────────────────────────────────────────────────
 
-    /// <summary>Get all field mappings with their values</summary>
+    /// <summary>
+    /// Get all field mappings with their values.
+    /// Filtered to the active event code (returns event-specific + global NULL mappings).
+    /// </summary>
     [HttpGet]
     public async Task<IActionResult> GetAll()
     {
-        var mappings = await _context.SyncFieldMappings
+        // Get active event code
+        var activeEventCode = (await _appDb.EventsAirConfigs.FirstOrDefaultAsync())?.EventCode;
+
+        // Return mappings for the active event (event-specific + global NULL)
+        var query = _context.SyncFieldMappings
             .Include(m => m.SelectedValues)
+            .AsQueryable();
+
+        if (!string.IsNullOrEmpty(activeEventCode))
+            query = query.Where(m => m.EventCode == null || m.EventCode == activeEventCode);
+
+        var mappings = await query
             .OrderBy(m => m.SortOrder)
             .ThenBy(m => m.DisplayName)
             .Select(m => new
@@ -39,6 +56,8 @@ public class SyncFieldMappingsController : ApiControllerBase
                 m.EventsAirFieldGuid,
                 m.Description,
                 m.SortOrder,
+                m.EventCode,
+                m.FieldRole,
                 m.CreatedAt,
                 m.UpdatedAt,
                 SelectedValues = m.SelectedValues
@@ -67,10 +86,16 @@ public class SyncFieldMappingsController : ApiControllerBase
         if (string.IsNullOrWhiteSpace(request.EventsAirFieldGuid))
             return BadRequest(new { message = "EventsAirFieldGuid is required." });
 
-        var exists = await _context.SyncFieldMappings
-            .AnyAsync(m => m.EventsAirFieldGuid == request.EventsAirFieldGuid.Trim());
-        if (exists)
-            return Conflict(new { message = $"A field mapping for GUID '{request.EventsAirFieldGuid}' already exists." });
+        // Check for duplicate only within the same event scope
+        var existsQuery = _context.SyncFieldMappings
+            .Where(m => m.EventsAirFieldGuid == request.EventsAirFieldGuid.Trim());
+        if (!string.IsNullOrEmpty(request.EventCode))
+            existsQuery = existsQuery.Where(m => m.EventCode == request.EventCode);
+        else
+            existsQuery = existsQuery.Where(m => m.EventCode == null);
+
+        if (await existsQuery.AnyAsync())
+            return Conflict(new { message = $"A field mapping for GUID '{request.EventsAirFieldGuid}' already exists for this event." });
 
         var mapping = new SyncFieldMapping
         {
@@ -79,6 +104,8 @@ public class SyncFieldMappingsController : ApiControllerBase
             EventsAirFieldGuid = request.EventsAirFieldGuid.Trim().ToLower(),
             Description = request.Description?.Trim(),
             SortOrder = request.SortOrder,
+            EventCode = string.IsNullOrWhiteSpace(request.EventCode) ? null : request.EventCode.Trim(),
+            FieldRole = string.IsNullOrWhiteSpace(request.FieldRole) ? "Filter" : request.FieldRole.Trim(),
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
@@ -104,6 +131,10 @@ public class SyncFieldMappingsController : ApiControllerBase
             mapping.EventsAirFieldGuid = request.EventsAirFieldGuid.Trim().ToLower();
         if (request.SortOrder.HasValue)
             mapping.SortOrder = request.SortOrder.Value;
+        if (request.EventCode != null)
+            mapping.EventCode = string.IsNullOrWhiteSpace(request.EventCode) ? null : request.EventCode.Trim();
+        if (!string.IsNullOrWhiteSpace(request.FieldRole))
+            mapping.FieldRole = request.FieldRole.Trim();
         mapping.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
@@ -215,6 +246,8 @@ public class CreateSyncFieldMappingRequest
     public string EventsAirFieldGuid { get; set; } = string.Empty;
     public string? Description { get; set; }
     public int SortOrder { get; set; } = 0;
+    public string? EventCode { get; set; }
+    public string? FieldRole { get; set; }
 }
 
 public class UpdateSyncFieldMappingRequest
@@ -223,6 +256,8 @@ public class UpdateSyncFieldMappingRequest
     public string? EventsAirFieldGuid { get; set; }
     public string? Description { get; set; }
     public int? SortOrder { get; set; }
+    public string? EventCode { get; set; }
+    public string? FieldRole { get; set; }
 }
 
 public class AddSyncFieldValueRequest

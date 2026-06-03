@@ -231,6 +231,10 @@ public class EventsAirController : ApiControllerBase
             var nullEventCarClassRules = await _db.CarClassRules.Where(r => r.EventCode == null).ToListAsync(ct);
             foreach (var r in nullEventCarClassRules)
                 r.EventCode = previousEventCode;
+
+            var nullEventFieldMappings = await _db.SyncFieldMappings.Where(m => m.EventCode == null).ToListAsync(ct);
+            foreach (var m in nullEventFieldMappings)
+                m.EventCode = previousEventCode;
         }
 
         // 4. Optionally copy Car Classes from previous event
@@ -487,9 +491,26 @@ public class EventsAirController : ApiControllerBase
             var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
                 config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
 
+            // ── Load event-scoped field GUIDs from DB ─────────────────────────
+            const string defaultDedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+            const string defaultRankGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+            var fieldMappings = await _db.SyncFieldMappings
+                .Where(f => f.EventCode == null || f.EventCode == config.EventCode)
+                .ToListAsync(cancellationToken);
+            var dedicatedCarGuid = (fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase) && f.EventCode == config.EventCode)
+                ?? fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase)))
+                ?.EventsAirFieldGuid ?? defaultDedicatedCarGuid;
+            var rankGuid = (fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase) && f.EventCode == config.EventCode)
+                ?? fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase)))
+                ?.EventsAirFieldGuid ?? defaultRankGuid;
+
             // ── Pass 1: Upsert guests with DedicatedCar=True ──────────────────
             var contacts = await Application.Common.Models.EventsAirSyncHelpers.FetchContactsWithDedicatedCarAsync(
-                config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, cancellationToken);
+                config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, cancellationToken, dedicatedCarGuid, rankGuid);
 
             var syncedContactIds = new HashSet<string>(contacts.Select(c => c.ContactId), StringComparer.OrdinalIgnoreCase);
 

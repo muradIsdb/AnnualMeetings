@@ -43,8 +43,11 @@ public static class EventsAirSyncHelpers
 
     public static async Task<List<EventsAirSyncContactDto>> FetchContactsWithDedicatedCarAsync(
         string baseUrl, string eventCode, string accessToken,
-        IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+        IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
+        string? dedicatedCarGuid = null, string? rankGuid = null)
     {
+        dedicatedCarGuid ??= DedicatedCarFieldGuid;
+        rankGuid ??= RankFieldGuid;
         var fetched = new List<EventsAirSyncContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -56,7 +59,7 @@ public static class EventsAirSyncHelpers
         {
             var graphqlQuery = $@"{{
               event(id: ""{eventCode}"") {{
-                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{DedicatedCarFieldGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
+                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{dedicatedCarGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
                   id firstName lastName title jobTitle organizationName primaryEmail
                   primaryAddress {{ country }}
                   photo {{ url }}
@@ -84,7 +87,7 @@ public static class EventsAirSyncHelpers
             {
                 var errorMsg = errors[0].GetProperty("message").GetString() ?? "Unknown GraphQL error";
                 if (errorMsg.Contains("cost", StringComparison.OrdinalIgnoreCase))
-                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken);
+                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken, dedicatedCarGuid, rankGuid);
                 throw new InvalidOperationException($"GraphQL error: {errorMsg}");
             }
 
@@ -103,7 +106,7 @@ public static class EventsAirSyncHelpers
                     foreach (var cf in cfArray.EnumerateArray())
                     {
                         var defId = cf.TryGetProperty("definitionId", out var did) ? did.GetString() ?? "" : "";
-                        if (string.Equals(defId, RankFieldGuid, StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(defId, rankGuid, StringComparison.OrdinalIgnoreCase))
                         {
                             if (cf.TryGetProperty("value", out var v) && v.ValueKind != JsonValueKind.Null)
                                 rankValue = v.ValueKind == JsonValueKind.String ? v.GetString() : v.GetRawText().Trim('"');
@@ -159,8 +162,11 @@ public static class EventsAirSyncHelpers
 
     private static async Task<List<EventsAirSyncContactDto>> FetchContactsWithDedicatedCarLightAsync(
         string baseUrl, string eventCode, string accessToken,
-        IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+        IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
+        string? dedicatedCarGuid = null, string? rankGuid = null)
     {
+        dedicatedCarGuid ??= DedicatedCarFieldGuid;
+        rankGuid ??= RankFieldGuid;
         var fetched = new List<EventsAirSyncContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -172,7 +178,7 @@ public static class EventsAirSyncHelpers
         {
             var graphqlQuery = $@"{{
               event(id: ""{eventCode}"") {{
-                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{DedicatedCarFieldGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
+                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{dedicatedCarGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
                   id firstName lastName title jobTitle organizationName primaryEmail
                   primaryAddress {{ country }}
                 }}
@@ -230,7 +236,7 @@ public static class EventsAirSyncHelpers
         // Fetch Rank values separately
         if (fetched.Count > 0)
         {
-            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, RankFieldGuid, fetched.Select(c => c.ContactId), httpClientFactory, cancellationToken);
+            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, rankGuid, fetched.Select(c => c.ContactId), httpClientFactory, cancellationToken);
             for (int i = 0; i < fetched.Count; i++)
             {
                 if (rankValues.TryGetValue(fetched[i].ContactId, out var rank))

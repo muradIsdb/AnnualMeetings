@@ -666,6 +666,12 @@ using (var scope = app.Services.CreateScope())
                 ) THEN
                     ALTER TABLE ""Guests"" ADD COLUMN ""EventCode"" text NULL;
                 END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='SyncFieldMappings' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""SyncFieldMappings"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
             END $$;
         ");
 

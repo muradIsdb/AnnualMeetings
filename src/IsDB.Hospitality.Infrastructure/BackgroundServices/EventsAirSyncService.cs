@@ -175,8 +175,26 @@ public class EventsAirSyncService : BackgroundService
             // ══════════════════════════════════════════════════════════════════
             // PASS 1: Fetch contacts with DedicatedCar=True and upsert guests
             // ══════════════════════════════════════════════════════════════════
+            // Load field GUIDs from DB filtered by active event code
+            const string defaultDedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+            const string defaultRankGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+            var fieldMappings = await db.SyncFieldMappings
+                .Where(f => f.EventCode == null || f.EventCode == eventCode)
+                .ToListAsync(cancellationToken);
+            var dedicatedCarGuid = (fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+                ?? fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase)))
+                ?.EventsAirFieldGuid ?? defaultDedicatedCarGuid;
+            var rankGuid = (fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+                ?? fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase)))
+                ?.EventsAirFieldGuid ?? defaultRankGuid;
+            _logger.LogInformation("EventsAir background sync using DedicatedCar GUID={DedicatedCarGuid}, Rank GUID={RankGuid} for event {EventCode}.",
+                dedicatedCarGuid, rankGuid, eventCode);
             var contacts = await EventsAirSyncHelpers.FetchContactsWithDedicatedCarAsync(
-                apiBaseUrl, eventCode, token, httpClientFactory, cancellationToken);
+                apiBaseUrl, eventCode, token, httpClientFactory, cancellationToken, dedicatedCarGuid, rankGuid);
 
             _logger.LogInformation("EventsAir background sync Pass 1: {Count} contacts with DedicatedCar=True.", contacts.Count);
 

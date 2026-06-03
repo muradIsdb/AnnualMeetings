@@ -212,13 +212,19 @@ public class GuestsController : ApiControllerBase
             oAuthScope = "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
         }
 
-        // Load custom field GUIDs from DB (fall back to hardcoded defaults if not found)
-        var fieldMappings = await db.SyncFieldMappings.ToListAsync(cancellationToken);
-        var dedicatedCarGuid = fieldMappings.FirstOrDefault(f =>
-            f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase))
+        // Load custom field GUIDs from DB filtered by active event code (prefer event-specific over global NULL)
+        var fieldMappings = await db.SyncFieldMappings
+            .Where(f => f.EventCode == null || f.EventCode == eventCode)
+            .ToListAsync(cancellationToken);
+        var dedicatedCarGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase)))
             ?.EventsAirFieldGuid ?? DEDICATED_CAR_FIELD_GUID;
-        var rankGuid = fieldMappings.FirstOrDefault(f =>
-            f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase))
+        var rankGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase)))
             ?.EventsAirFieldGuid ?? RANK_FIELD_GUID;
 
         // Capture caller identity before entering the background Task (HttpContext not available inside)

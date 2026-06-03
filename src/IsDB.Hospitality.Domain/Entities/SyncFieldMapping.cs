@@ -19,6 +19,9 @@ public class SyncFieldMapping : BaseEntity
     /// <summary>Display order on the Field Mappings page</summary>
     public int SortOrder { get; set; } = 0;
 
+    /// <summary>The EventsAir event code this mapping belongs to. NULL = applies to all events (legacy).</summary>
+    public string? EventCode { get; set; }
+
     /// <summary>
     /// Controls how this field is used during sync:
     /// - "DedicatedCar": Primary filter — guests without a value for this field are deactivated
