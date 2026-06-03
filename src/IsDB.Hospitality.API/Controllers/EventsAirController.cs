@@ -957,4 +957,74 @@ public class EventsAirController : ApiControllerBase
             return StatusCode(502, new { error = "Failed to load events from EventsAir", detail = ex.Message });
         }
     }
+
+    // GET /api/eventsair/debug-travel
+    // Debug endpoint: fetches raw travel bookings from EventsAir to diagnose sync issues
+    [HttpGet("debug-travel")]
+    public async Task<IActionResult> DebugTravel(CancellationToken cancellationToken)
+    {
+        var config = await _appDb.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive)
+            return BadRequest(new { message = "EventsAir not configured or inactive." });
+        var oAuthScope = await GetOAuthScopeAsync();
+        string token;
+        try
+        {
+            var tokenClient = _httpClientFactory.CreateClient();
+            var tokenReq = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string,string>("grant_type", "client_credentials"),
+                new KeyValuePair<string,string>("client_id", config.ClientId),
+                new KeyValuePair<string,string>("client_secret", config.ClientSecret),
+                new KeyValuePair<string,string>("scope", !string.IsNullOrWhiteSpace(oAuthScope)
+                    ? oAuthScope
+                    : "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default")
+            });
+            var tokenUrl = config.TokenEndpoint;
+            var tokenResp = await tokenClient.PostAsync(tokenUrl, tokenReq, cancellationToken);
+            tokenResp.EnsureSuccessStatusCode();
+            var tokenJson = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                await tokenResp.Content.ReadAsStringAsync(cancellationToken));
+            token = tokenJson.GetProperty("access_token").GetString()!;
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = "Failed to get token", detail = ex.Message });
+        }
+        // Fetch first page raw
+        var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(30);
+        var query = $"{{ event(id: \"{config.EventCode}\") {{ travelBookings(input: {{}}, limit: 5, offset: 0) {{ id contact {{ id }} travelType {{ name }} flightNumber carrier {{ name }} arrivalDate departureDate eta etd departurePort {{ name }} arrivalPort {{ name }} }} }} }}";
+        var req = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
+        {
+            Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
+            Content = new System.Net.Http.StringContent(
+                System.Text.Json.JsonSerializer.Serialize(new { query }),
+                System.Text.Encoding.UTF8, "application/json")
+        };
+        var response = await client.SendAsync(req, cancellationToken);
+        var rawJson = await response.Content.ReadAsStringAsync(cancellationToken);
+        // Also run full fetch
+        var allBookings = await Application.Common.Models.EventsAirSyncHelpers.FetchTravelBookingsAsync(
+            config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, cancellationToken);
+        return Ok(new
+        {
+            eventCode = config.EventCode,
+            httpStatus = (int)response.StatusCode,
+            rawFirstPage = rawJson,
+            totalFetched = allBookings.Count,
+            samples = allBookings.Take(5).Select(t => new
+            {
+                t.ContactId,
+                t.TravelTypeName,
+                t.FlightNumber,
+                t.ArrivalDate,
+                t.Eta,
+                t.DepartureDate,
+                t.Etd,
+                t.ArrivalPortName,
+                t.DeparturePortName
+            })
+        });
+    }
 }
