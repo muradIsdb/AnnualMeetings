@@ -25,14 +25,18 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
             && (request.ActiveEventCode == null || g.EventCode == null || g.EventCode == request.ActiveEventCode));
 
         // ── 1. Count queries — sequential to avoid EF Core concurrent-context error ─
-        // NOTE: Counts use InboundStatus/OutboundStatus (the fields updated by Airport/Hotel workflows)
-        // rather than the legacy GuestStatus field which is not updated by those workflows.
+        // NOTE: Counts use InboundStatus/OutboundStatus and the ReceivedByEmbassyTeam boolean flag
+        // (the fields updated by Airport/Hotel workflows) rather than the legacy GuestStatus field.
+        // ReceivedByEmbassyTeam is a separate boolean flag — it does NOT change InboundStatus.
         var totalGuests       = await activeGuests.CountAsync(cancellationToken);
+        // arrivingCount = guests past airport: Arrived + ReceivedByEmbassy flag + VehicleAssigned + AtHotel
         var arrivingCount     = await activeGuests.CountAsync(g =>
             g.InboundStatus == InboundStatus.Arrived ||
-            g.InboundStatus == InboundStatus.ReceivedByEmbassyTeam ||
-            g.InboundStatus == InboundStatus.VehicleAssigned, cancellationToken);
-        var receivedByEmbassy = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.ReceivedByEmbassyTeam, cancellationToken);
+            g.ReceivedByEmbassyTeam ||
+            g.InboundStatus == InboundStatus.VehicleAssigned ||
+            g.InboundStatus == InboundStatus.AtHotel, cancellationToken);
+        // receivedByEmbassy = cumulative: all guests who ever had embassy flag set (boolean, not enum)
+        var receivedByEmbassy = await activeGuests.CountAsync(g => g.ReceivedByEmbassyTeam, cancellationToken);
         var onTheWayToHotel   = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.VehicleAssigned, cancellationToken);
         var atHotel           = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.AtHotel, cancellationToken);
         var departing         = await activeGuests.CountAsync(g =>
