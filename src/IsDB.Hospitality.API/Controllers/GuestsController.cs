@@ -362,8 +362,11 @@ public class GuestsController : ApiControllerBase
                         .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase);
 
                     // ── Bulk-load all flights keyed by flight number ──────────
-                    var flightsByNumber = await bgDb.Flights
-                        .ToDictionaryAsync(f => f.FlightNumber, StringComparer.OrdinalIgnoreCase);
+                    // Use GroupBy+First to handle duplicate flight numbers (different casing) in DB
+                    var allFlights = await bgDb.Flights.ToListAsync();
+                    var flightsByNumber = allFlights
+                        .GroupBy(f => f.FlightNumber, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
                     foreach (var tbDto in travelBookings)
                     {
