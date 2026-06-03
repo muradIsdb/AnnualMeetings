@@ -495,8 +495,21 @@ public class GuestsController : ApiControllerBase
                     // Single SaveChangesAsync for the entire Pass 3 batch
                     await bgDb.SaveChangesAsync();
                     Console.WriteLine($"[TRAVEL-SYNC] Results: {savedNew} new, {updatedExisting} updated, {rebooked} rebooked (history saved), {errorCount} errors, skipped: {skippedNoFlight} no flight, {skippedNoContact} no contact, {skippedNoGuest} no guest match");
+                    // Store diagnostics on job so sync-status endpoint can return them
+                    job.TravelFetched = travelBookings.Count;
+                    job.TravelSavedNew = savedNew;
+                    job.TravelUpdated = updatedExisting;
+                    job.TravelRebooked = rebooked;
+                    job.TravelSkippedNoFlight = skippedNoFlight;
+                    job.TravelSkippedNoContact = skippedNoContact;
+                    job.TravelSkippedNoGuest = skippedNoGuest;
+                    job.TravelErrors = errorCount;
                 }
-                catch (Exception ex) { Console.WriteLine($"Travel sync error: {ex.Message}\n{ex.StackTrace}"); }
+                catch (Exception ex)
+                {
+                    job.TravelFirstError = ex.Message;
+                    Console.WriteLine($"Travel sync error: {ex.Message}\n{ex.StackTrace}");
+                }
 
                 job.Added = added; job.Updated = updated; job.Deactivated = deactivated;
                 job.State = "done"; job.FinishedAt = DateTime.UtcNow;
@@ -969,7 +982,11 @@ public class GuestsController : ApiControllerBase
         string? Country = null, string? PhotoUrl = null, string? RankValue = null);
 
     private record EventsAirRegistrationRaw(string ContactId, string FirstName, string LastName, string? Title, string? JobTitle, string? OrganizationName, string? PrimaryEmail, string RegistrationTypeId, string RegistrationTypeName, string? Country = null, string? PhotoUrl = null);
-    private class SyncJobStatus { public string JobId { get; set; } = string.Empty; public string State { get; set; } = "pending"; public string Message { get; set; } = string.Empty; public int Added { get; set; } public int Updated { get; set; } public int Deactivated { get; set; } public int TotalFetched { get; set; } public DateTime StartedAt { get; set; } public DateTime? FinishedAt { get; set; } }
+    private class SyncJobStatus { public string JobId { get; set; } = string.Empty; public string State { get; set; } = "pending"; public string Message { get; set; } = string.Empty; public int Added { get; set; } public int Updated { get; set; } public int Deactivated { get; set; } public int TotalFetched { get; set; } public DateTime StartedAt { get; set; } public DateTime? FinishedAt { get; set; }
+        // Travel sync diagnostics
+        public int TravelFetched { get; set; } public int TravelSavedNew { get; set; } public int TravelUpdated { get; set; } public int TravelRebooked { get; set; }
+        public int TravelSkippedNoFlight { get; set; } public int TravelSkippedNoContact { get; set; } public int TravelSkippedNoGuest { get; set; }
+        public int TravelErrors { get; set; } public string? TravelFirstError { get; set; } }
     private class FieldFilter { public string FieldGuid { get; set; } = string.Empty; public List<string> SelectedValues { get; set; } = new(); }
 
     // ═══════════════════════════════════════════════════════════════════════════

@@ -1297,4 +1297,168 @@ public class EventsAirController : ApiControllerBase
             sampleBookings = samples
         });
     }
+
+    // POST /api/eventsair/sync-travel
+    // Directly fetches travel bookings from EventsAir and saves them to DB.
+    // Independent of the main guest sync pipeline.
+    [HttpPost("sync-travel")]
+    [Authorize]
+    public async Task<IActionResult> SyncTravel(CancellationToken cancellationToken)
+    {
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive)
+            return BadRequest(new { message = "EventsAir not configured or inactive." });
+
+        // Load field mappings
+        var fieldMappings = await _db.SyncFieldMappings
+            .Where(f => f.EventCode == null || f.EventCode == config.EventCode)
+            .ToListAsync(cancellationToken);
+        var dedicatedCarGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase) && f.EventCode == config.EventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase)))
+            ?.EventsAirFieldGuid ?? "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+        var rankGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase) && f.EventCode == config.EventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase)))
+            ?.EventsAirFieldGuid ?? "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+
+        // Get token
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+
+        // Fetch all contacts with DedicatedCar=True
+        var contacts = await Application.Common.Models.EventsAirSyncHelpers.FetchContactsWithDedicatedCarAsync(
+            config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, cancellationToken,
+            dedicatedCarGuid, rankGuid);
+        var contactIds = contacts.Select(c => c.ContactId).ToList();
+
+        // Fetch travel bookings for all contacts
+        var travelBookings = await Application.Common.Models.EventsAirSyncHelpers.FetchTravelBookingsByContactsAsync(
+            config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, contactIds, cancellationToken);
+
+        // Load all active guests keyed by EventsAirContactId
+        var guestsByContactId = await _db.Guests
+            .Where(g => g.IsActive)
+            .Include(g => g.TravelBookings).ThenInclude(tb => tb.Flight)
+            .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
+        // Load all existing flights keyed by flight number
+        var flightsByNumber = await _db.Flights
+            .ToDictionaryAsync(f => f.FlightNumber, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
+        int savedNew = 0, updatedExisting = 0, rebooked = 0;
+        int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0, errorCount = 0;
+        var errors = new List<string>();
+
+        foreach (var tb in travelBookings)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(tb.FlightNumber)) { skippedNoFlight++; continue; }
+                if (string.IsNullOrEmpty(tb.ContactId)) { skippedNoContact++; continue; }
+                if (!guestsByContactId.TryGetValue(tb.ContactId, out var guest)) { skippedNoGuest++; continue; }
+
+                bool isArrival = tb.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
+
+                // Parse dates
+                DateTime? scheduledArrival = null, scheduledDeparture = null;
+                if (isArrival && !string.IsNullOrEmpty(tb.ArrivalDate) && DateTime.TryParse(tb.ArrivalDate, out var arrDate))
+                {
+                    arrDate = DateTime.SpecifyKind(arrDate, DateTimeKind.Utc);
+                    scheduledArrival = !string.IsNullOrEmpty(tb.Eta) && TimeSpan.TryParse(tb.Eta, out var etaTime)
+                        ? arrDate.Add(etaTime) : arrDate;
+                }
+                if (!isArrival && !string.IsNullOrEmpty(tb.DepartureDate) && DateTime.TryParse(tb.DepartureDate, out var depDate))
+                {
+                    depDate = DateTime.SpecifyKind(depDate, DateTimeKind.Utc);
+                    scheduledDeparture = !string.IsNullOrEmpty(tb.Etd) && TimeSpan.TryParse(tb.Etd, out var etdTime)
+                        ? depDate.Add(etdTime) : depDate;
+                }
+
+                // Find or create Flight
+                if (!flightsByNumber.TryGetValue(tb.FlightNumber, out var flight))
+                {
+                    flight = new IsDB.Hospitality.Domain.Entities.Flight
+                    {
+                        FlightNumber = tb.FlightNumber,
+                        AirlineName = tb.CarrierName ?? "Unknown",
+                        ScheduledArrival = scheduledArrival ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc),
+                        ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc),
+                        ArrivalPortName = tb.ArrivalPortName,
+                        ArrivalPortIataCode = tb.ArrivalPortCode,
+                        DeparturePortName = tb.DeparturePortName,
+                        DeparturePortIataCode = tb.DeparturePortCode,
+                        Status = IsDB.Hospitality.Domain.Enums.FlightStatus.Scheduled
+                    };
+                    _db.Flights.Add(flight);
+                    flightsByNumber[tb.FlightNumber] = flight;
+                }
+                else
+                {
+                    if (scheduledArrival.HasValue) flight.ScheduledArrival = scheduledArrival.Value;
+                    if (scheduledDeparture.HasValue) flight.ScheduledDeparture = scheduledDeparture.Value;
+                    if (!string.IsNullOrEmpty(tb.ArrivalPortName)) flight.ArrivalPortName = tb.ArrivalPortName;
+                    if (!string.IsNullOrEmpty(tb.DeparturePortName)) flight.DeparturePortName = tb.DeparturePortName;
+                    if (!string.IsNullOrEmpty(tb.CarrierName)) flight.AirlineName = tb.CarrierName;
+                }
+
+                var notes = tb.BookingNotes ?? tb.Comment;
+                var existingBooking = guest.TravelBookings.FirstOrDefault(b => b.IsArrival == isArrival);
+
+                if (existingBooking == null)
+                {
+                    _db.TravelBookings.Add(new IsDB.Hospitality.Domain.Entities.TravelBooking
+                    {
+                        GuestId = guest.Id,
+                        Flight = flight,   // navigation property — EF resolves FK on SaveChanges
+                        IsArrival = isArrival,
+                        SeatClass = tb.SeatClass,
+                        BookingNotes = notes,
+                        LastSyncedAt = DateTime.UtcNow
+                    });
+                    savedNew++;
+                }
+                else if (existingBooking.FlightId != flight.Id)
+                {
+                    existingBooking.Flight = flight;
+                    existingBooking.SeatClass = tb.SeatClass;
+                    existingBooking.BookingNotes = notes;
+                    existingBooking.ChangedSinceLastView = true;
+                    existingBooking.ChangedAt = DateTime.UtcNow;
+                    existingBooking.LastSyncedAt = DateTime.UtcNow;
+                    rebooked++;
+                }
+                else
+                {
+                    existingBooking.SeatClass = tb.SeatClass;
+                    existingBooking.BookingNotes = notes;
+                    existingBooking.LastSyncedAt = DateTime.UtcNow;
+                    updatedExisting++;
+                }
+            }
+            catch (Exception ex)
+            {
+                errorCount++;
+                if (errors.Count < 5) errors.Add($"ContactId={tb.ContactId} Flight={tb.FlightNumber}: {ex.Message}");
+            }
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return Ok(new
+        {
+            contactsFetched = contactIds.Count,
+            travelBookingsFetched = travelBookings.Count,
+            savedNew,
+            updatedExisting,
+            rebooked,
+            skippedNoFlight,
+            skippedNoContact,
+            skippedNoGuest,
+            errorCount,
+            errors
+        });
+    }
 }
