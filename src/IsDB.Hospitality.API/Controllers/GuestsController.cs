@@ -348,7 +348,7 @@ public class GuestsController : ApiControllerBase
                 int savedNew = 0, updatedExisting = 0, rebooked = 0;
                 try
                 {
-                    var travelBookings = await FetchTravelBookingsFromEventsAirAsync(apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None);
+                    var travelBookings = await EventsAirSyncHelpers.FetchTravelBookingsByContactsAsync(apiBaseUrl, eventCode, token, httpClientFactory, syncedContactIds, CancellationToken.None);
                     int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0;
                     Console.WriteLine($"[TRAVEL-SYNC] Processing {travelBookings.Count} travel bookings...");
                     foreach (var sample in travelBookings.Take(5))
