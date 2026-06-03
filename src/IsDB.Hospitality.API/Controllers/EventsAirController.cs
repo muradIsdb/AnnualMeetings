@@ -265,14 +265,20 @@ public class EventsAirController : ApiControllerBase
                 .Where(v => v.IsActive && v.EventCode == previousEventCode)
                 .ToListAsync(ct);
 
+            // Load existing 2026 vehicle identifiers to avoid duplicates
+            var existingNewEventVehicleKeys = await _db.Vehicles
+                .Where(x => x.EventCode == newEventCode)
+                .Select(x => new { x.LicensePlate, x.CarNumber })
+                .ToListAsync(ct);
+            var existingVehicleSet = new HashSet<string>(
+                existingNewEventVehicleKeys.Select(x => $"{x.LicensePlate}|{x.CarNumber}"));
+
             foreach (var v in previousVehicles)
             {
-                bool alreadyExists = await _db.Vehicles
-                    .AnyAsync(x => x.EventCode == newEventCode &&
-                                   x.LicensePlate == v.LicensePlate &&
-                                   x.CarNumber == v.CarNumber, ct);
-                if (!alreadyExists)
+                var key = $"{v.LicensePlate}|{v.CarNumber}";
+                if (!existingVehicleSet.Contains(key))
                 {
+                    existingVehicleSet.Add(key); // prevent duplicates within the batch
                     _db.Vehicles.Add(new Vehicle
                     {
                         Id = Guid.NewGuid(),
@@ -282,7 +288,7 @@ public class EventsAirController : ApiControllerBase
                         Color = v.Color,
                         CarNumber = v.CarNumber,
                         BarcodeValue = v.BarcodeValue,
-                        Status = Domain.Enums.VehicleStatus.Available,
+                        Status = VehicleStatus.Available,
                         IsActive = true,
                         EventCode = newEventCode,
                         CreatedAt = DateTime.UtcNow,
@@ -295,18 +301,23 @@ public class EventsAirController : ApiControllerBase
                 .Where(d => d.IsActive && d.EventCode == previousEventCode)
                 .ToListAsync(ct);
 
+            var existingNewEventDriverNames = await _db.Drivers
+                .Where(x => x.EventCode == newEventCode)
+                .Select(x => x.FullName)
+                .ToListAsync(ct);
+            var existingDriverSet = new HashSet<string>(existingNewEventDriverNames, StringComparer.OrdinalIgnoreCase);
+
             foreach (var d in previousDrivers)
             {
-                bool alreadyExists = await _db.Drivers
-                    .AnyAsync(x => x.EventCode == newEventCode && x.FullName == d.FullName, ct);
-                if (!alreadyExists)
+                if (!existingDriverSet.Contains(d.FullName))
                 {
+                    existingDriverSet.Add(d.FullName);
                     _db.Drivers.Add(new Driver
                     {
                         Id = Guid.NewGuid(),
                         FullName = d.FullName,
                         Phone = d.Phone,
-                        Status = Domain.Enums.DriverStatus.Available,
+                        Status = DriverStatus.Available,
                         IsActive = true,
                         EventCode = newEventCode,
                         CreatedAt = DateTime.UtcNow,
