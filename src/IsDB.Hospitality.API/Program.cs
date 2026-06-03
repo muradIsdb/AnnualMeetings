@@ -620,6 +620,21 @@ using (var scope = app.Services.CreateScope())
             ON CONFLICT DO NOTHING;
         ");
 
+        // Add VehicleTypeValue to Guests if missing (AddVehicleTypeValueToGuest migration)
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Guests' AND column_name = 'VehicleTypeValue'
+                ) THEN
+                    ALTER TABLE ""Guests"" ADD COLUMN ""VehicleTypeValue"" text NULL;
+                END IF;
+            END $$;
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260603100000_AddVehicleTypeValueToGuest', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        ");
+
         // Apply all remaining pending migrations
         logger.LogInformation("Applying pending migrations...");
         await context.Database.MigrateAsync();
