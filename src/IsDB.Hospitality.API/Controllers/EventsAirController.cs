@@ -1236,4 +1236,65 @@ public class EventsAirController : ApiControllerBase
             rawResponse = rawJson.Length > 5000 ? rawJson[..5000] + "...[truncated]" : rawJson
         });
     }
+
+    // GET /api/eventsair/debug-travel-sync
+    // Runs the exact same travel sync logic as Pass 3 but reports counts without saving
+    [HttpGet("debug-travel-sync")]
+    [Authorize]
+    public async Task<ActionResult<object>> DebugTravelSync(CancellationToken cancellationToken)
+    {
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive) return BadRequest("No active config");
+        const string defaultDedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+        const string defaultRankGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+        var fieldMappings = await _db.SyncFieldMappings
+            .Where(f => f.EventCode == null || f.EventCode == config.EventCode)
+            .ToListAsync(cancellationToken);
+        var dedicatedCarGuid2 = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase) && f.EventCode == config.EventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase)))
+            ?.EventsAirFieldGuid ?? defaultDedicatedCarGuid;
+        var rankGuid2 = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase) && f.EventCode == config.EventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase)))
+            ?.EventsAirFieldGuid ?? defaultRankGuid;
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+        // Fetch contacts (same as Pass 1)
+        var contacts = await Application.Common.Models.EventsAirSyncHelpers.FetchContactsWithDedicatedCarAsync(
+            config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, cancellationToken,
+            dedicatedCarGuid2, rankGuid2);
+        var syncedContactIds = new HashSet<string>(contacts.Select(c => c.ContactId), StringComparer.OrdinalIgnoreCase);
+        // Fetch travel bookings (same as Pass 3)
+        var travelBookings = await Application.Common.Models.EventsAirSyncHelpers.FetchTravelBookingsByContactsAsync(
+            config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, syncedContactIds, cancellationToken);
+        // Load active guests from DB
+        var guestsByContactId = await _db.Guests
+            .Where(g => g.IsActive)
+            .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0, wouldSave = 0;
+        var samples = new List<object>();
+        foreach (var tbDto in travelBookings)
+        {
+            if (string.IsNullOrEmpty(tbDto.FlightNumber)) { skippedNoFlight++; continue; }
+            if (string.IsNullOrEmpty(tbDto.ContactId)) { skippedNoContact++; continue; }
+            if (!guestsByContactId.ContainsKey(tbDto.ContactId)) { skippedNoGuest++; continue; }
+            wouldSave++;
+            if (samples.Count < 5)
+                samples.Add(new { contactId = tbDto.ContactId, flightNumber = tbDto.FlightNumber, travelTypeName = tbDto.TravelTypeName, arrivalDate = tbDto.ArrivalDate, departureDate = tbDto.DepartureDate });
+        }
+        return Ok(new
+        {
+            contactsFetched = contacts.Count,
+            travelBookingsFetched = travelBookings.Count,
+            activeGuestsInDb = guestsByContactId.Count,
+            skippedNoFlight,
+            skippedNoContact,
+            skippedNoGuest,
+            wouldSave,
+            sampleBookings = samples
+        });
+    }
 }
