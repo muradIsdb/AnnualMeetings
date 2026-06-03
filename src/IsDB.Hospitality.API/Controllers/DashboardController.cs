@@ -1,24 +1,31 @@
+using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Application.DTOs.Dashboard;
 using IsDB.Hospitality.Application.Features.Dashboard.Queries;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace IsDB.Hospitality.API.Controllers;
 
 [Authorize]
 public class DashboardController : ApiControllerBase
 {
+    private readonly IAppDbContext _db;
+    public DashboardController(IAppDbContext db) { _db = db; }
+
     [HttpGet("summary")]
-    public async Task<ActionResult<DashboardSummaryDto>> GetSummary()
+    public async Task<ActionResult<DashboardSummaryDto>> GetSummary(CancellationToken ct)
     {
-        var result = await Mediator.Send(new GetDashboardSummaryQuery());
+        var activeEventCode = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+        var result = await Mediator.Send(new GetDashboardSummaryQuery(activeEventCode));
         return Ok(result);
     }
 
     [HttpGet("registration-type-stats")]
-    public async Task<ActionResult<List<RegistrationTypeStatsDto>>> GetRegistrationTypeStats()
+    public async Task<ActionResult<List<RegistrationTypeStatsDto>>> GetRegistrationTypeStats(CancellationToken ct)
     {
-        var result = await Mediator.Send(new GetRegistrationTypeStatsQuery());
+        var activeEventCode = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+        var result = await Mediator.Send(new GetRegistrationTypeStatsQuery(activeEventCode));
         return Ok(result);
     }
 
@@ -27,9 +34,10 @@ public class DashboardController : ApiControllerBase
     /// Used by the Hotel Dashboard (Admin and Hotel roles).
     /// </summary>
     [HttpGet("hotel-summary")]
-    public async Task<ActionResult<HotelSummaryDto>> GetHotelSummary()
+    public async Task<ActionResult<HotelSummaryDto>> GetHotelSummary(CancellationToken ct)
     {
-        var result = await Mediator.Send(new GetHotelSummaryQuery());
+        var activeEventCode = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+        var result = await Mediator.Send(new GetHotelSummaryQuery(activeEventCode));
         return Ok(result);
     }
 

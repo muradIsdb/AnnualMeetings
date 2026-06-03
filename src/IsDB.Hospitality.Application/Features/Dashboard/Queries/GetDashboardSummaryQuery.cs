@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IsDB.Hospitality.Application.Features.Dashboard.Queries;
 
-public record GetDashboardSummaryQuery : IRequest<DashboardSummaryDto>;
+public record GetDashboardSummaryQuery(string? ActiveEventCode = null) : IRequest<DashboardSummaryDto>;
 
 public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSummaryQuery, DashboardSummaryDto>
 {
@@ -21,7 +21,8 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
 
     public async Task<DashboardSummaryDto> Handle(GetDashboardSummaryQuery request, CancellationToken cancellationToken)
     {
-        var activeGuests = _context.Guests.AsNoTracking().Where(g => g.IsActive);
+        var activeGuests = _context.Guests.AsNoTracking().Where(g => g.IsActive
+            && (request.ActiveEventCode == null || g.EventCode == null || g.EventCode == request.ActiveEventCode));
 
         // ── 1. Count queries — sequential to avoid EF Core concurrent-context error ─
         var totalGuests       = await activeGuests.CountAsync(cancellationToken);

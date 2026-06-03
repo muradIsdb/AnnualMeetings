@@ -29,9 +29,12 @@ public class GuestsController : ApiControllerBase
     private const string RANK_FIELD_GUID = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
 
     [HttpGet("arrival-flights")]
-    public async Task<ActionResult<List<ArrivalFlightGroupDto>>> GetArrivalFlights()
+    public async Task<ActionResult<List<ArrivalFlightGroupDto>>> GetArrivalFlights(
+        [FromServices] AppDbContext db = null!,
+        CancellationToken ct = default)
     {
-        var result = await Mediator.Send(new GetArrivalFlightsQuery());
+        var activeEventCode = (await db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+        var result = await Mediator.Send(new GetArrivalFlightsQuery(activeEventCode));
         return Ok(result);
     }
 

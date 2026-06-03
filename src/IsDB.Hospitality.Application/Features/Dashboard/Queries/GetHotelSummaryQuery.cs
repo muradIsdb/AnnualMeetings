@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IsDB.Hospitality.Application.Features.Dashboard.Queries;
 
-public record GetHotelSummaryQuery : IRequest<HotelSummaryDto>;
+public record GetHotelSummaryQuery(string? ActiveEventCode = null) : IRequest<HotelSummaryDto>;
 
 public class GetHotelSummaryQueryHandler : IRequestHandler<GetHotelSummaryQuery, HotelSummaryDto>
 {
@@ -23,7 +23,8 @@ public class GetHotelSummaryQueryHandler : IRequestHandler<GetHotelSummaryQuery,
         var guests = await _context.Guests
             .AsNoTracking()
             .Include(g => g.StatusHistory)
-            .Where(g => g.IsActive)
+            .Where(g => g.IsActive
+                && (request.ActiveEventCode == null || g.EventCode == null || g.EventCode == request.ActiveEventCode))
             .ToListAsync(cancellationToken);
 
         // ── 2. KPI counts ────────────────────────────────────────────────────────
