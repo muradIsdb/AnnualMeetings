@@ -1040,4 +1040,70 @@ public class EventsAirController : ApiControllerBase
             samples
         });
     }
+
+    // GET /api/eventsair/debug-schema
+    // Introspects the EventsAir GraphQL schema to find available fields on the Event type
+    [HttpGet("debug-schema")]
+    public async Task<IActionResult> DebugSchema(CancellationToken cancellationToken)
+    {
+        var config = await _appDb.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive)
+            return BadRequest(new { message = "EventsAir not configured or inactive." });
+        var oAuthScope = await GetOAuthScopeAsync();
+        string token;
+        try
+        {
+            var tokenClient = _httpClientFactory.CreateClient();
+            var tokenReq = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string,string>("grant_type", "client_credentials"),
+                new KeyValuePair<string,string>("client_id", config.ClientId),
+                new KeyValuePair<string,string>("client_secret", config.ClientSecret),
+                new KeyValuePair<string,string>("scope", !string.IsNullOrWhiteSpace(oAuthScope)
+                    ? oAuthScope
+                    : "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default")
+            });
+            var tokenResp = await tokenClient.PostAsync(config.TokenEndpoint, tokenReq, cancellationToken);
+            tokenResp.EnsureSuccessStatusCode();
+            var tokenJson = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                await tokenResp.Content.ReadAsStringAsync(cancellationToken));
+            token = tokenJson.GetProperty("access_token").GetString()!;
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = "Failed to get token", detail = ex.Message });
+        }
+        var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(25);
+        // Introspect the Event type to get all available fields
+        var introspectionQuery = "{\"query\":\"{ __type(name: \\\"Event\\\") { fields { name description args { name type { name kind ofType { name kind } } } type { name kind ofType { name kind } } } } }\"}";
+        var req = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
+        {
+            Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
+            Content = new System.Net.Http.StringContent(introspectionQuery, System.Text.Encoding.UTF8, "application/json")
+        };
+        var response = await client.SendAsync(req, cancellationToken);
+        var rawJson = await response.Content.ReadAsStringAsync(cancellationToken);
+        // Extract field names for easy reading
+        var fieldNames = new List<string>();
+        try
+        {
+            var doc = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(rawJson);
+            if (doc.TryGetProperty("data", out var data) &&
+                data.TryGetProperty("__type", out var typeObj) &&
+                typeObj.TryGetProperty("fields", out var fields))
+            {
+                foreach (var f in fields.EnumerateArray())
+                    if (f.TryGetProperty("name", out var fname))
+                        fieldNames.Add(fname.GetString() ?? "");
+            }
+        }
+        catch { }
+        return Ok(new
+        {
+            httpStatus = (int)response.StatusCode,
+            eventTypeFields = fieldNames,
+            rawResponse = rawJson.Length > 5000 ? rawJson[..5000] + "...[truncated]" : rawJson
+        });
+    }
 }
