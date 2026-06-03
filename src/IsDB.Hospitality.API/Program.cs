@@ -620,7 +620,14 @@ using (var scope = app.Services.CreateScope())
             ON CONFLICT DO NOTHING;
         ");
 
-        // Add EventCode columns to event-scoped entities (AddEventCodeToEntities)
+        // Apply all remaining pending migrations
+        logger.LogInformation("Applying pending migrations...");
+        await context.Database.MigrateAsync();
+        logger.LogInformation("Migrations applied successfully.");
+
+        } // end else (existing database)
+
+        // Add EventCode columns to event-scoped entities — runs for ALL database types (idempotent)
         await context.Database.ExecuteSqlRawAsync(@"
             DO $$ BEGIN
                 IF NOT EXISTS (
@@ -655,13 +662,6 @@ using (var scope = app.Services.CreateScope())
                 END IF;
             END $$;
         ");
-
-        // Apply all remaining pending migrations
-        logger.LogInformation("Applying pending migrations...");
-        await context.Database.MigrateAsync();
-        logger.LogInformation("Migrations applied successfully.");
-
-        } // end else (existing database)
 
         // Notifications tables — Postgres path (safe to run on every startup, idempotent)
         await context.Database.ExecuteSqlRawAsync(@"
