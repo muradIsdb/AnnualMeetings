@@ -119,13 +119,20 @@ public class EventsAirController : ApiControllerBase
             _db.EventsAirConfigs.Add(config);
         }
 
-        config.ClientId = request.ClientId;
+        // Only overwrite shared credentials if the new value is non-empty
+        // (prevents accidental clearing when the form sends empty strings)
+        if (!string.IsNullOrEmpty(request.ClientId))
+            config.ClientId = request.ClientId;
         if (!string.IsNullOrEmpty(request.ClientSecret))
             config.ClientSecret = request.ClientSecret;
-        config.ApiBaseUrl = request.ApiBaseUrl;
-        config.TokenEndpoint = request.TokenEndpoint;
+        if (!string.IsNullOrEmpty(request.ApiBaseUrl))
+            config.ApiBaseUrl = request.ApiBaseUrl;
+        if (!string.IsNullOrEmpty(request.TokenEndpoint))
+            config.TokenEndpoint = request.TokenEndpoint;
+        if (!string.IsNullOrEmpty(request.TenantCode))
+            config.TenantCode = request.TenantCode;
+        // EventCode is always updated (it's the per-event field being changed intentionally)
         config.EventCode = request.EventCode;
-        config.TenantCode = request.TenantCode;
         config.SyncIntervalMinutes = request.SyncIntervalMinutes;
         config.AutoSyncEnabled = request.AutoSyncEnabled;
         config.SyncOnStartup = request.SyncOnStartup;
