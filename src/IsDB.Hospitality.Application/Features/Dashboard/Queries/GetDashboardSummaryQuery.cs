@@ -27,17 +27,15 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
         // ── 1. Count queries — sequential to avoid EF Core concurrent-context error ─
         // NOTE: Counts use InboundStatus/OutboundStatus and the ReceivedByEmbassyTeam boolean flag
         // (the fields updated by Airport/Hotel workflows) rather than the legacy GuestStatus field.
+        // ReceivedByEmbassyTeam is a separate boolean flag — it does NOT change InboundStatus.
         var totalGuests       = await activeGuests.CountAsync(cancellationToken);
-        // arrivingCount = cumulative: all guests who have passed the airport stage
+        // arrivingCount = guests past airport: Arrived + ReceivedByEmbassy flag + VehicleAssigned + AtHotel
         var arrivingCount     = await activeGuests.CountAsync(g =>
             g.InboundStatus == InboundStatus.Arrived ||
             g.ReceivedByEmbassyTeam ||
             g.InboundStatus == InboundStatus.VehicleAssigned ||
             g.InboundStatus == InboundStatus.AtHotel, cancellationToken);
-        // atAirport = currently at airport: Arrived but NOT yet received by embassy team
-        var atAirport         = await activeGuests.CountAsync(g =>
-            g.InboundStatus == InboundStatus.Arrived && !g.ReceivedByEmbassyTeam, cancellationToken);
-        // receivedByEmbassy = cumulative boolean flag (persists even after guest moves to hotel)
+        // receivedByEmbassy = cumulative: all guests who ever had embassy flag set (boolean, not enum)
         var receivedByEmbassy = await activeGuests.CountAsync(g => g.ReceivedByEmbassyTeam, cancellationToken);
         var onTheWayToHotel   = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.VehicleAssigned, cancellationToken);
         var atHotel           = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.AtHotel, cancellationToken);
@@ -165,7 +163,6 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
         {
             TotalGuests                       = totalGuests,
             ArrivingCount                     = arrivingCount,
-            AtAirportCount                    = atAirport,
             ReceivedByEmbassyCount            = receivedByEmbassy,
             OnTheWayToHotelCount              = onTheWayToHotel,
             AtHotelCount                      = atHotel,
