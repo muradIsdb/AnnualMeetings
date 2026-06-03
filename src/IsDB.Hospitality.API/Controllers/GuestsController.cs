@@ -264,10 +264,37 @@ public class GuestsController : ApiControllerBase
                 var existingGuestsByContactId = await bgDb.Guests
                     .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase);
 
+                // ── Bulk-load CarClasses for the current event keyed by Name (case-insensitive) ──
+                var carClassesByName = (await bgDb.CarClasses
+                    .Where(cc => cc.EventCode == eventCode)
+                    .ToListAsync())
+                    .GroupBy(cc => cc.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                int vehicleTypeMatched = 0, vehicleTypeUnmatched = 0;
+                var vehicleTypeUnmatchedValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
                 // Upsert guests
                 foreach (var contact in contacts)
                 {
                     if (string.IsNullOrEmpty(contact.ContactId)) continue;
+
+                    // Resolve DeservedCarClassId from VehicleTypeValue
+                    Guid? resolvedCarClassId = null;
+                    if (!string.IsNullOrWhiteSpace(contact.VehicleTypeValue))
+                    {
+                        var trimmedVehicleType = contact.VehicleTypeValue.Trim();
+                        if (carClassesByName.TryGetValue(trimmedVehicleType, out var matchedCarClass))
+                        {
+                            resolvedCarClassId = matchedCarClass.Id;
+                            vehicleTypeMatched++;
+                        }
+                        else
+                        {
+                            vehicleTypeUnmatched++;
+                            vehicleTypeUnmatchedValues.Add(trimmedVehicleType);
+                        }
+                    }
+
                     if (!existingGuestsByContactId.TryGetValue(contact.ContactId, out var existing))
                     {
                         var newGuest = new Guest
@@ -286,6 +313,7 @@ public class GuestsController : ApiControllerBase
                             DedicatedCar = "True",
                             RankValue = contact.RankValue,
                             VehicleTypeValue = contact.VehicleTypeValue,
+                            DeservedCarClassId = resolvedCarClassId,
                             IsActive = true,
                             Status = GuestStatus.Expected,
                             EventCode = eventCode,
@@ -309,6 +337,8 @@ public class GuestsController : ApiControllerBase
                         if (existing.PhotoUrl != contact.PhotoUrl) { existing.PhotoUrl = contact.PhotoUrl; changed = true; }
                         if (existing.RankValue != contact.RankValue) { existing.RankValue = contact.RankValue; changed = true; }
                         if (existing.VehicleTypeValue != contact.VehicleTypeValue) { existing.VehicleTypeValue = contact.VehicleTypeValue; changed = true; }
+                        // Always overwrite DeservedCarClassId from VehicleTypeValue on every sync
+                        if (existing.DeservedCarClassId != resolvedCarClassId) { existing.DeservedCarClassId = resolvedCarClassId; changed = true; }
                         if (existing.DedicatedCar != "True") { existing.DedicatedCar = "True"; changed = true; }
                         if (!existing.IsActive) { existing.IsActive = true; changed = true; }
                         // Stamp EventCode if not already set or if it differs from the active event
@@ -317,7 +347,7 @@ public class GuestsController : ApiControllerBase
                     }
                 }
                 await bgDb.SaveChangesAsync();
-                Console.WriteLine($"[SYNC] Upsert complete: {added} new, {updated} updated.");
+                Console.WriteLine($"[SYNC] Upsert complete: {added} new, {updated} updated. VehicleType: {vehicleTypeMatched} matched, {vehicleTypeUnmatched} unmatched ({string.Join(", ", vehicleTypeUnmatchedValues.Take(10))})");
 
                 // ═══════════════════════════════════════════════════════════════
                 // PASS 2: Deactivate guests not in the fetched set
@@ -522,8 +552,14 @@ public class GuestsController : ApiControllerBase
                 }
 
                 job.Added = added; job.Updated = updated; job.Deactivated = deactivated;
+                job.VehicleTypeMatched = vehicleTypeMatched;
+                job.VehicleTypeUnmatched = vehicleTypeUnmatched;
+                job.VehicleTypeUnmatchedValues = vehicleTypeUnmatchedValues.ToList();
                 job.State = "done"; job.FinishedAt = DateTime.UtcNow;
-                job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated. Travel: {savedNew} new, {updatedExisting} updated, {rebooked} rebooked.";
+                var unmatchedSuffix = vehicleTypeUnmatched > 0
+                    ? $" VehicleType: {vehicleTypeMatched} matched, {vehicleTypeUnmatched} unmatched ({string.Join(", ", vehicleTypeUnmatchedValues.Take(5))})"
+                    : $" VehicleType: {vehicleTypeMatched} matched.";
+                job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated. Travel: {savedNew} new, {updatedExisting} updated, {rebooked} rebooked.{unmatchedSuffix}";
                 Console.WriteLine($"[SYNC] All passes complete. {added} new, {updated} updated, {deactivated} deactivated.");
 
                 // ── Write comprehensive sync log entry ────────────────────────
@@ -1011,7 +1047,9 @@ public class GuestsController : ApiControllerBase
         // Travel sync diagnostics
         public int TravelFetched { get; set; } public int TravelSavedNew { get; set; } public int TravelUpdated { get; set; } public int TravelRebooked { get; set; }
         public int TravelSkippedNoFlight { get; set; } public int TravelSkippedNoContact { get; set; } public int TravelSkippedNoGuest { get; set; }
-        public int TravelErrors { get; set; } public string? TravelFirstError { get; set; } }
+        public int TravelErrors { get; set; } public string? TravelFirstError { get; set; }
+        // Vehicle type matching diagnostics
+        public int VehicleTypeMatched { get; set; } public int VehicleTypeUnmatched { get; set; } public List<string> VehicleTypeUnmatchedValues { get; set; } = new(); }
     private class FieldFilter { public string FieldGuid { get; set; } = string.Empty; public List<string> SelectedValues { get; set; } = new(); }
 
     // ═══════════════════════════════════════════════════════════════════════════
