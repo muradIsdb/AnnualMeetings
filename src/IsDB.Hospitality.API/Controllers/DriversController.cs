@@ -13,12 +13,16 @@ public class DriversController : ApiControllerBase
     private readonly AppDbContext _db;
     public DriversController(AppDbContext db) { _db = db; }
 
+    private async Task<string?> GetActiveEventCodeAsync() =>
+        (await _db.EventsAirConfigs.FirstOrDefaultAsync())?.EventCode;
+
     // GET /api/drivers
     [HttpGet]
     public async Task<ActionResult<List<object>>> GetAll()
     {
+        var activeEventCode = await GetActiveEventCodeAsync();
         var drivers = await _db.Drivers
-            .Where(d => d.IsActive)
+            .Where(d => d.IsActive && (d.EventCode == null || d.EventCode == activeEventCode))
             .Include(d => d.Vehicle)
             .OrderBy(d => d.FullName)
             .ToListAsync();
@@ -40,12 +44,14 @@ public class DriversController : ApiControllerBase
     public async Task<ActionResult<List<object>>> Search([FromQuery] string q = "")
     {
         var query = q.Trim().ToLower();
+        var activeEventCode2 = await GetActiveEventCodeAsync();
         var drivers = await _db.Drivers
-            .Where(d => d.IsActive && (
-                string.IsNullOrEmpty(query) ||
+            .Where(d => d.IsActive &&
+                (d.EventCode == null || d.EventCode == activeEventCode2) &&
+                (string.IsNullOrEmpty(query) ||
                 d.FullName.ToLower().Contains(query) ||
-                d.Phone.Contains(query)
-            ))
+                d.Phone.Contains(query))
+            )
             .Include(d => d.Vehicle)
             .OrderBy(d => d.FullName)
             .Take(10)
@@ -80,6 +86,7 @@ public class DriversController : ApiControllerBase
         if (string.IsNullOrWhiteSpace(req.FullName) || string.IsNullOrWhiteSpace(req.Phone))
             return BadRequest(new { message = "Full name and phone are required." });
 
+        var activeEventCode3 = await GetActiveEventCodeAsync();
         var driver = new Driver
         {
             Id = Guid.NewGuid(),
@@ -87,6 +94,7 @@ public class DriversController : ApiControllerBase
             Phone = req.Phone.Trim(),
             Status = DriverStatus.Available,
             IsActive = true,
+            EventCode = activeEventCode3,
         };
         _db.Drivers.Add(driver);
         await _db.SaveChangesAsync();
@@ -187,8 +195,10 @@ public class DriversController : ApiControllerBase
                 continue;
             }
 
-            // Skip duplicates by phone number
-            if (await _db.Drivers.AnyAsync(d => d.Phone == phone && d.IsActive))
+            // Skip duplicates by phone number (scoped to active event)
+            var activeEventCode4 = await GetActiveEventCodeAsync();
+            if (await _db.Drivers.AnyAsync(d => d.Phone == phone && d.IsActive &&
+                (d.EventCode == null || d.EventCode == activeEventCode4)))
             {
                 errors.Add($"Line {lineNum}: Phone '{phone}' already exists — skipped.");
                 skipped++;
@@ -202,6 +212,7 @@ public class DriversController : ApiControllerBase
                 Phone = phone,
                 Status = DriverStatus.Available,
                 IsActive = true,
+                EventCode = activeEventCode4,
             });
             imported++;
         }

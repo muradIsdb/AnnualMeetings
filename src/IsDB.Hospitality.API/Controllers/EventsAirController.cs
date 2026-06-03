@@ -104,9 +104,10 @@ public class EventsAirController : ApiControllerBase
 
     // PUT /api/eventsair/config
     [HttpPut("config")]
-    public async Task<ActionResult<EventsAirConfigDto>> UpdateConfig([FromBody] UpdateEventsAirConfigRequest request)
+    public async Task<ActionResult<object>> UpdateConfig([FromBody] UpdateEventsAirConfigRequest request)
     {
         var config = await _db.EventsAirConfigs.FirstOrDefaultAsync();
+        var previousEventCode = config?.EventCode;
 
         if (config == null)
         {
@@ -136,7 +137,18 @@ public class EventsAirController : ApiControllerBase
         if (!string.IsNullOrWhiteSpace(request.OAuthScope))
             await SaveOAuthScopeAsync(config.Id, request.OAuthScope.Trim());
 
-        return Ok(new EventsAirConfigDto
+        // Detect event switch
+        bool eventSwitched = !string.IsNullOrEmpty(request.EventCode) &&
+                             !string.IsNullOrEmpty(previousEventCode) &&
+                             request.EventCode != previousEventCode;
+        bool newEventHasCarClasses = false;
+        if (eventSwitched)
+        {
+            newEventHasCarClasses = await _db.CarClasses
+                .AnyAsync(c => c.EventCode == request.EventCode, CancellationToken.None);
+        }
+
+        var dto = new EventsAirConfigDto
         {
             Id = config.Id,
             ClientId = config.ClientId,
@@ -154,8 +166,82 @@ public class EventsAirController : ApiControllerBase
             LastSyncRecordsCount = config.LastSyncRecordsCount,
             IsActive = config.IsActive,
             OAuthScope = await GetOAuthScopeAsync()
+        };
+
+        return Ok(new
+        {
+            config = dto,
+            eventSwitched,
+            newEventHasCarClasses,
+            previousEventCode
         });
     }
+
+    // POST /api/eventsair/config/apply-event-switch
+    [HttpPost("config/apply-event-switch")]
+    public async Task<IActionResult> ApplyEventSwitch(
+        [FromBody] ApplyEventSwitchRequest request,
+        CancellationToken ct)
+    {
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(ct);
+        if (config == null) return BadRequest("No EventsAir configuration found.");
+
+        var newEventCode = config.EventCode;
+        var previousEventCode = request.PreviousEventCode;
+
+        // 1. Reset all guest DeservedCarClassId
+        var allGuests = await _db.Guests.Where(g => g.IsActive).ToListAsync(ct);
+        foreach (var g in allGuests)
+            g.DeservedCarClassId = null;
+
+        // 2. Reset hotel room counts
+        var hotels = await _db.HotelOptions.ToListAsync(ct);
+        foreach (var h in hotels)
+        {
+            h.ContractedRoomsIsDB = 0;
+            h.ContractedRoomsGuest = 0;
+            h.ActualOccupiedIsDB = 0;
+            h.ActualOccupiedGuest = 0;
+        }
+
+        // 3. Optionally copy Car Classes from previous event
+        if (request.CopyCarClasses && !string.IsNullOrEmpty(previousEventCode))
+        {
+            var previousCarClasses = await _db.CarClasses
+                .Where(c => c.EventCode == previousEventCode || c.EventCode == null)
+                .ToListAsync(ct);
+
+            foreach (var cc in previousCarClasses)
+            {
+                // Only copy if the new event doesn't already have a class with the same name
+                bool alreadyExists = await _db.CarClasses
+                    .AnyAsync(c => c.EventCode == newEventCode && c.Name == cc.Name, ct);
+                if (!alreadyExists)
+                {
+                    _db.CarClasses.Add(new CarClass
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = cc.Name,
+                        Description = cc.Description,
+                        Color = cc.Color,
+                        SortOrder = cc.SortOrder,
+                        EventCode = newEventCode,
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow
+                    });
+                }
+            }
+        }
+
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(new { success = true, message = "Event switch applied successfully." });
+    }
+
+    public record ApplyEventSwitchRequest(
+        string PreviousEventCode,
+        bool CopyCarClasses
+    );
 
     // POST /api/eventsair/test-connection
     [HttpPost("test-connection")]
@@ -358,27 +444,36 @@ public class EventsAirController : ApiControllerBase
             }
             await _db.SaveChangesAsync(cancellationToken);
 
-            // ── Pass 2: Deactivate guests no longer in the list ───────────────
+            // ── Pass 2: Deactivate guests no longer in the list ────────────────────
             var activeGuests = await _db.Guests
                 .Where(g => g.IsActive)
-                .Include(g => g.VehicleAssignments)
-                .Select(g => new
-                {
-                    g.Id,
-                    g.EventsAirContactId,
-                    HasActiveVehicle = g.VehicleAssignments.Any(va => va.IsActive)
-                })
+                .Select(g => new { g.Id, g.EventsAirContactId })
                 .ToListAsync(cancellationToken);
 
             foreach (var dbGuest in activeGuests)
             {
                 if (!string.IsNullOrEmpty(dbGuest.EventsAirContactId) &&
-                    !syncedContactIds.Contains(dbGuest.EventsAirContactId) &&
-                    !dbGuest.HasActiveVehicle)
+                    !syncedContactIds.Contains(dbGuest.EventsAirContactId))
                 {
-                    var g = await _db.Guests.FindAsync(new object[] { dbGuest.Id }, cancellationToken);
+                    var g = await _db.Guests
+                        .Include(x => x.VehicleAssignments)
+                        .FirstOrDefaultAsync(x => x.Id == dbGuest.Id, cancellationToken);
                     if (g != null)
                     {
+                        // Deactivate any active vehicle assignments to release vehicles back to pool
+                        foreach (var va in g.VehicleAssignments.Where(va => va.IsActive))
+                        {
+                            va.IsActive = false;
+                            va.UnassignedAt = DateTime.UtcNow;
+                            // Release the vehicle
+                            var vehicle = await _db.Vehicles.FindAsync(new object[] { va.VehicleId }, cancellationToken);
+                            if (vehicle != null)
+                            {
+                                vehicle.Status = Domain.Enums.VehicleStatus.Available;
+                                vehicle.CurrentGuestId = null;
+                                vehicle.CurrentAssignmentType = null;
+                            }
+                        }
                         g.IsActive = false;
                         g.DedicatedCar = null;
                         g.LastSyncedAt = DateTime.UtcNow;
@@ -388,7 +483,7 @@ public class EventsAirController : ApiControllerBase
             }
             await _db.SaveChangesAsync(cancellationToken);
 
-            // ── Pass 3: Travel bookings ───────────────────────────────────────
+            // ── Pass 3: Travel bookings ───────────────────────────────────────────────
             try
             {
                 var travelBookings = await Application.Common.Models.EventsAirSyncHelpers.FetchTravelBookingsAsync(

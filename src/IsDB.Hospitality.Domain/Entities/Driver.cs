@@ -14,4 +14,7 @@ public class Driver : BaseEntity
     public Vehicle? Vehicle { get; set; }
 
     public bool IsActive { get; set; } = true;
+
+    /// <summary>The EventsAir event code this driver belongs to. Null = legacy (treated as current event).</summary>
+    public string? EventCode { get; set; }
 }

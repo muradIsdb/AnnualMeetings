@@ -20,4 +20,7 @@ public class CarClassRule : BaseEntity
 
     /// <summary>Optional human-readable note explaining why this rule exists.</summary>
     public string? Notes { get; set; }
+
+    /// <summary>The EventsAir event code this rule belongs to. Null = legacy (treated as current event).</summary>
+    public string? EventCode { get; set; }
 }

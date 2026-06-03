@@ -16,6 +16,9 @@ public class VehiclesController : ApiControllerBase
     private readonly AppDbContext _db;
     public VehiclesController(AppDbContext db) { _db = db; }
 
+    private async Task<string?> GetActiveEventCodeAsync() =>
+        (await _db.EventsAirConfigs.FirstOrDefaultAsync())?.EventCode;
+
     // ─── Legacy endpoints ─────────────────────────────────────────────────────
     [HttpGet("available")]
     public async Task<ActionResult<List<VehicleDto>>> GetAvailable()
@@ -54,8 +57,9 @@ public class VehiclesController : ApiControllerBase
     [HttpGet("all-with-status")]
     public async Task<IActionResult> GetAllWithStatus()
     {
+        var activeEventCode = await GetActiveEventCodeAsync();
         var vehicles = await _db.Vehicles
-            .Where(v => v.IsActive)
+            .Where(v => v.IsActive && (v.EventCode == null || v.EventCode == activeEventCode))
             .Include(v => v.Driver)
             .Include(v => v.CarClass)
             .OrderBy(v => v.Status).ThenBy(v => v.Make).ThenBy(v => v.Model)
@@ -90,8 +94,9 @@ public class VehiclesController : ApiControllerBase
     [Authorize(Roles = "Admin,Transport")]
     public async Task<ActionResult<List<object>>> GetAll()
     {
+        var activeEventCode2 = await GetActiveEventCodeAsync();
         var vehicles = await _db.Vehicles
-            .Where(v => v.IsActive)
+            .Where(v => v.IsActive && (v.EventCode == null || v.EventCode == activeEventCode2))
             .Include(v => v.Driver)
             .Include(v => v.CarClass)
             .OrderBy(v => v.Make).ThenBy(v => v.Model)
@@ -144,6 +149,7 @@ public class VehiclesController : ApiControllerBase
 
         var staffUser = await _db.StaffUsers.FindAsync(CurrentUserId);
 
+        var activeEventCode3 = await GetActiveEventCodeAsync();
         var vehicle = new Vehicle
         {
             Id = Guid.NewGuid(),
@@ -155,6 +161,7 @@ public class VehiclesController : ApiControllerBase
             Status = VehicleStatus.NotProvided,
             IsActive = true,
             CarClassId = req.CarClassId,
+            EventCode = activeEventCode3,
         };
         _db.Vehicles.Add(vehicle);
 

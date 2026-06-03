@@ -620,6 +620,42 @@ using (var scope = app.Services.CreateScope())
             ON CONFLICT DO NOTHING;
         ");
 
+        // Add EventCode columns to event-scoped entities (AddEventCodeToEntities)
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='CarClasses' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""CarClasses"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='Vehicles' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""Vehicles"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='Drivers' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""Drivers"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='CarClassRules' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""CarClassRules"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='EventsAirSyncLogs' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""EventsAirSyncLogs"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+            END $$;
+        ");
+
         // Apply all remaining pending migrations
         logger.LogInformation("Applying pending migrations...");
         await context.Database.MigrateAsync();
