@@ -1500,16 +1500,27 @@ public class EventsAirController : ApiControllerBase
         var defsQuery = $"{{ event(id: \"{config.EventCode}\") {{ customFieldDefinitions {{ id name type options {{ id value }} }} }} }}";
         var defsResult = await RunQuery(defsQuery);
 
-        // 2. All custom field values for the specific contact
-        var contactQuery = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName customFields {{ definitionId value definition {{ id name type }} }} }} }} }}";
+        // 2. All custom field values for the specific contact (definitionId + value only)
+        var contactQuery = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName customFields {{ definitionId value }} }} }} }}";
         var contactResult = await RunQuery(contactQuery);
+
+        // 3. Direct test: fetch the Vehicle Types field value for this contact using FetchCustomFieldValuesAsync
+        const string vehicleTypesGuid = "5f6b0e9e-7d1c-4f91-affc-ecbe95cef678";
+        var vehicleTypeValues = await Application.Common.Models.EventsAirSyncHelpers.FetchCustomFieldValuesAsync(
+            config.ApiBaseUrl, config.EventCode, token, vehicleTypesGuid,
+            new[] { contactId }, _httpClientFactory, cancellationToken);
 
         return Ok(new
         {
             eventCode = config.EventCode,
             contactId,
             customFieldDefinitions = defsResult,
-            contactCustomFields = contactResult
+            contactCustomFields = contactResult,
+            vehicleTypeTest = new
+            {
+                guid = vehicleTypesGuid,
+                valueForContact = vehicleTypeValues.TryGetValue(contactId, out var v) ? v : "(not found)"
+            }
         });
     }
 }

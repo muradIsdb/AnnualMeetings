@@ -406,7 +406,7 @@ public static class EventsAirSyncHelpers
 
     // ─── Fetch custom field values ────────────────────────────────────────────
 
-    private static async Task<Dictionary<string, string>> FetchCustomFieldValuesAsync(
+    public static async Task<Dictionary<string, string>> FetchCustomFieldValuesAsync(
         string baseUrl, string eventCode, string accessToken, string fieldDefinitionId,
         IEnumerable<string> contactIds, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
     {
