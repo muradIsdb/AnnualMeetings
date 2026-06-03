@@ -25,13 +25,20 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
             && (request.ActiveEventCode == null || g.EventCode == null || g.EventCode == request.ActiveEventCode));
 
         // ── 1. Count queries — sequential to avoid EF Core concurrent-context error ─
+        // NOTE: Counts use InboundStatus/OutboundStatus (the fields updated by Airport/Hotel workflows)
+        // rather than the legacy GuestStatus field which is not updated by those workflows.
         var totalGuests       = await activeGuests.CountAsync(cancellationToken);
-        var arrivingCount     = await activeGuests.CountAsync(g => g.Status == GuestStatus.ArrivedAtAirport, cancellationToken);
-        var receivedByEmbassy = await activeGuests.CountAsync(g => g.Status == GuestStatus.ReceivedByEmbassy, cancellationToken);
-        var onTheWayToHotel   = await activeGuests.CountAsync(g => g.Status == GuestStatus.OnTheWayToHotel, cancellationToken);
-        var atHotel           = await activeGuests.CountAsync(g => g.Status == GuestStatus.AtHotel, cancellationToken);
+        var arrivingCount     = await activeGuests.CountAsync(g =>
+            g.InboundStatus == InboundStatus.Arrived ||
+            g.InboundStatus == InboundStatus.ReceivedByEmbassyTeam ||
+            g.InboundStatus == InboundStatus.VehicleAssigned, cancellationToken);
+        var receivedByEmbassy = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.ReceivedByEmbassyTeam, cancellationToken);
+        var onTheWayToHotel   = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.VehicleAssigned, cancellationToken);
+        var atHotel           = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.AtHotel, cancellationToken);
         var departing         = await activeGuests.CountAsync(g =>
-            g.Status == GuestStatus.DepartingHotel || g.Status == GuestStatus.AtAirportDeparture, cancellationToken);
+            g.OutboundStatus == OutboundStatus.InTransferToAirport ||
+            g.OutboundStatus == OutboundStatus.AtAirport ||
+            g.OutboundStatus == OutboundStatus.BoardingCompleted, cancellationToken);
         var guestsDeserving   = await activeGuests.CountAsync(g => g.DeservedCarClassId.HasValue, cancellationToken);
 
         // ── 2. Lightweight guest projection (only needed columns, no navigation) ───
