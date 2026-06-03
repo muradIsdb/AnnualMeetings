@@ -233,6 +233,27 @@ public class DriversController : ApiControllerBase
         await _db.SaveChangesAsync();
         return Ok();
     }
+
+    // GET /api/drivers/debug-event-codes — check actual EventCode distribution in DB
+    [HttpGet("debug-event-codes")]
+    public async Task<ActionResult<object>> DebugEventCodes()
+    {
+        var drivers = await _db.Drivers
+            .Select(d => new { d.Id, d.FullName, d.IsActive, d.EventCode })
+            .ToListAsync();
+        var vehicles = await _db.Vehicles
+            .Select(v => new { v.Id, v.Make, v.CarNumber, v.IsActive, v.EventCode })
+            .ToListAsync();
+        return Ok(new
+        {
+            driversByEventCode = drivers
+                .GroupBy(d => d.EventCode ?? "(null)")
+                .Select(g => new { eventCode = g.Key, count = g.Count() }),
+            vehiclesByEventCode = vehicles
+                .GroupBy(v => v.EventCode ?? "(null)")
+                .Select(g => new { eventCode = g.Key, count = g.Count() })
+        });
+    }
 }
 
 public record CreateDriverRequest(string FullName, string Phone);
