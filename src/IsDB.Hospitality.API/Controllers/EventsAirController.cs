@@ -1461,4 +1461,55 @@ public class EventsAirController : ApiControllerBase
             errors
         });
     }
+
+    // GET /api/eventsair/debug-custom-fields?contactId=xxx
+    // Returns all custom field definitions for the event AND the custom field values for the given contact.
+    [HttpGet("debug-custom-fields")]
+    [Authorize]
+    public async Task<IActionResult> DebugCustomFields([FromQuery] string contactId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(contactId))
+            return BadRequest(new { message = "contactId is required" });
+
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive)
+            return BadRequest(new { message = "EventsAir not configured or inactive." });
+
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+
+        var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(30);
+        var gqlBase = $"{config.ApiBaseUrl.TrimEnd('/')}/graphql";
+
+        async Task<System.Text.Json.JsonElement> RunQuery(string query)
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, gqlBase)
+            {
+                Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
+                Content = new System.Net.Http.StringContent(
+                    System.Text.Json.JsonSerializer.Serialize(new { query }),
+                    System.Text.Encoding.UTF8, "application/json")
+            };
+            var resp = await client.SendAsync(req, cancellationToken);
+            var json = await resp.Content.ReadAsStringAsync(cancellationToken);
+            return System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
+        }
+
+        // 1. All custom field definitions for the event
+        var defsQuery = $"{{ event(id: \"{config.EventCode}\") {{ customFieldDefinitions {{ id name type options {{ id value }} }} }} }}";
+        var defsResult = await RunQuery(defsQuery);
+
+        // 2. All custom field values for the specific contact
+        var contactQuery = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName customFields {{ definitionId value definition {{ id name type }} }} }} }} }}";
+        var contactResult = await RunQuery(contactQuery);
+
+        return Ok(new
+        {
+            eventCode = config.EventCode,
+            contactId,
+            customFieldDefinitions = defsResult,
+            contactCustomFields = contactResult
+        });
+    }
 }
