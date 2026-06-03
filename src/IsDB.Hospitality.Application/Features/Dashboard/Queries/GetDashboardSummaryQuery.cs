@@ -76,11 +76,13 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
 
         // ── 5. Fleet ──────────────────────────────────────────────────────────────
         var vehicles = await _context.Vehicles.AsNoTracking()
-            .Where(v => v.IsActive)
+            .Where(v => v.IsActive
+                && (request.ActiveEventCode == null || v.EventCode == null || v.EventCode == request.ActiveEventCode))
             .Include(v => v.CarClass)
             .ToListAsync(cancellationToken);
 
         var carClasses = await _context.CarClasses.AsNoTracking()
+            .Where(c => request.ActiveEventCode == null || c.EventCode == null || c.EventCode == request.ActiveEventCode)
             .OrderBy(c => c.SortOrder)
             .ToListAsync(cancellationToken);
 
