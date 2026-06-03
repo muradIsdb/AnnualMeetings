@@ -437,10 +437,12 @@ public class GuestsController : ApiControllerBase
                         if (existingBooking == null)
                         {
                             // No booking yet for this direction — create new
+                            // Use Flight navigation property (not FlightId) so EF resolves FK correctly
+                            // even when the Flight was just added in this same unit-of-work
                             bgDb.TravelBookings.Add(new TravelBooking
                             {
                                 GuestId = guest.Id,
-                                FlightId = flight.Id,
+                                Flight = flight,
                                 IsArrival = isArrival,
                                 SeatClass = tbDto.SeatClass,
                                 BookingNotes = notes,
@@ -498,7 +500,7 @@ public class GuestsController : ApiControllerBase
 
                 job.Added = added; job.Updated = updated; job.Deactivated = deactivated;
                 job.State = "done"; job.FinishedAt = DateTime.UtcNow;
-                job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated.";
+                job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated. Travel: {savedNew} new, {updatedExisting} updated, {rebooked} rebooked.";
                 Console.WriteLine($"[SYNC] All passes complete. {added} new, {updated} updated, {deactivated} deactivated.");
 
                 // ── Write comprehensive sync log entry ────────────────────────
