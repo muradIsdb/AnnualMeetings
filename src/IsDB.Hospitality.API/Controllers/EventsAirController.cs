@@ -1114,6 +1114,63 @@ public class EventsAirController : ApiControllerBase
         });
     }
 
+    // GET /api/eventsair/debug-travel-batch?contactId=xxx
+    // Tests the exact batch alias query used by FetchTravelBookingsByContactsAsync
+    [HttpGet("debug-travel-batch")]
+    public async Task<IActionResult> DebugTravelBatch([FromQuery] string contactId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(contactId))
+            return BadRequest(new { message = "contactId query parameter is required." });
+        var config = await _appDb.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive)
+            return BadRequest(new { message = "EventsAir not configured or inactive." });
+        var oAuthScope = await GetOAuthScopeAsync();
+        string token;
+        try
+        {
+            var tokenClient = _httpClientFactory.CreateClient();
+            var tokenReq = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string,string>("grant_type", "client_credentials"),
+                new KeyValuePair<string,string>("client_id", config.ClientId),
+                new KeyValuePair<string,string>("client_secret", config.ClientSecret),
+                new KeyValuePair<string,string>("scope", !string.IsNullOrWhiteSpace(oAuthScope)
+                    ? oAuthScope
+                    : "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default")
+            });
+            var tokenResp = await tokenClient.PostAsync(config.TokenEndpoint, tokenReq, cancellationToken);
+            tokenResp.EnsureSuccessStatusCode();
+            var tokenJson = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                await tokenResp.Content.ReadAsStringAsync(cancellationToken));
+            token = tokenJson.GetProperty("access_token").GetString()!;
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = "Failed to get token", detail = ex.Message });
+        }
+        var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(25);
+        // Build the exact same batch alias query as FetchTravelBookingsByContactsAsync
+        var batchQuery = $"{{ event(id: \"{config.EventCode}\") {{ c0: contact(id: \"{contactId}\") {{ id travelBookings {{ id travelType {{ name }} flightNumber carrier {{ name }} arrivalDate departureDate eta etd departurePort {{ name }} arrivalPort {{ name }} class bookingNotes comment }} }} }} }}";
+        var req = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
+        {
+            Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
+            Content = new System.Net.Http.StringContent(
+                System.Text.Json.JsonSerializer.Serialize(new { query = batchQuery }),
+                System.Text.Encoding.UTF8, "application/json")
+        };
+        var response = await client.SendAsync(req, cancellationToken);
+        var rawJson = await response.Content.ReadAsStringAsync(cancellationToken);
+        return Ok(new
+        {
+            eventCode = config.EventCode,
+            contactId,
+            batchQuery,
+            httpStatus = (int)response.StatusCode,
+            rawResponse = rawJson
+        });
+    }
+
     // GET /api/eventsair/debug-schema
     // Introspects the EventsAir GraphQL schema to find available fields on the Event type
     [HttpGet("debug-schema")]
