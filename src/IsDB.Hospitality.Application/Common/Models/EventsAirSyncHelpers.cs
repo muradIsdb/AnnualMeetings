@@ -356,13 +356,17 @@ public static class EventsAirSyncHelpers
                 response = await client.SendAsync(req, cancellationToken);
                 json = await response.Content.ReadAsStringAsync(cancellationToken);
             }
-            catch { continue; }
-            if (!response.IsSuccessStatusCode) continue;
+            catch (Exception ex) { Console.WriteLine($"[TRAVEL-BATCH] HTTP exception for batch {i/batchSize}: {ex.Message}"); continue; }
+            if (!response.IsSuccessStatusCode) { Console.WriteLine($"[TRAVEL-BATCH] HTTP {(int)response.StatusCode} for batch {i/batchSize}: {json[..Math.Min(json.Length,300)]}"); continue; }
             JsonElement doc;
             try { doc = JsonSerializer.Deserialize<JsonElement>(json); }
-            catch { continue; }
+            catch (Exception ex) { Console.WriteLine($"[TRAVEL-BATCH] JSON parse error for batch {i/batchSize}: {ex.Message}"); continue; }
             if (!doc.TryGetProperty("data", out var data) ||
-                !data.TryGetProperty("event", out var eventObj)) continue;
+                !data.TryGetProperty("event", out var eventObj))
+            {
+                Console.WriteLine($"[TRAVEL-BATCH] No data.event for batch {i/batchSize}: {json[..Math.Min(json.Length,500)]}");
+                continue;
+            }
             // Each alias is c0, c1, ... cN
             for (int idx = 0; idx < batch.Count; idx++)
             {
