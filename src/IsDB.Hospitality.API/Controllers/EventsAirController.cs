@@ -1523,4 +1523,42 @@ public class EventsAirController : ApiControllerBase
             }
         });
     }
+
+    // POST /api/eventsair/apply-vehicle-type-migration
+    // One-shot: adds VehicleTypeValue column to Guests table if it doesn't exist.
+    [HttpPost("apply-vehicle-type-migration")]
+    public async Task<IActionResult> ApplyVehicleTypeMigration()
+    {
+        try
+        {
+            await _appDb.Database.ExecuteSqlRawAsync(@"
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'Guests' AND column_name = 'VehicleTypeValue'
+                    ) THEN
+                        ALTER TABLE ""Guests"" ADD COLUMN ""VehicleTypeValue"" text NULL;
+                    END IF;
+                END $$;
+                INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+                VALUES ('20260603100000_AddVehicleTypeValueToGuest', '9.0.0')
+                ON CONFLICT DO NOTHING;
+            ");
+            // Check if column now exists
+            var conn = _appDb.Database.GetDbConnection();
+            await conn.OpenAsync();
+            bool columnExists;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'Guests' AND column_name = 'VehicleTypeValue'";
+                columnExists = Convert.ToInt64(await cmd.ExecuteScalarAsync()) > 0;
+            }
+            await conn.CloseAsync();
+            return Ok(new { success = true, columnExists, message = "VehicleTypeValue column added (or already existed)." });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, error = ex.Message });
+        }
+    }
 }
