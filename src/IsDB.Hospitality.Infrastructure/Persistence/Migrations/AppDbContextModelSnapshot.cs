@@ -656,6 +656,9 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Property<string>("RankValue")
                         .HasColumnType("text");
 
+                    b.Property<string>("VehicleTypeValue")
+                        .HasColumnType("text");
+
                     b.Property<bool>("ReceivedByEmbassyTeam")
                         .HasColumnType("boolean");
 

@@ -85,6 +85,7 @@ public class GuestSummaryDto
     public string? Notes { get; set; }
     public string? RegistrationTypeName { get; set; }
     public string? RankValue { get; set; }
+    public string? VehicleTypeValue { get; set; }
     public string? DedicatedCar { get; set; }
     public DateTime? ArrivalTime { get; set; }
     public Guid? DeservedCarClassId { get; set; }

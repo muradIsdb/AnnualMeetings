@@ -49,6 +49,7 @@ public class GetGuestsQueryHandler : IRequestHandler<GetGuestsQuery, List<GuestS
                 Notes = g.Notes,
                 RegistrationTypeName = g.RegistrationTypeName,
                 RankValue = g.RankValue,
+                VehicleTypeValue = g.VehicleTypeValue,
                 DedicatedCar = g.DedicatedCar,
                 DeservedCarClassId = g.DeservedCarClassId,
                 DeservedCarClassName = g.DeservedCarClass != null ? g.DeservedCarClass.Name : null,

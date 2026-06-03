@@ -55,6 +55,11 @@ public class Guest : BaseEntity
     /// Used as the primary filter after Registration Types: guests without a Dedicated Car value
     /// are deactivated after sync, unless they have an active vehicle assignment.
     /// </summary>
+    /// <summary>
+    /// The value of the "Vehicle Types" custom field fetched from EventsAir (e.g. "Hyundai Elantra", "Toyota Land Cruiser").
+    /// Populated during sync. Stored for display only.
+    /// </summary>
+    public string? VehicleTypeValue { get; set; }
     public string? DedicatedCar { get; set; }
 
     // Navigation properties

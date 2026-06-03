@@ -13,6 +13,7 @@ public static class EventsAirSyncHelpers
 {
     public const string DedicatedCarFieldGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
     public const string RankFieldGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+    public const string VehicleTypeFieldGuid = "5f6b0e9e-7d1c-4f91-affc-ecbe95cef678";
 
     // ─── OAuth2 Token ─────────────────────────────────────────────────────────
 
@@ -44,10 +45,11 @@ public static class EventsAirSyncHelpers
     public static async Task<List<EventsAirSyncContactDto>> FetchContactsWithDedicatedCarAsync(
         string baseUrl, string eventCode, string accessToken,
         IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
-        string? dedicatedCarGuid = null, string? rankGuid = null)
+        string? dedicatedCarGuid = null, string? rankGuid = null, string? vehicleTypeGuid = null)
     {
         dedicatedCarGuid ??= DedicatedCarFieldGuid;
         rankGuid ??= RankFieldGuid;
+        vehicleTypeGuid ??= VehicleTypeFieldGuid;
         var fetched = new List<EventsAirSyncContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -87,7 +89,7 @@ public static class EventsAirSyncHelpers
             {
                 var errorMsg = errors[0].GetProperty("message").GetString() ?? "Unknown GraphQL error";
                 if (errorMsg.Contains("cost", StringComparison.OrdinalIgnoreCase))
-                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken, dedicatedCarGuid, rankGuid);
+                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken, dedicatedCarGuid, rankGuid, vehicleTypeGuid);
                 throw new InvalidOperationException($"GraphQL error: {errorMsg}");
             }
 
@@ -101,6 +103,7 @@ public static class EventsAirSyncHelpers
                 if (string.IsNullOrEmpty(contactId) || !seenContactIds.Add(contactId)) continue;
 
                 string? rankValue = null;
+                string? vehicleTypeValue = null;
                 if (contact.TryGetProperty("customFields", out var cfArray) && cfArray.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var cf in cfArray.EnumerateArray())
@@ -110,7 +113,11 @@ public static class EventsAirSyncHelpers
                         {
                             if (cf.TryGetProperty("value", out var v) && v.ValueKind != JsonValueKind.Null)
                                 rankValue = v.ValueKind == JsonValueKind.String ? v.GetString() : v.GetRawText().Trim('"');
-                            break;
+                        }
+                        else if (string.Equals(defId, vehicleTypeGuid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (cf.TryGetProperty("value", out var vt) && vt.ValueKind != JsonValueKind.Null)
+                                vehicleTypeValue = vt.ValueKind == JsonValueKind.String ? vt.GetString() : vt.GetRawText().Trim('"');
                         }
                     }
                 }
@@ -149,7 +156,8 @@ public static class EventsAirSyncHelpers
                     RegistrationTypeName: regTypeName,
                     Country: country,
                     PhotoUrl: photoUrl,
-                    RankValue: rankValue
+                    RankValue: rankValue,
+                    VehicleTypeValue: vehicleTypeValue
                 ));
             }
 
@@ -163,10 +171,11 @@ public static class EventsAirSyncHelpers
     private static async Task<List<EventsAirSyncContactDto>> FetchContactsWithDedicatedCarLightAsync(
         string baseUrl, string eventCode, string accessToken,
         IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
-        string? dedicatedCarGuid = null, string? rankGuid = null)
+        string? dedicatedCarGuid = null, string? rankGuid = null, string? vehicleTypeGuid = null)
     {
         dedicatedCarGuid ??= DedicatedCarFieldGuid;
         rankGuid ??= RankFieldGuid;
+        vehicleTypeGuid ??= VehicleTypeFieldGuid;
         var fetched = new List<EventsAirSyncContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -225,7 +234,8 @@ public static class EventsAirSyncHelpers
                     RegistrationTypeName: "",
                     Country: country,
                     PhotoUrl: null,
-                    RankValue: null
+                    RankValue: null,
+                    VehicleTypeValue: null
                 ));
             }
 
@@ -233,14 +243,20 @@ public static class EventsAirSyncHelpers
             offset += pageSize;
         }
 
-        // Fetch Rank values separately
+        // Fetch Rank and VehicleType values separately
         if (fetched.Count > 0)
         {
-            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, rankGuid, fetched.Select(c => c.ContactId), httpClientFactory, cancellationToken);
+            var contactIds = fetched.Select(c => c.ContactId).ToList();
+            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, rankGuid, contactIds, httpClientFactory, cancellationToken);
+            var vehicleTypeValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, vehicleTypeGuid, contactIds, httpClientFactory, cancellationToken);
             for (int i = 0; i < fetched.Count; i++)
             {
-                if (rankValues.TryGetValue(fetched[i].ContactId, out var rank))
-                    fetched[i] = fetched[i] with { RankValue = rank };
+                var id = fetched[i].ContactId;
+                fetched[i] = fetched[i] with
+                {
+                    RankValue = rankValues.TryGetValue(id, out var rank) ? rank : fetched[i].RankValue,
+                    VehicleTypeValue = vehicleTypeValues.TryGetValue(id, out var vt) ? vt : fetched[i].VehicleTypeValue
+                };
             }
         }
 
@@ -465,4 +481,4 @@ public record EventsAirSyncContactDto(
     string ContactId, string FirstName, string LastName, string? Title,
     string? JobTitle, string? OrganizationName, string? PrimaryEmail,
     string RegistrationTypeId, string RegistrationTypeName,
-    string? Country = null, string? PhotoUrl = null, string? RankValue = null);
+    string? Country = null, string? PhotoUrl = null, string? RankValue = null, string? VehicleTypeValue = null);

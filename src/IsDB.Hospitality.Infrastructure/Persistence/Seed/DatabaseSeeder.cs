@@ -201,6 +201,7 @@ public static class DatabaseSeeder
     {
         const string rankGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
         const string dedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+        const string vehicleTypeGuid = "5f6b0e9e-7d1c-4f91-affc-ecbe95cef678";
 
         // Seed the Rank field mapping if it doesn't already exist
         var rankExists = await context.SyncFieldMappings.AnyAsync(m => m.EventsAirFieldGuid == rankGuid);
@@ -242,6 +243,23 @@ public static class DatabaseSeeder
                 FieldRole = "DedicatedCar",
                 Description = "Primary sync filter. Guests with a value for this field are included; others are deactivated (unless they have an active vehicle assignment).",
                 SortOrder = 1,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            });
+        }
+
+        // Seed the Vehicle Types field mapping if it doesn't already exist
+        var vehicleTypeExists = await context.SyncFieldMappings.AnyAsync(m => m.EventsAirFieldGuid == vehicleTypeGuid);
+        if (!vehicleTypeExists)
+        {
+            context.SyncFieldMappings.Add(new SyncFieldMapping
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = "Vehicle Types",
+                EventsAirFieldGuid = vehicleTypeGuid,
+                FieldRole = "VehicleType",
+                Description = "Preferred vehicle type from EventsAir (e.g. Hyundai Elantra, Toyota Land Cruiser). Stored for display only.",
+                SortOrder = 3,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             });

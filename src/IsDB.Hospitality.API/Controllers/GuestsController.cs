@@ -226,6 +226,11 @@ public class GuestsController : ApiControllerBase
             ?? fieldMappings.FirstOrDefault(f =>
                 f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase)))
             ?.EventsAirFieldGuid ?? RANK_FIELD_GUID;
+        var vehicleTypeGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Vehicle Types", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Vehicle Types", StringComparison.OrdinalIgnoreCase)))
+            ?.EventsAirFieldGuid ?? VEHICLE_TYPE_FIELD_GUID;
 
         // Capture caller identity before entering the background Task (HttpContext not available inside)
         var callerStaffIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -245,7 +250,7 @@ public class GuestsController : ApiControllerBase
                 // PASS 1: Fetch contacts with DedicatedCar=True (includes Rank)
                 // ═══════════════════════════════════════════════════════════════
                 var contacts = await FetchContactsWithDedicatedCarAsync(
-                    apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None, dedicatedCarGuid, rankGuid);
+                    apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None, dedicatedCarGuid, rankGuid, vehicleTypeGuid);
 
                 job.TotalFetched = contacts.Count;
                 Console.WriteLine($"[SYNC] Pass 1 complete: {contacts.Count} contacts with DedicatedCar=True fetched.");
@@ -280,6 +285,7 @@ public class GuestsController : ApiControllerBase
                             RegistrationTypeName = contact.RegistrationTypeName,
                             DedicatedCar = "True",
                             RankValue = contact.RankValue,
+                            VehicleTypeValue = contact.VehicleTypeValue,
                             IsActive = true,
                             Status = GuestStatus.Expected,
                             EventCode = eventCode,
@@ -302,6 +308,7 @@ public class GuestsController : ApiControllerBase
                         if (existing.Country != contact.Country) { existing.Country = contact.Country; changed = true; }
                         if (existing.PhotoUrl != contact.PhotoUrl) { existing.PhotoUrl = contact.PhotoUrl; changed = true; }
                         if (existing.RankValue != contact.RankValue) { existing.RankValue = contact.RankValue; changed = true; }
+                        if (existing.VehicleTypeValue != contact.VehicleTypeValue) { existing.VehicleTypeValue = contact.VehicleTypeValue; changed = true; }
                         if (existing.DedicatedCar != "True") { existing.DedicatedCar = "True"; changed = true; }
                         if (!existing.IsActive) { existing.IsActive = true; changed = true; }
                         // Stamp EventCode if not already set or if it differs from the active event
@@ -627,12 +634,15 @@ public class GuestsController : ApiControllerBase
     // Returns contacts with their Rank value included (from customFields inline)
     // Only 2-3 API calls needed for ~200 contacts
     // ═══════════════════════════════════════════════════════════════════════════
+    private const string VEHICLE_TYPE_FIELD_GUID = "5f6b0e9e-7d1c-4f91-affc-ecbe95cef678";
+
     private static async Task<List<EventsAirContactDto>> FetchContactsWithDedicatedCarAsync(
         string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
-        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null)
+        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null, string? vehicleTypeFieldGuid = null)
     {
         dedicatedCarFieldGuid ??= DEDICATED_CAR_FIELD_GUID;
         rankFieldGuid ??= RANK_FIELD_GUID;
+        vehicleTypeFieldGuid ??= VEHICLE_TYPE_FIELD_GUID;
         var fetched = new List<EventsAirContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -688,7 +698,7 @@ public class GuestsController : ApiControllerBase
                 if (errorMsg.Contains("cost", StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine("[SYNC] Cost limit hit — retrying with lighter query (no customFields/photo)...");
-                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken, dedicatedCarFieldGuid, rankFieldGuid);
+                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken, dedicatedCarFieldGuid, rankFieldGuid, vehicleTypeFieldGuid);
                 }
                 throw new InvalidOperationException($"GraphQL error: {errorMsg}");
             }
@@ -702,8 +712,9 @@ public class GuestsController : ApiControllerBase
                 var contactId = contact.TryGetProperty("id", out var cidEl) ? cidEl.GetString() ?? "" : "";
                 if (string.IsNullOrEmpty(contactId) || !seenContactIds.Add(contactId)) continue;
 
-                // Extract Rank from customFields
+                // Extract Rank and VehicleType from customFields
                 string? rankValue = null;
+                string? vehicleTypeValue = null;
                 if (contact.TryGetProperty("customFields", out var cfArray) && cfArray.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var cf in cfArray.EnumerateArray())
@@ -712,10 +723,12 @@ public class GuestsController : ApiControllerBase
                         if (string.Equals(defId, rankFieldGuid, StringComparison.OrdinalIgnoreCase))
                         {
                             if (cf.TryGetProperty("value", out var v) && v.ValueKind != JsonValueKind.Null)
-                            {
                                 rankValue = v.ValueKind == JsonValueKind.String ? v.GetString() : v.GetRawText().Trim('"');
-                            }
-                            break;
+                        }
+                        else if (string.Equals(defId, vehicleTypeFieldGuid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (cf.TryGetProperty("value", out var vt) && vt.ValueKind != JsonValueKind.Null)
+                                vehicleTypeValue = vt.ValueKind == JsonValueKind.String ? vt.GetString() : vt.GetRawText().Trim('"');
                         }
                     }
                 }
@@ -756,7 +769,8 @@ public class GuestsController : ApiControllerBase
                     RegistrationTypeName: regTypeName,
                     Country: country,
                     PhotoUrl: photoUrl,
-                    RankValue: rankValue
+                    RankValue: rankValue,
+                    VehicleTypeValue: vehicleTypeValue
                 ));
             }
 
@@ -774,10 +788,11 @@ public class GuestsController : ApiControllerBase
     /// </summary>
     private static async Task<List<EventsAirContactDto>> FetchContactsWithDedicatedCarLightAsync(
         string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
-        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null)
+        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null, string? vehicleTypeFieldGuid = null)
     {
         dedicatedCarFieldGuid ??= DEDICATED_CAR_FIELD_GUID;
         rankFieldGuid ??= RANK_FIELD_GUID;
+        vehicleTypeFieldGuid ??= VEHICLE_TYPE_FIELD_GUID;
         var fetched = new List<EventsAirContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -842,7 +857,8 @@ public class GuestsController : ApiControllerBase
                     RegistrationTypeName: "",
                     Country: country,
                     PhotoUrl: null,
-                    RankValue: null // Will need separate fetch
+                    RankValue: null, // Will need separate fetch
+                    VehicleTypeValue: null
                 ));
             }
 
@@ -851,15 +867,21 @@ public class GuestsController : ApiControllerBase
             offset += pageSize;
         }
 
-        // Fetch Rank values separately for the light path
+        // Fetch Rank and VehicleType values separately for the light path
         if (fetched.Count > 0)
         {
-            Console.WriteLine($"[SYNC] Light path: fetching Rank values for {fetched.Count} contacts...");
-            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, rankFieldGuid, fetched.Select(c => c.ContactId), httpClientFactory, cancellationToken);
+            Console.WriteLine($"[SYNC] Light path: fetching Rank and VehicleType values for {fetched.Count} contacts...");
+            var contactIds = fetched.Select(c => c.ContactId).ToList();
+            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, rankFieldGuid, contactIds, httpClientFactory, cancellationToken);
+            var vehicleTypeValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, vehicleTypeFieldGuid, contactIds, httpClientFactory, cancellationToken);
             for (int i = 0; i < fetched.Count; i++)
             {
-                if (rankValues.TryGetValue(fetched[i].ContactId, out var rank))
-                    fetched[i] = fetched[i] with { RankValue = rank };
+                var id = fetched[i].ContactId;
+                fetched[i] = fetched[i] with
+                {
+                    RankValue = rankValues.TryGetValue(id, out var rank) ? rank : fetched[i].RankValue,
+                    VehicleTypeValue = vehicleTypeValues.TryGetValue(id, out var vt) ? vt : fetched[i].VehicleTypeValue
+                };
             }
         }
 
@@ -982,7 +1004,7 @@ public class GuestsController : ApiControllerBase
         string ContactId, string FirstName, string LastName, string? Title,
         string? JobTitle, string? OrganizationName, string? PrimaryEmail,
         string RegistrationTypeId, string RegistrationTypeName,
-        string? Country = null, string? PhotoUrl = null, string? RankValue = null);
+        string? Country = null, string? PhotoUrl = null, string? RankValue = null, string? VehicleTypeValue = null);
 
     private record EventsAirRegistrationRaw(string ContactId, string FirstName, string LastName, string? Title, string? JobTitle, string? OrganizationName, string? PrimaryEmail, string RegistrationTypeId, string RegistrationTypeName, string? Country = null, string? PhotoUrl = null);
     private class SyncJobStatus { public string JobId { get; set; } = string.Empty; public string State { get; set; } = "pending"; public string Message { get; set; } = string.Empty; public int Added { get; set; } public int Updated { get; set; } public int Deactivated { get; set; } public int TotalFetched { get; set; } public DateTime StartedAt { get; set; } public DateTime? FinishedAt { get; set; }
