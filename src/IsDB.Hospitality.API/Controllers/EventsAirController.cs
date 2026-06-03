@@ -928,9 +928,8 @@ public class EventsAirController : ApiControllerBase
         }
         catch (Exception ex)
         {
-            // Return empty list on error so the UI can fall back gracefully
-            _ = ex; // suppress unused variable warning
-            return Ok(new List<Application.DTOs.EventsAir.EventsAirEventDto>());
+            // Return 502 so the UI can distinguish "failed to load" from "genuinely no events"
+            return StatusCode(502, new { error = "Failed to load events from EventsAir", detail = ex.Message });
         }
     }
 }
