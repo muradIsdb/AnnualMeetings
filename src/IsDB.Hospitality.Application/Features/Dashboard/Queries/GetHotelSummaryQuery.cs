@@ -51,8 +51,10 @@ public class GetHotelSummaryQueryHandler : IRequestHandler<GetHotelSummaryQuery,
             .GroupBy(g => g.HotelName!)
             .Select(grp => new HotelGuestCountDto
             {
-                HotelName  = grp.Key,
-                GuestCount = grp.Count()
+                HotelName     = grp.Key,
+                GuestCount    = grp.Count(),
+                WithRoomCount = grp.Count(g => !string.IsNullOrWhiteSpace(g.RoomNumber)),
+                NoRoomCount   = grp.Count(g => string.IsNullOrWhiteSpace(g.RoomNumber))
             })
             .OrderByDescending(h => h.GuestCount)
             .ToList();
@@ -63,8 +65,10 @@ public class GetHotelSummaryQueryHandler : IRequestHandler<GetHotelSummaryQuery,
         {
             byHotel.Add(new HotelGuestCountDto
             {
-                HotelName  = "Unassigned",
-                GuestCount = unassignedHotel
+                HotelName     = "Unassigned",
+                GuestCount    = unassignedHotel,
+                WithRoomCount = 0,
+                NoRoomCount   = unassignedHotel
             });
         }
 

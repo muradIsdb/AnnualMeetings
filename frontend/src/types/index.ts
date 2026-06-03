@@ -176,6 +176,17 @@ export interface DashboardSummary {
   activeAlerts: Alert[];
   recentActivity: ActivityItem[];
   fleetByClass?: FleetClassSummary[];
+  // Extended fields from backend DashboardSummaryDto
+  arrivingCount?: number;
+  receivedByEmbassyCount?: number;
+  onTheWayToHotelCount?: number;
+  atHotelCount?: number;
+  departingCount?: number;
+  vehiclesTotal?: number;
+  vehiclesOutOfService?: number;
+  vehiclesNotProvided?: number;
+  guestsAssignedWithoutDedicatedCar?: number;
+  guestsDeservingVehicle?: number;
 }
 
 export interface ActivityItem {
@@ -188,11 +199,18 @@ export interface ActivityItem {
 }
 
 export interface FleetClassSummary {
+  classId?: string;
   className: string;
+  classColor?: string;
+  sortOrder?: number;
   available: number;
   assigned: number;
   guests: number;
   total: number;
+  outOfService?: number;
+  notProvided?: number;
+  guestsDeserving?: number;
+  totalVehicles?: number;
 }
 
 export interface CreateDepartureRequest {

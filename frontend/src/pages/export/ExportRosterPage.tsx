@@ -19,7 +19,21 @@
 //   Sv = downloadBlob(url, filename, params) helper
 
 import React, { useState, useMemo } from 'react'
-import { Download, Filter, Users, SquareCheckBig, Square, RefreshCw, X } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Download, Filter, Users, CheckSquare, Square, RefreshCw, X } from 'lucide-react'
+import { guestsApi } from '../../api/services'
+import apiClient from '../../api/client'
+
+// Helper: download a file from the API as a blob
+async function downloadBlob(url: string, filename: string, params: Record<string, string>) {
+  const response = await apiClient.get(url, { params, responseType: 'blob' })
+  const href = URL.createObjectURL(response.data)
+  const a = document.createElement('a')
+  a.href = href
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(href)
+}
 
 // Sentinel value sent to backend to represent null/empty rank or car class
 const UNSET = '__UNSET__'
@@ -112,7 +126,7 @@ function CheckboxGroup({
               }`}
             >
               {selected.has(UNSET)
-                ? <SquareCheckBig className="w-3.5 h-3.5" />
+                ? <CheckSquare className="w-3.5 h-3.5" />
                 : <Square className="w-3.5 h-3.5" />}
               {UNSET_LABEL}
               {unsetCount > 0 && (
@@ -133,7 +147,7 @@ function CheckboxGroup({
                     : 'bg-white border-gray-200 text-gray-600 hover:border-isdb-green/50 hover:text-isdb-green'
                 }`}
               >
-                {checked ? <SquareCheckBig className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
+                {checked ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
                 {opt}
               </button>
             )
@@ -193,7 +207,7 @@ function ColumnSelector({
                   : 'bg-white border-gray-200 text-gray-600 hover:border-isdb-green/50 hover:text-isdb-green'
               }`}
             >
-              {checked ? <SquareCheckBig className="w-3.5 h-3.5 flex-shrink-0" /> : <Square className="w-3.5 h-3.5 flex-shrink-0" />}
+              {checked ? <CheckSquare className="w-3.5 h-3.5 flex-shrink-0" /> : <Square className="w-3.5 h-3.5 flex-shrink-0" />}
               {col.label}
             </button>
           )
