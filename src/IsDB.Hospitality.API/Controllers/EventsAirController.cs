@@ -209,9 +209,13 @@ public class EventsAirController : ApiControllerBase
             h.ActualOccupiedGuest = 0;
         }
 
-        // 3. Stamp all NULL-EventCode fleet records with previousEventCode so they are scoped to the old event
+        // 3. Stamp all NULL-EventCode records (guests + fleet) with previousEventCode so they are scoped to the old event
         if (!string.IsNullOrEmpty(previousEventCode))
         {
+            var nullEventGuests = await _db.Guests.Where(g => g.EventCode == null).ToListAsync(ct);
+            foreach (var g in nullEventGuests)
+                g.EventCode = previousEventCode;
+
             var nullEventVehicles = await _db.Vehicles.Where(v => v.EventCode == null).ToListAsync(ct);
             foreach (var v in nullEventVehicles)
                 v.EventCode = previousEventCode;

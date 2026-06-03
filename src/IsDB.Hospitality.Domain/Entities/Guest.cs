@@ -37,6 +37,13 @@ public class Guest : BaseEntity
     public bool IsActive { get; set; } = true;
 
     /// <summary>
+    /// The EventsAir event code (GUID) this guest belongs to.
+    /// Stamped during sync with the currently active event code.
+    /// Used to filter guests when switching between events.
+    /// </summary>
+    public string? EventCode { get; set; }
+
+    /// <summary>
     /// The value of the Rank custom field fetched from EventsAir (e.g. "VVIP", "VIP", "Official").
     /// Populated in the second-pass sync. Stored for display only — not used for filtering.
     /// Null if the contact has no Rank value in EventsAir.

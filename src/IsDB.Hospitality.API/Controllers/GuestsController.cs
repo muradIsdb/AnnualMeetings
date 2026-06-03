@@ -38,9 +38,12 @@ public class GuestsController : ApiControllerBase
     [HttpGet]
     public async Task<ActionResult<List<GuestSummaryDto>>> GetGuests(
         [FromQuery] GuestStatus? status = null,
-        [FromQuery] bool? isCritical = null)
+        [FromQuery] bool? isCritical = null,
+        [FromServices] AppDbContext db = null!,
+        CancellationToken ct = default)
     {
-        var result = await Mediator.Send(new GetGuestsQuery(status, isCritical));
+        var activeEventCode = (await db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+        var result = await Mediator.Send(new GetGuestsQuery(status, isCritical, activeEventCode));
         return Ok(result);
     }
 
@@ -270,6 +273,7 @@ public class GuestsController : ApiControllerBase
                             RankValue = contact.RankValue,
                             IsActive = true,
                             Status = GuestStatus.Expected,
+                            EventCode = eventCode,
                             LastSyncedAt = DateTime.UtcNow
                         };
                         bgDb.Guests.Add(newGuest);
@@ -291,6 +295,8 @@ public class GuestsController : ApiControllerBase
                         if (existing.RankValue != contact.RankValue) { existing.RankValue = contact.RankValue; changed = true; }
                         if (existing.DedicatedCar != "True") { existing.DedicatedCar = "True"; changed = true; }
                         if (!existing.IsActive) { existing.IsActive = true; changed = true; }
+                        // Stamp EventCode if not already set or if it differs from the active event
+                        if (existing.EventCode != eventCode) { existing.EventCode = eventCode; changed = true; }
                         if (changed) { existing.LastSyncedAt = DateTime.UtcNow; updated++; }
                     }
                 }
