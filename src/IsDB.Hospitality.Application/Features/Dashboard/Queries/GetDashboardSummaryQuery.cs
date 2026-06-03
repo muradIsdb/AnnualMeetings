@@ -46,7 +46,8 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
             g.OutboundStatus == OutboundStatus.InTransferToAirport ||
             g.OutboundStatus == OutboundStatus.AtAirport ||
             g.OutboundStatus == OutboundStatus.BoardingCompleted, cancellationToken);
-        var guestsDeserving   = await activeGuests.CountAsync(g => g.DeservedCarClassId.HasValue, cancellationToken);
+        // guestsDeserving = cars still needed: guests with a car class entitlement but no dedicated car assigned yet
+        var guestsDeserving   = await activeGuests.CountAsync(g => g.DeservedCarClassId.HasValue && g.DedicatedCar == null, cancellationToken);
 
         // ── 2. Lightweight guest projection (only needed columns, no navigation) ───
         var guests = await activeGuests
