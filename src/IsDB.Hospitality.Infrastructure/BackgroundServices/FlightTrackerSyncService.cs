@@ -104,11 +104,11 @@ public class FlightTrackerSyncService : BackgroundService
 
         try
         {
-            var windowCutoff = DateTime.UtcNow.AddHours(trackingWindowHours);
-
-            // Only track flights for guests who are expected or in transit,
-            // whose scheduled arrival is within the configured tracking window,
-            // and that have not already landed or been cancelled.
+            // Track all flights for guests who are expected or in transit
+            // that have not already landed or been cancelled.
+            // No upper-bound window filter — AviationStack returns "scheduled" with no
+            // actuals for far-future flights, so polling them is harmless and ensures
+            // the sync works regardless of how far out the event is.
             var activeFlights = await context.Flights
                 .Include(f => f.TravelBookings)
                     .ThenInclude(tb => tb.Guest)
@@ -118,7 +118,6 @@ public class FlightTrackerSyncService : BackgroundService
                             tb.Guest.Status == GuestStatus.DepartingHotel ||
                             tb.Guest.Status == GuestStatus.AtAirportDeparture))
                 .Where(f => f.Status != FlightStatus.Landed && f.Status != FlightStatus.Cancelled)
-                .Where(f => f.ScheduledArrival == null || f.ScheduledArrival <= windowCutoff)
                 .ToListAsync(cancellationToken);
 
             _logger.LogInformation(
@@ -129,6 +128,27 @@ public class FlightTrackerSyncService : BackgroundService
             {
                 var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken);
                 if (status == null) continue;
+
+                // Fix 2: Reject AviationStack results that belong to a different day's flight.
+                // AviationStack returns the most recently operated flight for a given IATA code
+                // (typically today's). If the DB flight is scheduled for a different date, the
+                // returned data is for the wrong occurrence — skip it.
+                // Allow ±1 day tolerance to handle timezone edge cases.
+                if (status.ScheduledArrival.HasValue)
+                {
+                    var dayDiff = Math.Abs((status.ScheduledArrival.Value.Date - flight.ScheduledArrival.Date).TotalDays);
+                    if (dayDiff > 1)
+                    {
+                        _logger.LogDebug(
+                            "Skipping flight {FlightNumber}: AviationStack returned {ApiDate}, DB expects {DbDate} (diff={Diff}d)",
+                            flight.FlightNumber,
+                            status.ScheduledArrival.Value.Date.ToString("yyyy-MM-dd"),
+                            flight.ScheduledArrival.Date.ToString("yyyy-MM-dd"),
+                            dayDiff);
+                        flight.LastTrackedAt = DateTime.UtcNow;
+                        continue;
+                    }
+                }
 
                 bool changed = false;
 
@@ -212,7 +232,6 @@ public class FlightTrackerSyncService : BackgroundService
         int tracked = 0, updated = 0;
         try
         {
-            var windowCutoff = DateTime.UtcNow.AddHours(trackingWindowHours);
             var activeFlights = await context.Flights
                 .Include(f => f.TravelBookings).ThenInclude(tb => tb.Guest)
                 .Where(f => f.TravelBookings.Any(tb =>
@@ -221,7 +240,6 @@ public class FlightTrackerSyncService : BackgroundService
                     tb.Guest.Status == GuestStatus.DepartingHotel ||
                     tb.Guest.Status == GuestStatus.AtAirportDeparture))
                 .Where(f => f.Status != FlightStatus.Landed && f.Status != FlightStatus.Cancelled)
-                .Where(f => f.ScheduledArrival == null || f.ScheduledArrival <= windowCutoff)
                 .ToListAsync(cancellationToken);
 
             tracked = activeFlights.Count;
@@ -231,7 +249,23 @@ public class FlightTrackerSyncService : BackgroundService
                 var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken);
                 if (status == null) continue;
 
-                bool changed = false;
+                // Fix 2: Reject AviationStack results that belong to a different day's flight.
+                if (status.ScheduledArrival.HasValue)
+                {
+                    var dayDiff = Math.Abs((status.ScheduledArrival.Value.Date - flight.ScheduledArrival.Date).TotalDays);
+                    if (dayDiff > 1)
+                    {
+                        _logger.LogDebug(
+                            "Skipping flight {FlightNumber}: AviationStack returned {ApiDate}, DB expects {DbDate} (diff={Diff}d)",
+                            flight.FlightNumber,
+                            status.ScheduledArrival.Value.Date.ToString("yyyy-MM-dd"),
+                            flight.ScheduledArrival.Date.ToString("yyyy-MM-dd"),
+                            dayDiff);
+                        flight.LastTrackedAt = DateTime.UtcNow;
+                        continue;
+                    }
+                }
+                bool changed = false;;
                 var newStatus = ParseFlightStatus(status.Status);
                 if (flight.Status != newStatus) { flight.Status = newStatus; changed = true; }
                 if (status.ActualArrival.HasValue && flight.ActualArrival != status.ActualArrival) { flight.ActualArrival = status.ActualArrival; changed = true; }

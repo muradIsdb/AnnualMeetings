@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Application.Common.Models;
 using Microsoft.Extensions.Logging;
@@ -45,11 +46,28 @@ public class AviationstackClient : IFlightTrackerClient
                 });
     }
 
+    /// <summary>
+    /// Normalises an IATA flight number for AviationStack queries.
+    /// Strips leading zeros from the numeric suffix: "TK0334" → "TK334", "EK0583" → "EK583".
+    /// Also removes internal spaces: "TK 334" → "TK334".
+    /// </summary>
+    private static string NormaliseFlightNumber(string flightIata)
+    {
+        // Remove all spaces first
+        var s = flightIata.Replace(" ", "").Trim();
+        // Strip leading zeros from the numeric part: letters followed by digits
+        return Regex.Replace(s, @"^([A-Za-z]{1,3})0+(\d+.*)$", "$1$2");
+    }
+
     public async Task<FlightStatusDto?> GetFlightStatusAsync(string flightIata, CancellationToken cancellationToken = default)
     {
         try
         {
-            var url = $"{_options.BaseUrl}/flights?access_key={_options.ApiKey}&flight_iata={Uri.EscapeDataString(flightIata)}&limit=1";
+            var normalised = NormaliseFlightNumber(flightIata);
+            if (normalised != flightIata)
+                _logger.LogDebug("Normalised flight number {Original} → {Normalised}", flightIata, normalised);
+
+            var url = $"{_options.BaseUrl}/flights?access_key={_options.ApiKey}&flight_iata={Uri.EscapeDataString(normalised)}&limit=1";
             var response = await _retryPolicy.ExecuteAsync(() => _httpClient.GetAsync(url, cancellationToken));
 
             if (!response.IsSuccessStatusCode)
