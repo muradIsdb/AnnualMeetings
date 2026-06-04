@@ -1,9 +1,11 @@
 using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Domain.Entities;
+using IsDB.Hospitality.Infrastructure.BackgroundServices;
 using IsDB.Hospitality.Infrastructure.ExternalClients.FlightTracker;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
 namespace IsDB.Hospitality.API.Controllers;
@@ -17,11 +19,13 @@ public class SettingsController : ApiControllerBase
 {
     private readonly IAppDbContext _db;
     private readonly IWebHostEnvironment _env;
+    private readonly FlightTrackerSyncService? _flightSync;
 
-    public SettingsController(IAppDbContext db, IWebHostEnvironment env)
+    public SettingsController(IAppDbContext db, IWebHostEnvironment env, IEnumerable<IHostedService> hostedServices)
     {
         _db = db;
         _env = env;
+        _flightSync = hostedServices.OfType<FlightTrackerSyncService>().FirstOrDefault();
     }
 
     // ─── APP CONFIG ───────────────────────────────────────────────────────────
@@ -516,6 +520,34 @@ public class SettingsController : ApiControllerBase
             });
         }
     }
+
+    /// <summary>
+    /// Triggers an immediate AviationStack sync cycle outside the normal timer.
+    /// Returns a summary of flights polled and updated.
+    /// </summary>
+    [HttpPost("flight-tracking/sync-now")]
+    [Authorize(Roles = "Administrator")]
+    public async Task<ActionResult<SyncNowResult>> SyncFlightsNow()
+    {
+        if (_flightSync == null)
+            return StatusCode(503, new SyncNowResult { Success = false, Message = "Flight sync service is not running." });
+
+        try
+        {
+            var result = await _flightSync.TriggerSyncNowAsync(HttpContext.RequestAborted);
+            return Ok(new SyncNowResult
+            {
+                Success = true,
+                FlightsTracked = result.FlightsTracked,
+                FlightsUpdated = result.FlightsUpdated,
+                Message = result.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return Ok(new SyncNowResult { Success = false, Message = $"Sync failed: {ex.Message}" });
+        }
+    }
 }
 
 // ─── DTOs ─────────────────────────────────────────────────────────────────────
@@ -628,4 +660,11 @@ public record TestFlightTrackingResult
     public string? Plan { get; init; }
     public int? MonthlyQuota { get; init; }
     public int? QuotaUsed { get; init; }
+}
+public record SyncNowResult
+{
+    public bool Success { get; init; }
+    public int FlightsTracked { get; init; }
+    public int FlightsUpdated { get; init; }
+    public string Message { get; init; } = string.Empty;
 }

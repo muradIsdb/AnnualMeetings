@@ -13,6 +13,9 @@ namespace IsDB.Hospitality.Infrastructure.BackgroundServices;
 
 public class FlightTrackerSyncService : BackgroundService
 {
+    /// <summary>Result returned by a manual sync trigger.</summary>
+    public record SyncResult(int FlightsTracked, int FlightsUpdated, string Message);
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<FlightTrackerSyncService> _logger;
     private readonly AviationstackOptions _options;
@@ -181,6 +184,84 @@ public class FlightTrackerSyncService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Flight tracker sync failed.");
+        }
+    }
+
+    /// <summary>
+    /// Triggers one immediate sync cycle outside the normal timer.
+    /// Returns a summary of what was polled and updated.
+    /// </summary>
+    public async Task<SyncResult> TriggerSyncNowAsync(CancellationToken cancellationToken = default)
+    {
+        var (apiKey, _, windowHours) = await GetEffectiveConfigAsync(cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(apiKey) || apiKey == "REPLACE_WITH_AVIATIONSTACK_API_KEY")
+            return new SyncResult(0, 0, "AviationStack API key is not configured.");
+
+        var result = await SyncFlightsAndCountAsync(apiKey, windowHours, cancellationToken);
+        return result;
+    }
+
+    private async Task<SyncResult> SyncFlightsAndCountAsync(string apiKey, int trackingWindowHours, CancellationToken cancellationToken)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var flightTracker = scope.ServiceProvider.GetRequiredService<IFlightTrackerClient>();
+        var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<FlightHubProxy>>();
+
+        int tracked = 0, updated = 0;
+        try
+        {
+            var windowCutoff = DateTime.UtcNow.AddHours(trackingWindowHours);
+            var activeFlights = await context.Flights
+                .Include(f => f.TravelBookings).ThenInclude(tb => tb.Guest)
+                .Where(f => f.TravelBookings.Any(tb =>
+                    tb.Guest.Status == GuestStatus.Expected ||
+                    tb.Guest.Status == GuestStatus.ArrivedAtAirport ||
+                    tb.Guest.Status == GuestStatus.DepartingHotel ||
+                    tb.Guest.Status == GuestStatus.AtAirportDeparture))
+                .Where(f => f.Status != FlightStatus.Landed && f.Status != FlightStatus.Cancelled)
+                .Where(f => f.ScheduledArrival == null || f.ScheduledArrival <= windowCutoff)
+                .ToListAsync(cancellationToken);
+
+            tracked = activeFlights.Count;
+
+            foreach (var flight in activeFlights)
+            {
+                var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken);
+                if (status == null) continue;
+
+                bool changed = false;
+                var newStatus = ParseFlightStatus(status.Status);
+                if (flight.Status != newStatus) { flight.Status = newStatus; changed = true; }
+                if (status.ActualArrival.HasValue && flight.ActualArrival != status.ActualArrival) { flight.ActualArrival = status.ActualArrival; changed = true; }
+                if (status.ActualDeparture.HasValue && flight.ActualDeparture != status.ActualDeparture) { flight.ActualDeparture = status.ActualDeparture; changed = true; }
+                if (status.Terminal != null && flight.ActualTerminal != status.Terminal) { flight.ActualTerminal = status.Terminal; changed = true; }
+                if (status.Gate != null && flight.ActualGate != status.Gate) { flight.ActualGate = status.Gate; changed = true; }
+                if (status.DelayMinutes.HasValue && flight.LiveDelayMinutes != status.DelayMinutes) { flight.LiveDelayMinutes = status.DelayMinutes; changed = true; }
+                flight.LastTrackedAt = DateTime.UtcNow;
+
+                if (changed)
+                {
+                    updated++;
+                    await hubContext.Clients.Group("airport").SendAsync("FlightUpdated",
+                        new { flightId = flight.Id, flightNumber = flight.FlightNumber, status = newStatus.ToString().ToLower(),
+                              actualArrival = flight.ActualArrival, terminal = flight.ActualTerminal, gate = flight.ActualGate,
+                              liveDelayMinutes = flight.LiveDelayMinutes, lastTrackedAt = flight.LastTrackedAt },
+                        cancellationToken);
+                }
+            }
+
+            await context.SaveChangesAsync(cancellationToken);
+            var msg = tracked == 0
+                ? "No active flights within the tracking window."
+                : $"Sync complete — {tracked} flight(s) polled, {updated} updated.";
+            return new SyncResult(tracked, updated, msg);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Manual flight sync failed.");
+            return new SyncResult(tracked, updated, $"Sync failed: {ex.Message}");
         }
     }
 
