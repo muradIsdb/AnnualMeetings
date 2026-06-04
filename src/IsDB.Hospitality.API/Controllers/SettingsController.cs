@@ -442,7 +442,7 @@ public class SettingsController : ApiControllerBase
         if (req.TrackingWindowHours > 0)
             config.AviationstackTrackingWindowHours = req.TrackingWindowHours;
 
-        if (req.DateGuardDays > 0)
+        if (req.DateGuardDays >= 0)  // 0 is valid: means exact date match, no tolerance
             config.AviationstackDateGuardDays = req.DateGuardDays;
 
         config.UpdatedAt = DateTime.UtcNow;
