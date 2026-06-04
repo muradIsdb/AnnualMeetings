@@ -60,6 +60,8 @@ public class DepartureRequestsController : ApiControllerBase
         }
         else
         {
+            var activeEventCodeNew = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+
             var record = new DepartureRequest
             {
                 FullName = req.FullName.Trim(),
@@ -71,6 +73,7 @@ public class DepartureRequestsController : ApiControllerBase
                 DisclaimerAccepted = true,
                 ManageToken = Guid.NewGuid(),
                 SubmittedAt = DateTime.UtcNow,
+                EventCode = activeEventCodeNew,
             };
             _db.DepartureRequests.Add(record);
             await _db.SaveChangesAsync(ct);
@@ -163,8 +166,11 @@ public class DepartureRequestsController : ApiControllerBase
         pageSize = Math.Clamp(pageSize, 1, 200);
         page = Math.Max(page, 1);
 
+        var activeEventCode = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+
         var query = _db.DepartureRequests
             .Include(r => r.HotelOption).Include(r => r.PickupDayOption).Include(r => r.PickupHourOption)
+            .Where(r => activeEventCode == null || r.EventCode == null || r.EventCode == activeEventCode)
             .AsQueryable();
 
         if (hotelId.HasValue) query = query.Where(r => r.HotelOptionId == hotelId);
@@ -206,8 +212,11 @@ public class DepartureRequestsController : ApiControllerBase
     [Authorize(Roles = "Admin,Transport,ControlRoom")]
     public async Task<IActionResult> ExportCsv(CancellationToken ct)
     {
+        var activeEventCodeE = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+
         var list = await _db.DepartureRequests
             .Include(r => r.HotelOption).Include(r => r.PickupDayOption).Include(r => r.PickupHourOption)
+            .Where(r => activeEventCodeE == null || r.EventCode == null || r.EventCode == activeEventCodeE)
             .OrderBy(r => r.PickupDayOption.DisplayOrder).ThenBy(r => r.PickupHourOption.DisplayOrder)
             .ThenBy(r => r.HotelOption.DisplayOrder).ThenBy(r => r.FullName)
             .ToListAsync(ct);
@@ -224,8 +233,11 @@ public class DepartureRequestsController : ApiControllerBase
     [Authorize(Roles = "Admin,Transport,ControlRoom")]
     public async Task<ActionResult<DepartureStatsDto>> GetStats(CancellationToken ct)
     {
+        var activeEventCodeS = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+
         var all = await _db.DepartureRequests
             .Include(r => r.HotelOption).Include(r => r.PickupDayOption).Include(r => r.PickupHourOption)
+            .Where(r => activeEventCodeS == null || r.EventCode == null || r.EventCode == activeEventCodeS)
             .ToListAsync(ct);
 
         var byHotel = all.GroupBy(r => new { r.HotelOptionId, r.HotelOption.Name })
@@ -268,6 +280,29 @@ public class DepartureRequestsController : ApiControllerBase
             localDate = localNow.ToString("yyyy-MM-dd"),
             timezone = tzId
         });
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // DELETE /api/departure-requests/all
+    // Admin-only: delete ALL departure registrations for the active event.
+    // ──────────────────────────────────────────────────────────────────────────
+    [HttpDelete("all")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult> DeleteAll(CancellationToken ct)
+    {
+        var activeEventCode = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+
+        var toDelete = await _db.DepartureRequests
+            .Where(r => activeEventCode == null || r.EventCode == null || r.EventCode == activeEventCode)
+            .ToListAsync(ct);
+
+        if (toDelete.Count == 0)
+            return Ok(new { deleted = 0, message = "No registrations found for the active event." });
+
+        _db.DepartureRequests.RemoveRange(toDelete);
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(new { deleted = toDelete.Count, message = $"{toDelete.Count} departure registration(s) deleted successfully." });
     }
 
     private async Task<bool> ValidateTurnstileAsync(string? token, CancellationToken ct)
