@@ -282,6 +282,9 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("text");
 
+                    b.Property<string>("EventCode")
+                        .HasColumnType("text");
+
                     b.Property<string>("FullName")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -804,6 +807,9 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("CreatedByStaffId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("EventCode")
+                        .HasColumnType("text");
 
                     b.Property<string>("Message")
                         .IsRequired()
