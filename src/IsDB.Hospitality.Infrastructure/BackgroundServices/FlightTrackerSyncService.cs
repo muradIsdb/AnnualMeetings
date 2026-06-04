@@ -227,7 +227,8 @@ public class FlightTrackerSyncService : BackgroundService
         catch (Exception ex)
         {
             logStatus = "Failed";
-            logMessage = $"Sync failed: {ex.Message}";
+            var inner1 = ex.InnerException?.InnerException?.Message ?? ex.InnerException?.Message ?? "(none)";
+            logMessage = $"Sync failed: {ex.Message} | Inner: {inner1}";
             _logger.LogError(ex, "Flight tracker sync failed.");
         }
         finally
@@ -367,7 +368,8 @@ public class FlightTrackerSyncService : BackgroundService
         catch (Exception ex)
         {
             logStatus = "Failed";
-            logMessage = $"Sync failed: {ex.Message}";
+            var inner2 = ex.InnerException?.InnerException?.Message ?? ex.InnerException?.Message ?? "(none)";
+            logMessage = $"Sync failed: {ex.Message} | Inner: {inner2}";
             _logger.LogError(ex, "Manual flight sync failed.");
             return new SyncResult(queried, updated, logMessage);
         }
