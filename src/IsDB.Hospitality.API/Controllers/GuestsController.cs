@@ -398,12 +398,15 @@ public class GuestsController : ApiControllerBase
                             .ThenInclude(tb => tb.Flight)
                         .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase);
 
-                    // ── Bulk-load all flights keyed by flight number ──────────
-                    // Use GroupBy+First to handle duplicate flight numbers (different casing) in DB
+                    // ── Bulk-load all flights keyed by (FlightNumber|Date) ────
+                    // Key on BOTH flight number AND date so that the same flight on
+                    // different days is stored as separate rows (e.g. TK334 Jun 5
+                    // and TK334 Jun 16 are two distinct rows).
                     var allFlights = await bgDb.Flights.ToListAsync();
                     var flightsByNumber = allFlights
-                        .GroupBy(f => f.FlightNumber, StringComparer.OrdinalIgnoreCase)
-                        .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                        .ToDictionary(
+                            f => $"{f.FlightNumber}|{f.ScheduledArrival.Date:yyyy-MM-dd}",
+                            StringComparer.OrdinalIgnoreCase);
 
                     foreach (var tbDto in travelBookings)
                     {
@@ -437,15 +440,27 @@ public class GuestsController : ApiControllerBase
                             }
                         }
 
+                        // Build the flight key from the RAW date string EventsAir sends.
+                        // Skip if date is missing — never fall back to 2026-01-01 (that merges
+                        // all date-less guests into one row).
+                        var rawDateStr2 = isArrival ? tbDto.ArrivalDate : tbDto.DepartureDate;
+                        if (string.IsNullOrEmpty(rawDateStr2) || !DateTime.TryParse(rawDateStr2, out var parsedRawDate2))
+                        {
+                            skippedNoFlight++;
+                            continue;
+                        }
+                        var flightDate2 = parsedRawDate2.Date;
+                        var flightKey2 = $"{tbDto.FlightNumber}|{flightDate2:yyyy-MM-dd}";
+
                         // Find or create the Flight record using the in-memory dictionary
-                        if (!flightsByNumber.TryGetValue(tbDto.FlightNumber, out var flight))
+                        if (!flightsByNumber.TryGetValue(flightKey2, out var flight))
                         {
                             flight = new Flight
                             {
                                 FlightNumber = tbDto.FlightNumber,
                                 AirlineName = tbDto.CarrierName ?? "Unknown",
-                                ScheduledArrival = scheduledArrival ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc),
-                                ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc),
+                                ScheduledArrival = scheduledArrival ?? DateTime.SpecifyKind(parsedRawDate2, DateTimeKind.Utc),
+                                ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(parsedRawDate2, DateTimeKind.Utc),
                                 ArrivalPortName = tbDto.ArrivalPortName,
                                 ArrivalPortIataCode = tbDto.ArrivalPortCode,
                                 DeparturePortName = tbDto.DeparturePortName,
@@ -453,13 +468,13 @@ public class GuestsController : ApiControllerBase
                                 Status = FlightStatus.Scheduled
                             };
                             bgDb.Flights.Add(flight);
-                            flightsByNumber[tbDto.FlightNumber] = flight; // keep dict in sync
+                            flightsByNumber[flightKey2] = flight; // keep dict in sync
                         }
                         else
                         {
-                            // Always overwrite scheduled (EventsAir-owned) fields
-                            if (scheduledArrival.HasValue) flight.ScheduledArrival = scheduledArrival.Value;
-                            if (scheduledDeparture.HasValue) flight.ScheduledDeparture = scheduledDeparture.Value;
+                            // Do NOT overwrite ScheduledArrival/ScheduledDeparture — those are
+                            // set once when the row is created. Overwriting them with a subsequent
+                            // guest's value corrupts the date for all guests on that flight.
                             if (!string.IsNullOrEmpty(tbDto.ArrivalPortName)) flight.ArrivalPortName = tbDto.ArrivalPortName;
                             if (!string.IsNullOrEmpty(tbDto.ArrivalPortCode)) flight.ArrivalPortIataCode = tbDto.ArrivalPortCode;
                             if (!string.IsNullOrEmpty(tbDto.DeparturePortName)) flight.DeparturePortName = tbDto.DeparturePortName;
