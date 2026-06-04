@@ -580,9 +580,15 @@ public class SettingsController : ApiControllerBase
             Guests = flight.TravelBookings.Select(tb => new { tb.Guest.FirstName, tb.Guest.LastName, GuestStatus = tb.Guest.Status.ToString() }).ToList()
         };
 
+        // Read the effective API key from DB (same logic as the background sync service)
+        var dbConfig = await db.AppConfigs.FindAsync(new object[] { 1 }, ct);
+        var effectiveApiKey = !string.IsNullOrWhiteSpace(dbConfig?.AviationstackApiKey)
+            ? dbConfig.AviationstackApiKey
+            : null;
+
         FlightStatusDto? status = null;
         string? apiError = null;
-        try { status = await flightTracker.GetFlightStatusAsync(flightNumber, ct); }
+        try { status = await flightTracker.GetFlightStatusAsync(flightNumber, ct, effectiveApiKey); }
         catch (Exception ex) { apiError = ex.Message; }
 
         if (status == null)

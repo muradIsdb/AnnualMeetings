@@ -59,7 +59,10 @@ public class AviationstackClient : IFlightTrackerClient
         return Regex.Replace(s, @"^([A-Za-z]{1,3})0+(\d+.*)$", "$1$2");
     }
 
-    public async Task<FlightStatusDto?> GetFlightStatusAsync(string flightIata, CancellationToken cancellationToken = default)
+    public async Task<FlightStatusDto?> GetFlightStatusAsync(
+        string flightIata,
+        CancellationToken cancellationToken = default,
+        string? apiKeyOverride = null)
     {
         try
         {
@@ -67,7 +70,9 @@ public class AviationstackClient : IFlightTrackerClient
             if (normalised != flightIata)
                 _logger.LogDebug("Normalised flight number {Original} → {Normalised}", flightIata, normalised);
 
-            var url = $"{_options.BaseUrl}/flights?access_key={_options.ApiKey}&flight_iata={Uri.EscapeDataString(normalised)}&limit=1";
+            // Use the override key (from DB) if provided; fall back to IOptions (appsettings/env)
+            var effectiveKey = !string.IsNullOrWhiteSpace(apiKeyOverride) ? apiKeyOverride : _options.ApiKey;
+            var url = $"{_options.BaseUrl}/flights?access_key={effectiveKey}&flight_iata={Uri.EscapeDataString(normalised)}&limit=1";
             var response = await _retryPolicy.ExecuteAsync(() => _httpClient.GetAsync(url, cancellationToken));
 
             if (!response.IsSuccessStatusCode)

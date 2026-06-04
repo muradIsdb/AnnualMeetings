@@ -126,7 +126,7 @@ public class FlightTrackerSyncService : BackgroundService
 
             foreach (var flight in activeFlights)
             {
-                var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken);
+                var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken, apiKey);
                 if (status == null) continue;
 
                 // Fix 2: Reject AviationStack results that belong to a different day's flight.
@@ -246,7 +246,7 @@ public class FlightTrackerSyncService : BackgroundService
 
             foreach (var flight in activeFlights)
             {
-                var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken);
+                var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken, apiKey);
                 if (status == null) continue;
 
                 // Fix 2: Reject AviationStack results that belong to a different day's flight.
