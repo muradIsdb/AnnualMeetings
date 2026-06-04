@@ -12,6 +12,7 @@ interface ReceptionGuestItem {
   flightNumber?: string;
   airlineName?: string;
   scheduledArrival?: string;
+  actualArrival?: string;
   inboundStatusValue: number;
   inboundStatusLabel: string;
   activeVehiclePlate?: string;
@@ -27,6 +28,7 @@ interface ReceptionFlightItem {
   airlineName?: string;
   departurePortName?: string;
   scheduledArrival: string;
+  actualArrival?: string;
   flightStatus: string;
   actualTerminal?: string;
   actualGate?: string;
@@ -355,6 +357,11 @@ export default function ReceptionDashboard() {
                       {f.departurePortName && <span className="text-xs text-gray-400">from {f.departurePortName}</span>}
                       {f.actualTerminal && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">T{f.actualTerminal}</span>}
                       {f.actualGate && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">Gate {f.actualGate}</span>}
+                      {f.actualArrival && (
+                        <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded font-medium">
+                          Actual: {new Date(f.actualArrival).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${FLIGHT_STATUS_COLORS[f.flightStatus] ?? 'bg-gray-100 text-gray-700'}`}>
                         {f.flightStatus}
                       </span>
@@ -406,7 +413,7 @@ export default function ReceptionDashboard() {
                   <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                     <th className="px-4 py-3 text-left">Guest</th>
                     <th className="px-4 py-3 text-left">Flight</th>
-                    <th className="px-4 py-3 text-left">Scheduled Arrival</th>
+                    <th className="px-4 py-3 text-left">Arrival Time</th>
                     <th className="px-4 py-3 text-left">Status</th>
                     <th className="px-4 py-3 text-left">Vehicle</th>
                     <th className="px-4 py-3 text-left">Flags</th>
@@ -430,10 +437,19 @@ export default function ReceptionDashboard() {
                           <p className="font-medium text-gray-800">{g.flightNumber ?? '—'}</p>
                           <p className="text-xs text-gray-400">{g.airlineName ?? ''}</p>
                         </td>
-                        <td className="px-4 py-3 text-gray-600">
-                          {g.scheduledArrival
-                            ? new Date(g.scheduledArrival).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                            : '—'}
+                        <td className="px-4 py-3">
+                          <div className="space-y-0.5">
+                            <div className="text-gray-600 text-sm">
+                              {g.scheduledArrival
+                                ? new Date(g.scheduledArrival).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                : '—'}
+                            </div>
+                            {g.actualArrival && (
+                              <div className="text-xs text-green-700 font-medium">
+                                Actual: {new Date(g.actualArrival).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-3">
                           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${INBOUND_STATUS_COLORS[g.inboundStatusValue] ?? 'bg-gray-100 text-gray-700'}`}>
