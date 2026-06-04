@@ -45,4 +45,14 @@ public class AppConfig
     public string? EventLogoMimeType { get; set; }
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    // ─── AviationStack Flight Tracking ───────────────────────────────────────
+    /// <summary>AviationStack API key stored in the database (plain text).</summary>
+    public string? AviationstackApiKey { get; set; }
+
+    /// <summary>How often (in minutes) the background service polls AviationStack. Default 5.</summary>
+    public int AviationstackSyncIntervalMinutes { get; set; } = 5;
+
+    /// <summary>Only poll flights whose ScheduledArrival is within this many hours. Default 12.</summary>
+    public int AviationstackTrackingWindowHours { get; set; } = 12;
 }

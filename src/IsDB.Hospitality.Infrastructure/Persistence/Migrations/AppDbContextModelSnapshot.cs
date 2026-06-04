@@ -109,6 +109,15 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("AviationstackApiKey")
+                        .HasColumnType("text");
+
+                    b.Property<int>("AviationstackSyncIntervalMinutes")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("AviationstackTrackingWindowHours")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.ToTable("AppConfigs");

@@ -1,12 +1,14 @@
 using IsDB.Hospitality.Infrastructure.ExternalClients.FlightTracker;
+using IsDB.Hospitality.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 
 namespace IsDB.Hospitality.API.HealthChecks;
 
 /// <summary>
-/// Startup health check that validates the AviationStack API key is configured.
-/// Logs a prominent warning if the key is missing or still the placeholder value.
+/// Health check that validates the AviationStack API key is configured.
+/// Checks DB first (admin-configured), then falls back to appsettings/env vars.
 /// </summary>
 public class AviationstackHealthCheck : IHealthCheck
 {
@@ -20,35 +22,55 @@ public class AviationstackHealthCheck : IHealthCheck
 
     private readonly AviationstackOptions _options;
     private readonly ILogger<AviationstackHealthCheck> _logger;
+    private readonly IServiceProvider _serviceProvider;
 
     public AviationstackHealthCheck(
         IOptions<AviationstackOptions> options,
-        ILogger<AviationstackHealthCheck> logger)
+        ILogger<AviationstackHealthCheck> logger,
+        IServiceProvider serviceProvider)
     {
         _options = options.Value;
         _logger = logger;
+        _serviceProvider = serviceProvider;
     }
 
-    public Task<HealthCheckResult> CheckHealthAsync(
+    public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        var key = _options.ApiKey?.Trim() ?? string.Empty;
+        // DB key takes precedence over appsettings/env
+        string? key = null;
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var config = await db.AppConfigs.FindAsync(new object[] { 1 }, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(config?.AviationstackApiKey))
+                key = config.AviationstackApiKey.Trim();
+        }
+        catch
+        {
+            // DB not yet available — fall through to appsettings
+        }
+
+        if (string.IsNullOrWhiteSpace(key))
+            key = _options.ApiKey?.Trim() ?? string.Empty;
 
         if (PlaceholderValues.Contains(key))
         {
             _logger.LogWarning(
                 "⚠️  AVIATIONSTACK API KEY IS NOT CONFIGURED. " +
-                "Set the 'Aviationstack__ApiKey' environment variable in Railway. " +
+                "Set it in Platform Settings → Flight Tracking, or via the " +
+                "'Aviationstack__ApiKey' environment variable in Railway. " +
                 "Flight tracking will be disabled until this is resolved.");
 
-            return Task.FromResult(HealthCheckResult.Degraded(
+            return HealthCheckResult.Degraded(
                 "AviationStack API key is not configured. " +
-                "Set Aviationstack__ApiKey in the Railway environment variables. " +
-                "Flight status updates will not work until this is resolved."));
+                "Set it in Platform Settings → Flight Tracking or via Railway env vars. " +
+                "Flight status updates will not work until this is resolved.");
         }
 
         _logger.LogInformation("AviationStack API key is configured. Flight tracking is enabled.");
-        return Task.FromResult(HealthCheckResult.Healthy("AviationStack API key is configured."));
+        return HealthCheckResult.Healthy("AviationStack API key is configured.");
     }
 }

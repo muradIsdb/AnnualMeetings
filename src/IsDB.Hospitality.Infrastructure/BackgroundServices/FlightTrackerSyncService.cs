@@ -30,15 +30,26 @@ public class FlightTrackerSyncService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "Flight Tracker Sync Service started. Interval={Interval}m, TrackingWindow={Window}h.",
+            "Flight Tracker Sync Service started. Default interval={Interval}m, window={Window}h.",
             _options.SyncIntervalMinutes, _options.TrackingWindowHours);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await SyncFlightsAsync(stoppingToken);
-                await Task.Delay(TimeSpan.FromMinutes(_options.SyncIntervalMinutes), stoppingToken);
+                // Read effective config from DB each cycle (DB overrides appsettings)
+                var (apiKey, intervalMinutes, windowHours) = await GetEffectiveConfigAsync(stoppingToken);
+
+                if (string.IsNullOrWhiteSpace(apiKey) || apiKey == "REPLACE_WITH_AVIATIONSTACK_API_KEY")
+                {
+                    _logger.LogWarning("AviationStack API key is not configured. Skipping flight sync cycle.");
+                }
+                else
+                {
+                    await SyncFlightsAsync(apiKey, windowHours, stoppingToken);
+                }
+
+                await Task.Delay(TimeSpan.FromMinutes(intervalMinutes), stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -48,7 +59,40 @@ public class FlightTrackerSyncService : BackgroundService
         }
     }
 
-    private async Task SyncFlightsAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Returns the effective (apiKey, syncIntervalMinutes, trackingWindowHours).
+    /// DB values take precedence over appsettings.json / environment variables.
+    /// </summary>
+    private async Task<(string apiKey, int intervalMinutes, int windowHours)> GetEffectiveConfigAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var dbConfig = await context.AppConfigs.FindAsync(new object[] { 1 }, ct);
+
+            var apiKey = !string.IsNullOrWhiteSpace(dbConfig?.AviationstackApiKey)
+                ? dbConfig.AviationstackApiKey
+                : _options.ApiKey;
+
+            var interval = (dbConfig?.AviationstackSyncIntervalMinutes ?? 0) > 0
+                ? dbConfig!.AviationstackSyncIntervalMinutes
+                : _options.SyncIntervalMinutes;
+
+            var window = (dbConfig?.AviationstackTrackingWindowHours ?? 0) > 0
+                ? dbConfig!.AviationstackTrackingWindowHours
+                : _options.TrackingWindowHours;
+
+            return (apiKey ?? string.Empty, interval, window);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not read AviationStack config from DB; using appsettings defaults.");
+            return (_options.ApiKey ?? string.Empty, _options.SyncIntervalMinutes, _options.TrackingWindowHours);
+        }
+    }
+
+    private async Task SyncFlightsAsync(string apiKey, int trackingWindowHours, CancellationToken cancellationToken)
     {
         using var scope = _serviceProvider.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -57,7 +101,7 @@ public class FlightTrackerSyncService : BackgroundService
 
         try
         {
-            var windowCutoff = DateTime.UtcNow.AddHours(_options.TrackingWindowHours);
+            var windowCutoff = DateTime.UtcNow.AddHours(trackingWindowHours);
 
             // Only track flights for guests who are expected or in transit,
             // whose scheduled arrival is within the configured tracking window,
@@ -76,7 +120,7 @@ public class FlightTrackerSyncService : BackgroundService
 
             _logger.LogInformation(
                 "Tracking {Count} active flights within {Window}h window.",
-                activeFlights.Count, _options.TrackingWindowHours);
+                activeFlights.Count, trackingWindowHours);
 
             foreach (var flight in activeFlights)
             {

@@ -1,8 +1,10 @@
 using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Domain.Entities;
+using IsDB.Hospitality.Infrastructure.ExternalClients.FlightTracker;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace IsDB.Hospitality.API.Controllers;
 
@@ -368,6 +370,152 @@ public class SettingsController : ApiControllerBase
         await _db.SaveChangesAsync();
         return NoContent();
     }
+
+    // ─── FLIGHT TRACKING (AVIATIONSTACK) ─────────────────────────────────────
+
+    [HttpGet("flight-tracking")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<FlightTrackingConfigDto>> GetFlightTrackingConfig(
+        [FromServices] IOptions<AviationstackOptions> optionsAccessor)
+    {
+        var config = await _db.AppConfigs.FindAsync(1);
+        var opts = optionsAccessor.Value;
+
+        // Determine effective API key and its source
+        string? dbKey = config?.AviationstackApiKey;
+        bool hasDbKey = !string.IsNullOrWhiteSpace(dbKey);
+        bool hasEnvKey = !string.IsNullOrWhiteSpace(opts.ApiKey)
+                         && opts.ApiKey != "REPLACE_WITH_AVIATIONSTACK_API_KEY";
+
+        string? effectiveKey = hasDbKey ? dbKey : (hasEnvKey ? opts.ApiKey : null);
+        string configSource = hasDbKey ? "database" : (hasEnvKey ? "environment" : "none");
+
+        // Mask: show only last 4 characters
+        string? masked = null;
+        if (!string.IsNullOrWhiteSpace(effectiveKey) && effectiveKey.Length >= 4)
+            masked = new string('•', effectiveKey.Length - 4) + effectiveKey[^4..];
+        else if (!string.IsNullOrWhiteSpace(effectiveKey))
+            masked = new string('•', effectiveKey.Length);
+
+        return Ok(new FlightTrackingConfigDto
+        {
+            ApiKeyMasked = masked,
+            IsConfigured = !string.IsNullOrWhiteSpace(effectiveKey),
+            SyncIntervalMinutes = config?.AviationstackSyncIntervalMinutes > 0
+                ? config.AviationstackSyncIntervalMinutes
+                : opts.SyncIntervalMinutes,
+            TrackingWindowHours = config?.AviationstackTrackingWindowHours > 0
+                ? config.AviationstackTrackingWindowHours
+                : opts.TrackingWindowHours,
+            ConfigSource = configSource
+        });
+    }
+
+    [HttpPut("flight-tracking")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<FlightTrackingConfigDto>> UpdateFlightTrackingConfig(
+        [FromBody] UpdateFlightTrackingConfigRequest req,
+        [FromServices] IOptions<AviationstackOptions> optionsAccessor)
+    {
+        var config = await _db.AppConfigs.FindAsync(1);
+        if (config == null)
+        {
+            config = new IsDB.Hospitality.Domain.Entities.AppConfig { Id = 1 };
+            _db.AppConfigs.Add(config);
+        }
+
+        // Only update API key if a non-empty value was provided
+        if (!string.IsNullOrWhiteSpace(req.ApiKey))
+            config.AviationstackApiKey = req.ApiKey.Trim();
+
+        if (req.SyncIntervalMinutes > 0)
+            config.AviationstackSyncIntervalMinutes = req.SyncIntervalMinutes;
+
+        if (req.TrackingWindowHours > 0)
+            config.AviationstackTrackingWindowHours = req.TrackingWindowHours;
+
+        config.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        // Return updated config (re-use GET logic)
+        return await GetFlightTrackingConfig(HttpContext.RequestServices.GetRequiredService<IOptions<AviationstackOptions>>());
+    }
+
+    [HttpPost("flight-tracking/test")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<TestFlightTrackingResult>> TestFlightTrackingConnection(
+        [FromBody] TestFlightTrackingRequest req,
+        [FromServices] IOptions<AviationstackOptions> optionsAccessor)
+    {
+        // Determine which key to test
+        string? keyToTest = req.ApiKey?.Trim();
+        if (string.IsNullOrWhiteSpace(keyToTest))
+        {
+            var config = await _db.AppConfigs.FindAsync(1);
+            keyToTest = config?.AviationstackApiKey?.Trim();
+        }
+        if (string.IsNullOrWhiteSpace(keyToTest))
+            keyToTest = optionsAccessor.Value.ApiKey?.Trim();
+
+        if (string.IsNullOrWhiteSpace(keyToTest) || keyToTest == "REPLACE_WITH_AVIATIONSTACK_API_KEY")
+            return Ok(new TestFlightTrackingResult
+            {
+                Success = false,
+                Message = "No API key provided. Enter a key and try again."
+            });
+
+        // Call AviationStack API to validate the key
+        try
+        {
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var baseUrl = optionsAccessor.Value.BaseUrl?.TrimEnd('/') ?? "http://api.aviationstack.com/v1";
+            var url = $"{baseUrl}/flights?access_key={Uri.EscapeDataString(keyToTest)}&limit=1";
+            var response = await httpClient.GetAsync(url);
+            var body = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+                return Ok(new TestFlightTrackingResult
+                {
+                    Success = false,
+                    Message = $"AviationStack returned HTTP {(int)response.StatusCode}. Check your API key."
+                });
+
+            // Try to extract plan info from the response
+            string? plan = null;
+            int? quota = null;
+            int? used = null;
+            try
+            {
+                var json = System.Text.Json.JsonDocument.Parse(body);
+                if (json.RootElement.TryGetProperty("pagination", out var pagination))
+                {
+                    if (pagination.TryGetProperty("total", out var total))
+                        used = total.GetInt32();
+                }
+                // AviationStack free plan returns data even on first call
+                if (json.RootElement.TryGetProperty("data", out _))
+                    plan = "Connected";
+            }
+            catch { /* ignore JSON parse errors */ }
+
+            return Ok(new TestFlightTrackingResult
+            {
+                Success = true,
+                Message = "Connection successful. AviationStack API key is valid.",
+                Plan = plan,
+                MonthlyQuota = quota,
+                QuotaUsed = used
+            });
+        }
+        catch (Exception ex)
+        {
+            return Ok(new TestFlightTrackingResult
+            {
+                Success = false,
+                Message = $"Connection failed: {ex.Message}"
+            });
+        }
+    }
 }
 
 // ─── DTOs ─────────────────────────────────────────────────────────────────────
@@ -443,4 +591,41 @@ public record AppConfigDto
     public string PlaCardTheme { get; init; } = "Light";
     /// <summary>URL of the uploaded event logo. Null means use default IsDB logo.</summary>
     public string? EventLogoUrl { get; init; }
+}
+
+// ─── FLIGHT TRACKING DTOs ─────────────────────────────────────────────────────
+
+public record FlightTrackingConfigDto
+{
+    /// <summary>Masked API key — last 4 chars visible, rest replaced with bullets.</summary>
+    public string? ApiKeyMasked { get; init; }
+    /// <summary>Whether an API key is currently configured (in DB or env var).</summary>
+    public bool IsConfigured { get; init; }
+    public int SyncIntervalMinutes { get; init; } = 5;
+    public int TrackingWindowHours { get; init; } = 12;
+    /// <summary>Source of the current config: "database", "environment", or "none".</summary>
+    public string ConfigSource { get; init; } = "none";
+}
+
+public record UpdateFlightTrackingConfigRequest
+{
+    /// <summary>New API key. Null or empty means "keep existing key".</summary>
+    public string? ApiKey { get; init; }
+    public int SyncIntervalMinutes { get; init; } = 5;
+    public int TrackingWindowHours { get; init; } = 12;
+}
+
+public record TestFlightTrackingRequest
+{
+    /// <summary>API key to test. If null, uses the currently saved key.</summary>
+    public string? ApiKey { get; init; }
+}
+
+public record TestFlightTrackingResult
+{
+    public bool Success { get; init; }
+    public string Message { get; init; } = string.Empty;
+    public string? Plan { get; init; }
+    public int? MonthlyQuota { get; init; }
+    public int? QuotaUsed { get; init; }
 }
