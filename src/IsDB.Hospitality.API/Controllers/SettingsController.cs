@@ -412,8 +412,8 @@ public class SettingsController : ApiControllerBase
             TrackingWindowHours = config?.AviationstackTrackingWindowHours > 0
                 ? config.AviationstackTrackingWindowHours
                 : opts.TrackingWindowHours,
-            DateGuardDays = config?.AviationstackDateGuardDays > 0
-                ? config.AviationstackDateGuardDays
+            DateGuardDays = config?.AviationstackDateGuardDays != null
+                ? config.AviationstackDateGuardDays  // 0 is valid: exact date match only
                 : opts.DateGuardDays,
             ConfigSource = configSource
         });
