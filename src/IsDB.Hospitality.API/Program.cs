@@ -330,6 +330,14 @@ using (var scope = app.Services.CreateScope())
             VALUES (1, 'IsDB Annual Meetings 2025', 2, now())
             ON CONFLICT DO NOTHING;
 
+            -- AppConfigs schema update: add columns added after initial deployment
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""EventTimezone"" text NOT NULL DEFAULT 'UTC';
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""PlaCardTheme"" text NOT NULL DEFAULT 'light';
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""EventLogoBase64"" text NULL;
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""AviationstackApiKey"" text NULL;
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""AviationstackSyncIntervalMinutes"" integer NOT NULL DEFAULT 5;
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""AviationstackTrackingWindowHours"" integer NOT NULL DEFAULT 12;
+
             -- DepartureRequests schema update: add new columns if missing (each checked individually)
             DO $$ BEGIN
                 IF NOT EXISTS (
