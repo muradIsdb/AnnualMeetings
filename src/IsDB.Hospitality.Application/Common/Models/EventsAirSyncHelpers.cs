@@ -463,6 +463,15 @@ public static class EventsAirSyncHelpers
                 StringComparer.OrdinalIgnoreCase,
                 cancellationToken);
 
+        // Pre-load titles of existing unresolved conflict alerts so we don't raise duplicates
+        // across multiple sync runs for the same unresolved conflict.
+        var existingConflictTitles = new HashSet<string>(
+            await db.Alerts
+                .Where(a => !a.IsResolved && a.Title.StartsWith("Flight time conflict:"))
+                .Select(a => a.Title)
+                .ToListAsync(cancellationToken),
+            StringComparer.OrdinalIgnoreCase);
+
         foreach (var tb in travelBookings)
         {
             try
@@ -547,10 +556,14 @@ public static class EventsAirSyncHelpers
                         if (Math.Abs((storedTime - incomingTime).TotalMinutes) > 1)
                         {
                             var conflictKey = $"FLIGHT_TIME_CONFLICT|{tb.FlightNumber}|{parsedDate.Date:yyyy-MM-dd}";
-                            // Avoid duplicate alerts: only raise one per flight+date per sync
-                            if (!result.RaisedConflictKeys.Contains(conflictKey))
+                            // Avoid duplicate alerts: only raise one per flight+date per sync run
+                            // AND skip if an unresolved alert for this conflict already exists in the DB
+                            var alertTitle = $"Flight time conflict: {tb.FlightNumber} on {parsedDate.Date:dd MMM yyyy}";
+                            if (!result.RaisedConflictKeys.Contains(conflictKey)
+                                && !existingConflictTitles.Contains(alertTitle))
                             {
                                 result.RaisedConflictKeys.Add(conflictKey);
+                                existingConflictTitles.Add(alertTitle); // prevent a second guest on same flight raising another
                                 db.Alerts.Add(new Alert
                                 {
                                     Title           = $"Flight time conflict: {tb.FlightNumber} on {parsedDate.Date:dd MMM yyyy}",
