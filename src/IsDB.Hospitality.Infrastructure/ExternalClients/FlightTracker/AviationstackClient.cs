@@ -1,5 +1,5 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
+using IsDB.Hospitality.Application.Common.Helpers;
 using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Application.Common.Models;
 using Microsoft.Extensions.Logging;
@@ -46,18 +46,7 @@ public class AviationstackClient : IFlightTrackerClient
                 });
     }
 
-    /// <summary>
-    /// Normalises an IATA flight number for AviationStack queries.
-    /// Strips leading zeros from the numeric suffix: "TK0334" → "TK334", "EK0583" → "EK583".
-    /// Also removes internal spaces: "TK 334" → "TK334".
-    /// </summary>
-    private static string NormaliseFlightNumber(string flightIata)
-    {
-        // Remove all spaces first
-        var s = flightIata.Replace(" ", "").Trim();
-        // Strip leading zeros from the numeric part: letters followed by digits
-        return Regex.Replace(s, @"^([A-Za-z]{1,3})0+(\d+.*)$", "$1$2");
-    }
+    // Normalisation is delegated to the shared FlightNumberHelper in the Application layer.
 
     public async Task<FlightStatusDto?> GetFlightStatusAsync(
         string flightIata,
@@ -66,7 +55,7 @@ public class AviationstackClient : IFlightTrackerClient
     {
         try
         {
-            var normalised = NormaliseFlightNumber(flightIata);
+            var normalised = FlightNumberHelper.Normalise(flightIata);
             if (normalised != flightIata)
                 _logger.LogDebug("Normalised flight number {Original} → {Normalised}", flightIata, normalised);
 

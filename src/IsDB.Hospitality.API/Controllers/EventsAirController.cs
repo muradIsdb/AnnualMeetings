@@ -1,5 +1,6 @@
-using IsDB.Hospitality.Application.DTOs.EventsAir;
+using IsDB.Hospitality.Application.Common.Helpers;
 using IsDB.Hospitality.Application.Common.Interfaces;
+using IsDB.Hospitality.Application.DTOs.EventsAir;
 using IsDB.Hospitality.Domain.Entities;
 using IsDB.Hospitality.Domain.Enums;
 using IsDB.Hospitality.Infrastructure.Persistence;
@@ -617,8 +618,9 @@ public class EventsAirController : ApiControllerBase
 
                 foreach (var tbDto in travelBookings)
                 {
-                    if (string.IsNullOrEmpty(tbDto.FlightNumber) || string.IsNullOrEmpty(tbDto.ContactId)) continue;
-
+                     if (string.IsNullOrEmpty(tbDto.FlightNumber) || string.IsNullOrEmpty(tbDto.ContactId)) continue;
+                    // Normalise flight number at ingest: "TK 0334" → "TK334", "FZ 707" → "FZ707"
+                    tbDto.FlightNumber = FlightNumberHelper.Normalise(tbDto.FlightNumber);
                     var guest = await _db.Guests
                         .Include(g => g.TravelBookings)
                         .ThenInclude(tb => tb.Flight)
@@ -1358,6 +1360,8 @@ public class EventsAirController : ApiControllerBase
             {
                 if (string.IsNullOrEmpty(tb.FlightNumber)) { skippedNoFlight++; continue; }
                 if (string.IsNullOrEmpty(tb.ContactId)) { skippedNoContact++; continue; }
+                // Normalise flight number at ingest: "TK 0334" → "TK334", "FZ 707" → "FZ707"
+                tb.FlightNumber = FlightNumberHelper.Normalise(tb.FlightNumber);
                 if (!guestsByContactId.TryGetValue(tb.ContactId, out var guest)) { skippedNoGuest++; continue; }
 
                 bool isArrival = tb.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
