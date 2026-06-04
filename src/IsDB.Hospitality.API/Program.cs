@@ -687,6 +687,26 @@ using (var scope = app.Services.CreateScope())
                 ) THEN
                     ALTER TABLE ""SyncFieldMappings"" ADD COLUMN ""EventCode"" text NULL;
                 END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='Notifications' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""Notifications"" ADD COLUMN ""EventCode"" text NULL;
+                    -- Backfill existing notifications with the active event code
+                    UPDATE ""Notifications""
+                    SET ""EventCode"" = (SELECT ""EventCode"" FROM ""EventsAirConfigs"" LIMIT 1)
+                    WHERE ""EventCode"" IS NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='DepartureRequests' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""DepartureRequests"" ADD COLUMN ""EventCode"" text NULL;
+                    -- Backfill existing departure requests with the active event code
+                    UPDATE ""DepartureRequests""
+                    SET ""EventCode"" = (SELECT ""EventCode"" FROM ""EventsAirConfigs"" LIMIT 1)
+                    WHERE ""EventCode"" IS NULL;
+                END IF;
             END $$;
         ");
 
