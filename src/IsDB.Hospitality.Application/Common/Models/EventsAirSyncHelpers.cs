@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using IsDB.Hospitality.Application.Common.Helpers;
 using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Domain.Entities;
 using IsDB.Hospitality.Domain.Enums;
@@ -466,6 +467,11 @@ public static class EventsAirSyncHelpers
         {
             try
             {
+                if (string.IsNullOrEmpty(tb.FlightNumber))   { result.SkippedNoFlight++;   continue; }
+                // Normalise to canonical IATA form: remove spaces, strip leading zeros,
+                // remove hyphens between code and number, strip trailing non-alphanumeric.
+                // e.g. "TK 0334" → "TK334", "Ek-585" → "EK585", "TK8440*" → "TK8440".
+                tb.FlightNumber = FlightNumberHelper.Normalise(tb.FlightNumber);
                 if (string.IsNullOrEmpty(tb.FlightNumber))   { result.SkippedNoFlight++;   continue; }
                 if (string.IsNullOrEmpty(tb.ContactId))      { result.SkippedNoContact++;  continue; }
                 if (!guestsByContactId.TryGetValue(tb.ContactId, out var guest)) { result.SkippedNoGuest++; continue; }
