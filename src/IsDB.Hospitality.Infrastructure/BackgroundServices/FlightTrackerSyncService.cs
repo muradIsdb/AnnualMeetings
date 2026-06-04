@@ -1,4 +1,5 @@
 using IsDB.Hospitality.Application.Common.Interfaces;
+using IsDB.Hospitality.Domain.Entities;
 using IsDB.Hospitality.Domain.Enums;
 using IsDB.Hospitality.Infrastructure.ExternalClients.FlightTracker;
 using IsDB.Hospitality.Infrastructure.Persistence;
@@ -8,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 
 namespace IsDB.Hospitality.Infrastructure.BackgroundServices;
 
@@ -102,14 +104,15 @@ public class FlightTrackerSyncService : BackgroundService
         var flightTracker = scope.ServiceProvider.GetRequiredService<IFlightTrackerClient>();
         var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<IsDB.Hospitality.Infrastructure.BackgroundServices.FlightHubProxy>>();
 
+        var sw = Stopwatch.StartNew();
+        int inWindow = 0, queried = 0, updated = 0;
+        string logStatus = "Success";
+        string? logMessage = null;
+
         try
         {
             // Only poll flights whose scheduled arrival falls within the configured tracking
             // window: i.e. arriving between now and (now + trackingWindowHours).
-            // Flights further in the future are skipped — AviationStack has no live data
-            // for them yet and polling them wastes API quota.
-            // We also include flights with no ScheduledArrival (null) so they are never
-            // silently dropped.
             var windowCutoff = DateTime.UtcNow.AddHours(trackingWindowHours);
             var activeFlights = await context.Flights
                 .Include(f => f.TravelBookings)
@@ -123,6 +126,8 @@ public class FlightTrackerSyncService : BackgroundService
                 .Where(f => f.ScheduledArrival <= windowCutoff)
                 .ToListAsync(cancellationToken);
 
+            inWindow = activeFlights.Count;
+
             _logger.LogInformation(
                 "Tracking {Count} active flights within {Window}h window.",
                 activeFlights.Count, trackingWindowHours);
@@ -133,10 +138,6 @@ public class FlightTrackerSyncService : BackgroundService
                 if (status == null) continue;
 
                 // Fix 2: Reject AviationStack results that belong to a different day's flight.
-                // AviationStack returns the most recently operated flight for a given IATA code
-                // (typically today's). If the DB flight is scheduled for a different date, the
-                // returned data is for the wrong occurrence — skip it.
-                // Allow ±1 day tolerance to handle timezone edge cases.
                 if (status.ScheduledArrival.HasValue)
                 {
                     var dayDiff = Math.Abs((status.ScheduledArrival.Value.Date - flight.ScheduledArrival.Date).TotalDays);
@@ -153,6 +154,7 @@ public class FlightTrackerSyncService : BackgroundService
                     }
                 }
 
+                queried++;
                 bool changed = false;
 
                 var newStatus = ParseFlightStatus(status.Status);
@@ -182,16 +184,15 @@ public class FlightTrackerSyncService : BackgroundService
                     changed = true;
                 }
 
-                // Layer 2 timestamp — always updated on each poll
                 flight.LastTrackedAt = DateTime.UtcNow;
 
                 if (changed)
                 {
+                    updated++;
                     _logger.LogInformation(
                         "Updated flight {FlightNumber} status to {Status}",
                         flight.FlightNumber, newStatus.ToString());
 
-                    // Broadcast real-time update to all connected airport clients
                     await hubContext.Clients.Group("airport").SendAsync(
                         "FlightUpdated",
                         new
@@ -210,10 +211,45 @@ public class FlightTrackerSyncService : BackgroundService
             }
 
             await context.SaveChangesAsync(cancellationToken);
+
+            if (inWindow == 0)
+                logMessage = "No active flights within the tracking window.";
+            else if (queried == 0)
+                logMessage = $"Scheduled sync — {inWindow} flight(s) in window, none due for live data yet.";
+            else
+                logMessage = $"Scheduled sync — {queried} flight(s) queried, {updated} updated.";
         }
         catch (Exception ex)
         {
+            logStatus = "Failed";
+            logMessage = $"Sync failed: {ex.Message}";
             _logger.LogError(ex, "Flight tracker sync failed.");
+        }
+        finally
+        {
+            sw.Stop();
+            try
+            {
+                using var logScope = _serviceProvider.CreateScope();
+                var logContext = logScope.ServiceProvider.GetRequiredService<AppDbContext>();
+                logContext.FlightSyncLogs.Add(new FlightSyncLog
+                {
+                    SyncedAt = DateTime.UtcNow,
+                    TriggerSource = "Scheduled",
+                    Status = logStatus,
+                    FlightsInWindow = inWindow,
+                    FlightsQueried = queried,
+                    FlightsUpdated = updated,
+                    DurationMs = (int)sw.ElapsedMilliseconds,
+                    Message = logMessage,
+                    InitiatedByStaffName = null
+                });
+                await logContext.SaveChangesAsync(cancellationToken);
+            }
+            catch (Exception logEx)
+            {
+                _logger.LogWarning(logEx, "Failed to write FlightSyncLog entry.");
+            }
         }
     }
 
@@ -221,25 +257,29 @@ public class FlightTrackerSyncService : BackgroundService
     /// Triggers one immediate sync cycle outside the normal timer.
     /// Returns a summary of what was polled and updated.
     /// </summary>
-    public async Task<SyncResult> TriggerSyncNowAsync(CancellationToken cancellationToken = default)
+    public async Task<SyncResult> TriggerSyncNowAsync(CancellationToken cancellationToken = default, string? initiatedByStaffName = null)
     {
         var (apiKey, _, windowHours) = await GetEffectiveConfigAsync(cancellationToken);
 
         if (string.IsNullOrWhiteSpace(apiKey) || apiKey == "REPLACE_WITH_AVIATIONSTACK_API_KEY")
             return new SyncResult(0, 0, "AviationStack API key is not configured.");
 
-        var result = await SyncFlightsAndCountAsync(apiKey, windowHours, cancellationToken);
+        var result = await SyncFlightsAndCountAsync(apiKey, windowHours, cancellationToken, initiatedByStaffName);
         return result;
     }
 
-    private async Task<SyncResult> SyncFlightsAndCountAsync(string apiKey, int trackingWindowHours, CancellationToken cancellationToken)
+    private async Task<SyncResult> SyncFlightsAndCountAsync(string apiKey, int trackingWindowHours, CancellationToken cancellationToken, string? initiatedByStaffName = null)
     {
         using var scope = _serviceProvider.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var flightTracker = scope.ServiceProvider.GetRequiredService<IFlightTrackerClient>();
         var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<FlightHubProxy>>();
 
+        var sw = Stopwatch.StartNew();
         int inWindow = 0, queried = 0, updated = 0;
+        string logStatus = "Success";
+        string? logMessage = null;
+
         try
         {
             // Apply the same tracking window filter as the background sync.
@@ -255,7 +295,6 @@ public class FlightTrackerSyncService : BackgroundService
                 .Where(f => f.ScheduledArrival <= windowCutoff)
                 .ToListAsync(cancellationToken);
 
-            // inWindow = flights eligible by the tracking window filter
             inWindow = activeFlights.Count;
 
             foreach (var flight in activeFlights)
@@ -309,19 +348,49 @@ public class FlightTrackerSyncService : BackgroundService
             }
 
             await context.SaveChangesAsync(cancellationToken);
-            string msg;
+
             if (inWindow == 0)
-                msg = "No active flights within the tracking window.";
+                logMessage = "No active flights within the tracking window.";
             else if (queried == 0)
-                msg = $"Sync complete — {inWindow} flight(s) in window, none due for live data yet.";
+                logMessage = $"Sync complete — {inWindow} flight(s) in window, none due for live data yet.";
             else
-                msg = $"Sync complete — {queried} flight(s) queried, {updated} updated.";
-            return new SyncResult(queried, updated, msg);
+                logMessage = $"Sync complete — {queried} flight(s) queried, {updated} updated.";
+
+            return new SyncResult(queried, updated, logMessage);
         }
         catch (Exception ex)
         {
+            logStatus = "Failed";
+            logMessage = $"Sync failed: {ex.Message}";
             _logger.LogError(ex, "Manual flight sync failed.");
-            return new SyncResult(queried, updated, $"Sync failed: {ex.Message}");
+            return new SyncResult(queried, updated, logMessage);
+        }
+        finally
+        {
+            sw.Stop();
+            try
+            {
+                // Write sync log entry — use a fresh scope so it always commits even if main context failed
+                using var logScope = _serviceProvider.CreateScope();
+                var logContext = logScope.ServiceProvider.GetRequiredService<AppDbContext>();
+                logContext.FlightSyncLogs.Add(new FlightSyncLog
+                {
+                    SyncedAt = DateTime.UtcNow,
+                    TriggerSource = "Manual",
+                    Status = logStatus,
+                    FlightsInWindow = inWindow,
+                    FlightsQueried = queried,
+                    FlightsUpdated = updated,
+                    DurationMs = (int)sw.ElapsedMilliseconds,
+                    Message = logMessage,
+                    InitiatedByStaffName = initiatedByStaffName
+                });
+                await logContext.SaveChangesAsync(CancellationToken.None);
+            }
+            catch (Exception logEx)
+            {
+                _logger.LogWarning(logEx, "Failed to write FlightSyncLog entry.");
+            }
         }
     }
 

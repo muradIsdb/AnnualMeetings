@@ -38,6 +38,7 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<CarClassRule> CarClassRules => Set<CarClassRule>();
     public DbSet<TravelBookingHistory> TravelBookingHistories => Set<TravelBookingHistory>();
     public DbSet<VehicleStatusHistory> VehicleStatusHistories => Set<VehicleStatusHistory>();
+    public DbSet<FlightSyncLog> FlightSyncLogs => Set<FlightSyncLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

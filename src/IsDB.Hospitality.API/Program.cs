@@ -938,6 +938,39 @@ using (var scope = app.Services.CreateScope())
         logger.LogWarning(ex, "NormaliseFlightNumbers migration failed (non-fatal). Will retry on next startup.");
     }
 
+    // AddFlightSyncLogsTable: creates the FlightSyncLogs table for sync history inventory.
+    try
+    {
+        logger.LogInformation("Running AddFlightSyncLogsTable migration...");
+        await context.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "FlightSyncLogs" (
+                "Id"                   uuid         NOT NULL DEFAULT gen_random_uuid(),
+                "SyncedAt"             timestamptz  NOT NULL DEFAULT now(),
+                "TriggerSource"        text         NOT NULL DEFAULT 'Scheduled',
+                "Status"               text         NOT NULL DEFAULT 'Success',
+                "FlightsInWindow"      integer      NOT NULL DEFAULT 0,
+                "FlightsQueried"       integer      NOT NULL DEFAULT 0,
+                "FlightsUpdated"       integer      NOT NULL DEFAULT 0,
+                "DurationMs"           integer      NOT NULL DEFAULT 0,
+                "Message"              text         NULL,
+                "InitiatedByStaffName" text         NULL,
+                "CreatedAt"            timestamptz  NOT NULL DEFAULT now(),
+                "UpdatedAt"            timestamptz  NOT NULL DEFAULT now(),
+                CONSTRAINT "PK_FlightSyncLogs" PRIMARY KEY ("Id")
+            );
+            CREATE INDEX IF NOT EXISTS "IX_FlightSyncLogs_SyncedAt"
+                ON "FlightSyncLogs" ("SyncedAt" DESC);
+            INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+            VALUES ('20260604400000_AddFlightSyncLogsTable', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        """);
+        logger.LogInformation("AddFlightSyncLogsTable migration complete.");
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "AddFlightSyncLogsTable migration failed (non-fatal).");
+    }
+
     await DatabaseSeeder.SeedAsync(context, logger);
 
     // Seed notification templates (idempotent — only inserts missing keys)

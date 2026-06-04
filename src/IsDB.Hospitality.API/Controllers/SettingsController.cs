@@ -534,7 +534,8 @@ public class SettingsController : ApiControllerBase
             return StatusCode(503, new SyncNowResult { Success = false, Message = "Flight sync service is not running." });
         try
         {
-            var result = await _flightSync.TriggerSyncNowAsync(HttpContext.RequestAborted);
+            var staffName = User.Identity?.Name ?? "Admin";
+            var result = await _flightSync.TriggerSyncNowAsync(HttpContext.RequestAborted, staffName);
             return Ok(new SyncNowResult
             {
                 Success = true,
@@ -547,6 +548,44 @@ public class SettingsController : ApiControllerBase
         {
             return Ok(new SyncNowResult { Success = false, Message = $"Sync failed: {ex.Message}" });
         }
+    }
+
+    /// <summary>
+    /// Returns paginated AviationStack sync history log entries.
+    /// </summary>
+    [HttpGet("flight-tracking/sync-logs")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> GetFlightSyncLogs(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20)
+    {
+        if (page < 1) page = 1;
+        if (pageSize < 1 || pageSize > 100) pageSize = 20;
+
+        var query = _db.FlightSyncLogs.AsQueryable();
+        var totalCount = await query.CountAsync();
+        var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+        var items = await query
+            .OrderByDescending(l => l.SyncedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(l => new FlightSyncLogDto
+            {
+                Id = l.Id,
+                SyncedAt = l.SyncedAt,
+                TriggerSource = l.TriggerSource,
+                Status = l.Status,
+                FlightsInWindow = l.FlightsInWindow,
+                FlightsQueried = l.FlightsQueried,
+                FlightsUpdated = l.FlightsUpdated,
+                DurationMs = l.DurationMs,
+                Message = l.Message,
+                InitiatedByStaffName = l.InitiatedByStaffName
+            })
+            .ToListAsync();
+
+        return Ok(new { items, totalCount, totalPages, page, pageSize });
     }
 
     /// <summary>
@@ -768,4 +807,18 @@ public record SyncNowResult
     public int FlightsTracked { get; init; }
     public int FlightsUpdated { get; init; }
     public string Message { get; init; } = string.Empty;
+}
+
+public record FlightSyncLogDto
+{
+    public Guid Id { get; init; }
+    public DateTime SyncedAt { get; init; }
+    public string TriggerSource { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public int FlightsInWindow { get; init; }
+    public int FlightsQueried { get; init; }
+    public int FlightsUpdated { get; init; }
+    public int DurationMs { get; init; }
+    public string? Message { get; init; }
+    public string? InitiatedByStaffName { get; init; }
 }
