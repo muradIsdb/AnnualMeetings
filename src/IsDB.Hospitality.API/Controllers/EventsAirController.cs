@@ -1448,8 +1448,9 @@ public class EventsAirController : ApiControllerBase
                 }
                 else
                 {
-                    if (scheduledArrival.HasValue) flight.ScheduledArrival = scheduledArrival.Value;
-                    if (scheduledDeparture.HasValue) flight.ScheduledDeparture = scheduledDeparture.Value;
+                    // Do NOT overwrite ScheduledArrival/ScheduledDeparture — those are set
+                    // once when the row is created and must not be changed by a subsequent
+                    // guest on the same flight (which would corrupt the date for all guests).
                     if (!string.IsNullOrEmpty(tb.ArrivalPortName)) flight.ArrivalPortName = tb.ArrivalPortName;
                     if (!string.IsNullOrEmpty(tb.DeparturePortName)) flight.DeparturePortName = tb.DeparturePortName;
                     if (!string.IsNullOrEmpty(tb.CarrierName)) flight.AirlineName = tb.CarrierName;
