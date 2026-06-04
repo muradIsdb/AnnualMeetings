@@ -239,7 +239,7 @@ public class FlightTrackerSyncService : BackgroundService
         var flightTracker = scope.ServiceProvider.GetRequiredService<IFlightTrackerClient>();
         var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<FlightHubProxy>>();
 
-        int tracked = 0, updated = 0;
+        int inWindow = 0, queried = 0, updated = 0;
         try
         {
             // Apply the same tracking window filter as the background sync.
@@ -255,14 +255,15 @@ public class FlightTrackerSyncService : BackgroundService
                 .Where(f => f.ScheduledArrival <= windowCutoff)
                 .ToListAsync(cancellationToken);
 
-            tracked = activeFlights.Count;
+            // inWindow = flights eligible by the tracking window filter
+            inWindow = activeFlights.Count;
 
             foreach (var flight in activeFlights)
             {
                 var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken, apiKey);
                 if (status == null) continue;
 
-                // Fix 2: Reject AviationStack results that belong to a different day's flight.
+                // Reject AviationStack results that belong to a different day's flight (±1 day tolerance).
                 if (status.ScheduledArrival.HasValue)
                 {
                     var dayDiff = Math.Abs((status.ScheduledArrival.Value.Date - flight.ScheduledArrival.Date).TotalDays);
@@ -278,7 +279,11 @@ public class FlightTrackerSyncService : BackgroundService
                         continue;
                     }
                 }
-                bool changed = false;;
+
+                // This flight passed the date guard — count it as actually queried
+                queried++;
+
+                bool changed = false;
                 var newStatus = ParseFlightStatus(status.Status);
                 if (flight.Status != newStatus) { flight.Status = newStatus; changed = true; }
                 if (status.ActualArrival.HasValue && flight.ActualArrival != status.ActualArrival) { flight.ActualArrival = status.ActualArrival; changed = true; }
@@ -304,15 +309,19 @@ public class FlightTrackerSyncService : BackgroundService
             }
 
             await context.SaveChangesAsync(cancellationToken);
-            var msg = tracked == 0
-                ? "No active flights within the tracking window."
-                : $"Sync complete — {tracked} flight(s) polled, {updated} updated.";
-            return new SyncResult(tracked, updated, msg);
+            string msg;
+            if (inWindow == 0)
+                msg = "No active flights within the tracking window.";
+            else if (queried == 0)
+                msg = $"Sync complete — {inWindow} flight(s) in window, none due for live data yet.";
+            else
+                msg = $"Sync complete — {queried} flight(s) queried, {updated} updated.";
+            return new SyncResult(queried, updated, msg);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Manual flight sync failed.");
-            return new SyncResult(tracked, updated, $"Sync failed: {ex.Message}");
+            return new SyncResult(queried, updated, $"Sync failed: {ex.Message}");
         }
     }
 
