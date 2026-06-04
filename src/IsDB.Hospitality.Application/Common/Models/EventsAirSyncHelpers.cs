@@ -472,6 +472,16 @@ public static class EventsAirSyncHelpers
                 .ToListAsync(cancellationToken),
             StringComparer.OrdinalIgnoreCase);
 
+        // Track the first ContactId seen per flight key so we can include both IDs in conflict messages.
+        var firstContactIdByFlightKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // Fetch the first Admin staff user's ID to use as creator for system-generated notifications.
+        // Notifications require a non-null CreatedByStaffId FK.
+        var systemStaffId = await db.StaffUsers
+            .Where(s => s.Roles.Any(r => r.Role == UserRole.Admin))
+            .Select(s => s.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
         foreach (var tb in travelBookings)
         {
             try
@@ -532,6 +542,7 @@ public static class EventsAirSyncHelpers
                     };
                     db.Flights.Add(flight);
                     flightsByKey[flightKey] = flight;
+                    firstContactIdByFlightKey[flightKey] = tb.ContactId;
                 }
                 else
                 {
@@ -564,15 +575,36 @@ public static class EventsAirSyncHelpers
                             {
                                 result.RaisedConflictKeys.Add(conflictKey);
                                 existingConflictTitles.Add(alertTitle); // prevent a second guest on same flight raising another
+
+                                var firstContactId = firstContactIdByFlightKey.TryGetValue(flightKey, out var fid) ? fid : "unknown";
+                                var conflictMessage = $"Flight {tb.FlightNumber} on {parsedDate.Date:dd MMM yyyy} has inconsistent arrival times across guests in EventsAir: "
+                                                   + $"{flight.ScheduledArrival:HH:mm} (guest {firstContactId}) vs {scheduledArrival.Value:HH:mm} (guest {tb.ContactId}). "
+                                                   + "Please correct the arrival time in EventsAir and re-sync.";
+
+                                // ── Alert (visible in the Alerts panel) ──────────────────────────
                                 db.Alerts.Add(new Alert
                                 {
-                                    Title           = $"Flight time conflict: {tb.FlightNumber} on {parsedDate.Date:dd MMM yyyy}",
-                                    Message         = $"Flight {tb.FlightNumber} on {parsedDate.Date:dd MMM yyyy} has inconsistent arrival times across guests in EventsAir: "
-                                                    + $"{flight.ScheduledArrival:HH:mm} (stored) vs {scheduledArrival.Value:HH:mm} (guest {tb.ContactId}). "
-                                                    + "Please correct the arrival time in EventsAir and re-sync.",
-                                    Severity        = AlertSeverity.Medium,
+                                    Title             = alertTitle,
+                                    Message           = conflictMessage,
+                                    Severity          = AlertSeverity.Medium,
                                     IsSystemGenerated = true
                                 });
+
+                                // ── Notifications to Admin, Airport, and Transport roles ─────────
+                                if (systemStaffId != Guid.Empty)
+                                {
+                                    foreach (var role in new[] { "Admin", "Airport", "Transport" })
+                                    {
+                                        db.Notifications.Add(new Notification
+                                        {
+                                            Message          = $"⚠ {alertTitle} — {conflictMessage}",
+                                            TargetRoles      = role,
+                                            Priority         = AlertSeverity.Medium,
+                                            CreatedByStaffId = systemStaffId
+                                        });
+                                    }
+                                }
+
                                 result.ConflictAlertCount++;
                             }
                         }
