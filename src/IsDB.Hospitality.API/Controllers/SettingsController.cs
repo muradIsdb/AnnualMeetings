@@ -412,6 +412,9 @@ public class SettingsController : ApiControllerBase
             TrackingWindowHours = config?.AviationstackTrackingWindowHours > 0
                 ? config.AviationstackTrackingWindowHours
                 : opts.TrackingWindowHours,
+            DateGuardDays = config?.AviationstackDateGuardDays > 0
+                ? config.AviationstackDateGuardDays
+                : opts.DateGuardDays,
             ConfigSource = configSource
         });
     }
@@ -438,6 +441,9 @@ public class SettingsController : ApiControllerBase
 
         if (req.TrackingWindowHours > 0)
             config.AviationstackTrackingWindowHours = req.TrackingWindowHours;
+
+        if (req.DateGuardDays > 0)
+            config.AviationstackDateGuardDays = req.DateGuardDays;
 
         config.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
