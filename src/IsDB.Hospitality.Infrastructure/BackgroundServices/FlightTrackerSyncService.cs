@@ -174,6 +174,13 @@ public class FlightTrackerSyncService : BackgroundService
                     flight.LiveDelayMinutes = status.DelayMinutes;
                     changed = true;
                 }
+                // Update carrier name from AviationStack if the DB has a missing or placeholder value
+                if (!string.IsNullOrWhiteSpace(status.Airline) &&
+                    (string.IsNullOrWhiteSpace(flight.AirlineName) || flight.AirlineName == "Unknown"))
+                {
+                    flight.AirlineName = status.Airline;
+                    changed = true;
+                }
 
                 // Layer 2 timestamp — always updated on each poll
                 flight.LastTrackedAt = DateTime.UtcNow;
@@ -279,6 +286,10 @@ public class FlightTrackerSyncService : BackgroundService
                 if (status.Terminal != null && flight.ActualTerminal != status.Terminal) { flight.ActualTerminal = status.Terminal; changed = true; }
                 if (status.Gate != null && flight.ActualGate != status.Gate) { flight.ActualGate = status.Gate; changed = true; }
                 if (status.DelayMinutes.HasValue && flight.LiveDelayMinutes != status.DelayMinutes) { flight.LiveDelayMinutes = status.DelayMinutes; changed = true; }
+                // Update carrier name from AviationStack if the DB has a missing or placeholder value
+                if (!string.IsNullOrWhiteSpace(status.Airline) &&
+                    (string.IsNullOrWhiteSpace(flight.AirlineName) || flight.AirlineName == "Unknown"))
+                { flight.AirlineName = status.Airline; changed = true; }
                 flight.LastTrackedAt = DateTime.UtcNow;
 
                 if (changed)
