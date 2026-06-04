@@ -55,4 +55,11 @@ public class AppConfig
 
     /// <summary>Only poll flights whose ScheduledArrival is within this many hours. Default 12.</summary>
     public int AviationstackTrackingWindowHours { get; set; } = 12;
+
+    /// <summary>
+    /// Maximum allowed difference (in whole days) between the date AviationStack returns
+    /// and the date stored in the DB for the same flight. Results exceeding this tolerance
+    /// are silently discarded to prevent cross-day contamination. Default 1.
+    /// </summary>
+    public int AviationstackDateGuardDays { get; set; } = 1;
 }

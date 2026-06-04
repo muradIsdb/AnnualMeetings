@@ -43,7 +43,7 @@ public class FlightTrackerSyncService : BackgroundService
             try
             {
                 // Read effective config from DB each cycle (DB overrides appsettings)
-                var (apiKey, intervalMinutes, windowHours) = await GetEffectiveConfigAsync(stoppingToken);
+                var (apiKey, intervalMinutes, windowHours, dateGuardDays) = await GetEffectiveConfigAsync(stoppingToken);
 
                 if (string.IsNullOrWhiteSpace(apiKey) || apiKey == "REPLACE_WITH_AVIATIONSTACK_API_KEY")
                 {
@@ -51,7 +51,7 @@ public class FlightTrackerSyncService : BackgroundService
                 }
                 else
                 {
-                    await SyncFlightsAsync(apiKey, windowHours, stoppingToken);
+                    await SyncFlightsAsync(apiKey, windowHours, dateGuardDays, stoppingToken);
                 }
 
                 await Task.Delay(TimeSpan.FromMinutes(intervalMinutes), stoppingToken);
@@ -65,10 +65,10 @@ public class FlightTrackerSyncService : BackgroundService
     }
 
     /// <summary>
-    /// Returns the effective (apiKey, syncIntervalMinutes, trackingWindowHours).
+    /// Returns the effective (apiKey, syncIntervalMinutes, trackingWindowHours, dateGuardDays).
     /// DB values take precedence over appsettings.json / environment variables.
     /// </summary>
-    private async Task<(string apiKey, int intervalMinutes, int windowHours)> GetEffectiveConfigAsync(CancellationToken ct)
+    private async Task<(string apiKey, int intervalMinutes, int windowHours, int dateGuardDays)> GetEffectiveConfigAsync(CancellationToken ct)
     {
         try
         {
@@ -88,16 +88,20 @@ public class FlightTrackerSyncService : BackgroundService
                 ? dbConfig!.AviationstackTrackingWindowHours
                 : _options.TrackingWindowHours;
 
-            return (apiKey ?? string.Empty, interval, window);
+            var dateGuard = (dbConfig?.AviationstackDateGuardDays ?? 0) > 0
+                ? dbConfig!.AviationstackDateGuardDays
+                : _options.DateGuardDays;
+
+            return (apiKey ?? string.Empty, interval, window, dateGuard);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not read AviationStack config from DB; using appsettings defaults.");
-            return (_options.ApiKey ?? string.Empty, _options.SyncIntervalMinutes, _options.TrackingWindowHours);
+            return (_options.ApiKey ?? string.Empty, _options.SyncIntervalMinutes, _options.TrackingWindowHours, _options.DateGuardDays);
         }
     }
 
-    private async Task SyncFlightsAsync(string apiKey, int trackingWindowHours, CancellationToken cancellationToken)
+    private async Task SyncFlightsAsync(string apiKey, int trackingWindowHours, int dateGuardDays, CancellationToken cancellationToken)
     {
         using var scope = _serviceProvider.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -137,18 +141,19 @@ public class FlightTrackerSyncService : BackgroundService
                 var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken, apiKey);
                 if (status == null) continue;
 
-                // Fix 2: Reject AviationStack results that belong to a different day's flight.
+                // Reject AviationStack results that belong to a different day's flight (configurable tolerance).
                 if (status.ScheduledArrival.HasValue)
                 {
                     var dayDiff = Math.Abs((status.ScheduledArrival.Value.Date - flight.ScheduledArrival.Date).TotalDays);
-                    if (dayDiff > 1)
+                    if (dayDiff > dateGuardDays)
                     {
                         _logger.LogDebug(
-                            "Skipping flight {FlightNumber}: AviationStack returned {ApiDate}, DB expects {DbDate} (diff={Diff}d)",
+                            "Skipping flight {FlightNumber}: AviationStack returned {ApiDate}, DB expects {DbDate} (diff={Diff}d, guard={Guard}d)",
                             flight.FlightNumber,
                             status.ScheduledArrival.Value.Date.ToString("yyyy-MM-dd"),
                             flight.ScheduledArrival.Date.ToString("yyyy-MM-dd"),
-                            dayDiff);
+                            dayDiff,
+                            dateGuardDays);
                         flight.LastTrackedAt = DateTime.UtcNow;
                         continue;
                     }
@@ -259,16 +264,16 @@ public class FlightTrackerSyncService : BackgroundService
     /// </summary>
     public async Task<SyncResult> TriggerSyncNowAsync(CancellationToken cancellationToken = default, string? initiatedByStaffName = null)
     {
-        var (apiKey, _, windowHours) = await GetEffectiveConfigAsync(cancellationToken);
+        var (apiKey, _, windowHours, dateGuardDays) = await GetEffectiveConfigAsync(cancellationToken);
 
         if (string.IsNullOrWhiteSpace(apiKey) || apiKey == "REPLACE_WITH_AVIATIONSTACK_API_KEY")
             return new SyncResult(0, 0, "AviationStack API key is not configured.");
 
-        var result = await SyncFlightsAndCountAsync(apiKey, windowHours, cancellationToken, initiatedByStaffName);
+        var result = await SyncFlightsAndCountAsync(apiKey, windowHours, dateGuardDays, cancellationToken, initiatedByStaffName);
         return result;
     }
 
-    private async Task<SyncResult> SyncFlightsAndCountAsync(string apiKey, int trackingWindowHours, CancellationToken cancellationToken, string? initiatedByStaffName = null)
+    private async Task<SyncResult> SyncFlightsAndCountAsync(string apiKey, int trackingWindowHours, int dateGuardDays, CancellationToken cancellationToken, string? initiatedByStaffName = null)
     {
         using var scope = _serviceProvider.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -302,18 +307,19 @@ public class FlightTrackerSyncService : BackgroundService
                 var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken, apiKey);
                 if (status == null) continue;
 
-                // Reject AviationStack results that belong to a different day's flight (±1 day tolerance).
+                // Reject AviationStack results that belong to a different day's flight (configurable tolerance).
                 if (status.ScheduledArrival.HasValue)
                 {
                     var dayDiff = Math.Abs((status.ScheduledArrival.Value.Date - flight.ScheduledArrival.Date).TotalDays);
-                    if (dayDiff > 1)
+                    if (dayDiff > dateGuardDays)
                     {
                         _logger.LogDebug(
-                            "Skipping flight {FlightNumber}: AviationStack returned {ApiDate}, DB expects {DbDate} (diff={Diff}d)",
+                            "Skipping flight {FlightNumber}: AviationStack returned {ApiDate}, DB expects {DbDate} (diff={Diff}d, guard={Guard}d)",
                             flight.FlightNumber,
                             status.ScheduledArrival.Value.Date.ToString("yyyy-MM-dd"),
                             flight.ScheduledArrival.Date.ToString("yyyy-MM-dd"),
-                            dayDiff);
+                            dayDiff,
+                            dateGuardDays);
                         flight.LastTrackedAt = DateTime.UtcNow;
                         continue;
                     }

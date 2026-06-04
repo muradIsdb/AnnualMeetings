@@ -15,6 +15,8 @@ public class AviationstackOptions
     public string BaseUrl { get; set; } = "http://api.aviationstack.com/v1";
     public int SyncIntervalMinutes { get; set; } = 5;
     public int TrackingWindowHours { get; set; } = 12;
+    /// <summary>Maximum day difference allowed between AviationStack result and DB flight date. Default 1.</summary>
+    public int DateGuardDays { get; set; } = 1;
 }
 
 public class AviationstackClient : IFlightTrackerClient

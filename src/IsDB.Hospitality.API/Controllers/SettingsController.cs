@@ -412,6 +412,9 @@ public class SettingsController : ApiControllerBase
             TrackingWindowHours = config?.AviationstackTrackingWindowHours > 0
                 ? config.AviationstackTrackingWindowHours
                 : opts.TrackingWindowHours,
+            DateGuardDays = config?.AviationstackDateGuardDays > 0
+                ? config.AviationstackDateGuardDays
+                : opts.DateGuardDays,
             ConfigSource = configSource
         });
     }
@@ -438,6 +441,9 @@ public class SettingsController : ApiControllerBase
 
         if (req.TrackingWindowHours > 0)
             config.AviationstackTrackingWindowHours = req.TrackingWindowHours;
+
+        if (req.DateGuardDays > 0)
+            config.AviationstackDateGuardDays = req.DateGuardDays;
 
         config.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
@@ -775,6 +781,8 @@ public record FlightTrackingConfigDto
     public bool IsConfigured { get; init; }
     public int SyncIntervalMinutes { get; init; } = 5;
     public int TrackingWindowHours { get; init; } = 12;
+    /// <summary>Maximum day difference tolerated between AviationStack result and DB flight date.</summary>
+    public int DateGuardDays { get; init; } = 1;
     /// <summary>Source of the current config: "database", "environment", or "none".</summary>
     public string ConfigSource { get; init; } = "none";
 }
@@ -785,6 +793,8 @@ public record UpdateFlightTrackingConfigRequest
     public string? ApiKey { get; init; }
     public int SyncIntervalMinutes { get; init; } = 5;
     public int TrackingWindowHours { get; init; } = 12;
+    /// <summary>Maximum day difference tolerated between AviationStack result and DB flight date. Default 1.</summary>
+    public int DateGuardDays { get; init; } = 1;
 }
 
 public record TestFlightTrackingRequest
