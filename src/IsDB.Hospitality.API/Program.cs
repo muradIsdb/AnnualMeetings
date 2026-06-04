@@ -942,6 +942,33 @@ using (var scope = app.Services.CreateScope())
         logger.LogWarning(ex, "NormaliseFlightNumbers migration failed (non-fatal). Will retry on next startup.");
     }
 
+    // AddAviationstackDateGuardDays: adds the configurable date guard tolerance column.
+    try
+    {
+        logger.LogInformation("Running AddAviationstackDateGuardDays migration...");
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'AppConfigs' AND column_name = 'AviationstackDateGuardDays'
+                ) THEN
+                    ALTER TABLE ""AppConfigs"" ADD COLUMN ""AviationstackDateGuardDays"" integer NOT NULL DEFAULT 1;
+                END IF;
+            END $$;
+        ");
+        await context.Database.ExecuteSqlRawAsync(@"
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260604500000_AddAviationstackDateGuardDays', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        ");
+        logger.LogInformation("AddAviationstackDateGuardDays migration complete.");
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "AddAviationstackDateGuardDays migration failed (non-fatal).");
+    }
+
     // AddFlightSyncLogsTable: creates the FlightSyncLogs table for sync history inventory.
     try
     {
