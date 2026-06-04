@@ -633,21 +633,25 @@ public class EventsAirController : ApiControllerBase
                     DateTime? scheduledArrival = null;
                     DateTime? scheduledDeparture = null;
 
-                    // Store times exactly as EventsAir provides them (no timezone conversion).
-                    // Display must match EventsAir — no UTC offset adjustments.
+                    // EventsAir provides times in local Jeddah time (UTC+3) but we store them
+                    // as DateTimeKind.Utc WITHOUT subtracting any offset. This means the stored
+                    // value is numerically identical to what EventsAir shows (e.g. 13:00 stored
+                    // as 13:00Z). The frontend strips the Z and displays 13:00 — matching EventsAir.
+                    // Using Utc kind ensures PostgreSQL/EF date comparisons (.Date, DATE()) are
+                    // consistent and reliable for flight deduplication keying.
                     if (isArrival && !string.IsNullOrEmpty(tbDto.ArrivalDate) &&
                         DateTime.TryParse(tbDto.ArrivalDate, out var arrDate))
                     {
                         var localArrival = !string.IsNullOrEmpty(tbDto.Eta) && TimeSpan.TryParse(tbDto.Eta, out var etaTime)
                             ? arrDate.Add(etaTime) : arrDate;
-                        scheduledArrival = DateTime.SpecifyKind(localArrival, DateTimeKind.Unspecified);
+                        scheduledArrival = DateTime.SpecifyKind(localArrival, DateTimeKind.Utc);
                     }
                     if (!isArrival && !string.IsNullOrEmpty(tbDto.DepartureDate) &&
                         DateTime.TryParse(tbDto.DepartureDate, out var depDate))
                     {
                         var localDeparture = !string.IsNullOrEmpty(tbDto.Etd) && TimeSpan.TryParse(tbDto.Etd, out var etdTime)
                             ? depDate.Add(etdTime) : depDate;
-                        scheduledDeparture = DateTime.SpecifyKind(localDeparture, DateTimeKind.Unspecified);
+                        scheduledDeparture = DateTime.SpecifyKind(localDeparture, DateTimeKind.Utc);
                     }
 
                     // Key on (FlightNumber + date) so same flight number on different dates
@@ -672,8 +676,8 @@ public class EventsAirController : ApiControllerBase
                         {
                             FlightNumber = tbDto.FlightNumber,
                             AirlineName = tbDto.CarrierName ?? "Unknown",
-                            ScheduledArrival = scheduledArrival ?? DateTime.MinValue,
-                            ScheduledDeparture = scheduledDeparture ?? DateTime.MinValue,
+                            ScheduledArrival = scheduledArrival ?? DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc),
+                            ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc),
                             ArrivalPortName = tbDto.ArrivalPortName,
                             DeparturePortName = tbDto.DeparturePortName,
                             Status = Domain.Enums.FlightStatus.Scheduled
@@ -1393,20 +1397,24 @@ public class EventsAirController : ApiControllerBase
 
                 bool isArrival = tb.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
 
-                // Store times exactly as EventsAir provides them (no timezone conversion).
-                // Display must match EventsAir — no UTC offset adjustments.
+                // EventsAir provides times in local Jeddah time (UTC+3) but we store them
+                // as DateTimeKind.Utc WITHOUT subtracting any offset. This means the stored
+                // value is numerically identical to what EventsAir shows (e.g. 13:00 stored
+                // as 13:00Z). The frontend strips the Z and displays 13:00 — matching EventsAir.
+                // Using Utc kind ensures PostgreSQL/EF date comparisons (.Date, DATE()) are
+                // consistent and reliable for flight deduplication keying.
                 DateTime? scheduledArrival = null, scheduledDeparture = null;
                 if (isArrival && !string.IsNullOrEmpty(tb.ArrivalDate) && DateTime.TryParse(tb.ArrivalDate, out var arrDate))
                 {
                     var localArrival = !string.IsNullOrEmpty(tb.Eta) && TimeSpan.TryParse(tb.Eta, out var etaTime)
                         ? arrDate.Add(etaTime) : arrDate;
-                    scheduledArrival = DateTime.SpecifyKind(localArrival, DateTimeKind.Unspecified);
+                    scheduledArrival = DateTime.SpecifyKind(localArrival, DateTimeKind.Utc);
                 }
                 if (!isArrival && !string.IsNullOrEmpty(tb.DepartureDate) && DateTime.TryParse(tb.DepartureDate, out var depDate))
                 {
                     var localDeparture = !string.IsNullOrEmpty(tb.Etd) && TimeSpan.TryParse(tb.Etd, out var etdTime)
                         ? depDate.Add(etdTime) : depDate;
-                    scheduledDeparture = DateTime.SpecifyKind(localDeparture, DateTimeKind.Unspecified);
+                    scheduledDeparture = DateTime.SpecifyKind(localDeparture, DateTimeKind.Utc);
                 }
 
                 // Find or create Flight — key on (FlightNumber + date) so same flight number
