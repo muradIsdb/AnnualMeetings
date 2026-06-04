@@ -473,7 +473,18 @@ public static class EventsAirSyncHelpers
             StringComparer.OrdinalIgnoreCase);
 
         // Track the first ContactId seen per flight key so we can include both IDs in conflict messages.
-        var firstContactIdByFlightKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Pre-load from existing TravelBookings so flights that already exist in the DB also show a real ContactId.
+        var firstContactIdByFlightKey = await db.TravelBookings
+            .Include(b => b.Guest)
+            .Include(b => b.Flight)
+            .Where(b => b.IsArrival)
+            .GroupBy(b => b.FlightId)
+            .Select(g => new
+            {
+                FlightKey = g.First().Flight.FlightNumber + "|" + g.First().Flight.ScheduledArrival.Date.ToString("yyyy-MM-dd"),
+                ContactId = g.First().Guest.EventsAirContactId
+            })
+            .ToDictionaryAsync(x => x.FlightKey, x => x.ContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
         // Fetch the first Admin staff user's ID to use as creator for system-generated notifications.
         // Notifications require a non-null CreatedByStaffId FK.
