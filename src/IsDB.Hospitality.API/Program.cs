@@ -872,6 +872,72 @@ using (var scope = app.Services.CreateScope())
         logger.LogInformation("AviationStack AppConfig columns ensured.");
     }
 
+    // NormaliseFlightNumbers: runs for ALL database types (idempotent data-only migration).
+    // Normalises FlightNumber values in-place and merges duplicate rows caused by
+    // EventsAir storing flight numbers inconsistently ("TK 0334", "TK0334", "TK334").
+    try
+    {
+        logger.LogInformation("Running NormaliseFlightNumbers migration (idempotent)...");
+        // Step 1: Normalise all FlightNumber values in-place
+        await context.Database.ExecuteSqlRawAsync(@"
+            UPDATE ""Flights""
+            SET ""FlightNumber"" = UPPER(
+                REGEXP_REPLACE(
+                    REPLACE(""FlightNumber"", ' ', ''),
+                    '^([A-Za-z]{1,3})0+([0-9].*)$',
+                    '\1\2'
+                )
+            )
+            WHERE ""FlightNumber"" IS NOT NULL;
+        ");
+        // Step 2: Merge duplicate rows — re-point TravelBookings to canonical row, delete duplicates
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$
+            DECLARE
+                dup RECORD;
+                canonical_id uuid;
+            BEGIN
+                FOR dup IN
+                    SELECT ""FlightNumber""
+                    FROM ""Flights""
+                    GROUP BY ""FlightNumber""
+                    HAVING COUNT(*) > 1
+                LOOP
+                    SELECT ""Id"" INTO canonical_id
+                    FROM ""Flights""
+                    WHERE ""FlightNumber"" = dup.""FlightNumber""
+                    ORDER BY ""Id""
+                    LIMIT 1;
+
+                    UPDATE ""TravelBookings""
+                    SET ""FlightId"" = canonical_id
+                    WHERE ""FlightId"" IN (
+                        SELECT ""Id""
+                        FROM ""Flights""
+                        WHERE ""FlightNumber"" = dup.""FlightNumber""
+                          AND ""Id"" <> canonical_id
+                    );
+
+                    DELETE FROM ""Flights""
+                    WHERE ""FlightNumber"" = dup.""FlightNumber""
+                      AND ""Id"" <> canonical_id;
+                END LOOP;
+            END;
+            $$;
+        ");
+        // Mark migration as applied in history table
+        await context.Database.ExecuteSqlRawAsync(@"
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260604300000_NormaliseFlightNumbers', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        ");
+        logger.LogInformation("NormaliseFlightNumbers migration complete.");
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "NormaliseFlightNumbers migration failed (non-fatal). Will retry on next startup.");
+    }
+
     await DatabaseSeeder.SeedAsync(context, logger);
 
     // Seed notification templates (idempotent — only inserts missing keys)

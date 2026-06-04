@@ -104,11 +104,13 @@ public class FlightTrackerSyncService : BackgroundService
 
         try
         {
-            // Track all flights for guests who are expected or in transit
-            // that have not already landed or been cancelled.
-            // No upper-bound window filter — AviationStack returns "scheduled" with no
-            // actuals for far-future flights, so polling them is harmless and ensures
-            // the sync works regardless of how far out the event is.
+            // Only poll flights whose scheduled arrival falls within the configured tracking
+            // window: i.e. arriving between now and (now + trackingWindowHours).
+            // Flights further in the future are skipped — AviationStack has no live data
+            // for them yet and polling them wastes API quota.
+            // We also include flights with no ScheduledArrival (null) so they are never
+            // silently dropped.
+            var windowCutoff = DateTime.UtcNow.AddHours(trackingWindowHours);
             var activeFlights = await context.Flights
                 .Include(f => f.TravelBookings)
                     .ThenInclude(tb => tb.Guest)
@@ -118,6 +120,7 @@ public class FlightTrackerSyncService : BackgroundService
                             tb.Guest.Status == GuestStatus.DepartingHotel ||
                             tb.Guest.Status == GuestStatus.AtAirportDeparture))
                 .Where(f => f.Status != FlightStatus.Landed && f.Status != FlightStatus.Cancelled)
+                .Where(f => f.ScheduledArrival <= windowCutoff)
                 .ToListAsync(cancellationToken);
 
             _logger.LogInformation(
@@ -232,6 +235,8 @@ public class FlightTrackerSyncService : BackgroundService
         int tracked = 0, updated = 0;
         try
         {
+            // Apply the same tracking window filter as the background sync.
+            var windowCutoff = DateTime.UtcNow.AddHours(trackingWindowHours);
             var activeFlights = await context.Flights
                 .Include(f => f.TravelBookings).ThenInclude(tb => tb.Guest)
                 .Where(f => f.TravelBookings.Any(tb =>
@@ -240,6 +245,7 @@ public class FlightTrackerSyncService : BackgroundService
                     tb.Guest.Status == GuestStatus.DepartingHotel ||
                     tb.Guest.Status == GuestStatus.AtAirportDeparture))
                 .Where(f => f.Status != FlightStatus.Landed && f.Status != FlightStatus.Cancelled)
+                .Where(f => f.ScheduledArrival <= windowCutoff)
                 .ToListAsync(cancellationToken);
 
             tracked = activeFlights.Count;
