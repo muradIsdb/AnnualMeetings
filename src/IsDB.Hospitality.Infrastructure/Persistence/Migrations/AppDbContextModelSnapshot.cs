@@ -118,6 +118,9 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Property<int>("AviationstackTrackingWindowHours")
                         .HasColumnType("integer");
 
+                    b.Property<int>("AviationstackDateGuardDays")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.ToTable("AppConfigs");
