@@ -1371,14 +1371,15 @@ public class EventsAirController : ApiControllerBase
             .Include(g => g.TravelBookings).ThenInclude(tb => tb.Flight)
             .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
-        // Load all existing flights keyed by (FlightNumber, ArrivalDate) so same flight
-        // number on different dates creates separate rows.
-        var flightsByKey = await _db.Flights
-            .ToListAsync(cancellationToken);
-        // Normalization disabled — key on exact stored FlightNumber (uppercased) + date
-        var flightsByNumber = flightsByKey
-            .GroupBy(f => $"{f.FlightNumber.ToUpperInvariant()}|{f.ScheduledArrival.Date:yyyy-MM-dd}")
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        // Load all existing flights keyed by (exact FlightNumber + ArrivalDate).
+        // No normalization, no merging — store exactly what EventsAir sends.
+        // Same flight number on different dates = separate rows.
+        // Same flight number + same date = one row (updated in place).
+        var flightsByNumber = await _db.Flights
+            .ToDictionaryAsync(
+                f => $"{f.FlightNumber}|{f.ScheduledArrival.Date:yyyy-MM-dd}",
+                StringComparer.OrdinalIgnoreCase,
+                cancellationToken);
 
         int savedNew = 0, updatedExisting = 0, rebooked = 0;
         int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0, errorCount = 0;
@@ -1416,11 +1417,11 @@ public class EventsAirController : ApiControllerBase
                     scheduledDeparture = DateTime.SpecifyKind(localDeparture, DateTimeKind.Utc);
                 }
 
-                // Find or create Flight — key on (FlightNumber + date) so same flight number
-                // on different dates creates separate rows (e.g. TK334 June 4 vs June 16).
+                // Find or create Flight — key on (exact FlightNumber + date).
+                // StringComparer.OrdinalIgnoreCase on the dictionary handles case differences.
                 var flightDate = (isArrival ? scheduledArrival : scheduledDeparture)?.Date
                     ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc).Date;
-                var flightKey = $"{tb.FlightNumber.ToUpperInvariant()}|{flightDate:yyyy-MM-dd}";
+                var flightKey = $"{tb.FlightNumber}|{flightDate:yyyy-MM-dd}";
                 if (!flightsByNumber.TryGetValue(flightKey, out var flight))
                 {
                     flight = new IsDB.Hospitality.Domain.Entities.Flight
