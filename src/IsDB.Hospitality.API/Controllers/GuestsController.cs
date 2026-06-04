@@ -407,6 +407,7 @@ public class GuestsController : ApiControllerBase
                     job.TravelSkippedNoContact = syncResult.SkippedNoContact;
                     job.TravelSkippedNoGuest   = syncResult.SkippedNoGuest;
                     job.TravelErrors           = syncResult.ErrorCount;
+                    job.ConflictAlertCount     = syncResult.ConflictAlertCount;
                 }
                 catch (Exception ex)
                 {
@@ -911,6 +912,7 @@ public class GuestsController : ApiControllerBase
         public int TravelFetched { get; set; } public int TravelSavedNew { get; set; } public int TravelUpdated { get; set; } public int TravelRebooked { get; set; }
         public int TravelSkippedNoFlight { get; set; } public int TravelSkippedNoContact { get; set; } public int TravelSkippedNoGuest { get; set; }
         public int TravelErrors { get; set; } public string? TravelFirstError { get; set; }
+        public int ConflictAlertCount { get; set; }
         // Vehicle type matching diagnostics
         public int VehicleTypeMatched { get; set; } public int VehicleTypeUnmatched { get; set; } public List<string> VehicleTypeUnmatchedValues { get; set; } = new(); }
     private class FieldFilter { public string FieldGuid { get; set; } = string.Empty; public List<string> SelectedValues { get; set; } = new(); }
