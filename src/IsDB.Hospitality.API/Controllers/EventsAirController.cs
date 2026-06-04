@@ -633,21 +633,21 @@ public class EventsAirController : ApiControllerBase
                     DateTime? scheduledArrival = null;
                     DateTime? scheduledDeparture = null;
 
-                    // EventsAir stores times in local Jeddah time (UTC+3).
-                    // Subtract 3 hours to convert to UTC before storing.
+                    // Store times exactly as EventsAir provides them (no timezone conversion).
+                    // Display must match EventsAir — no UTC offset adjustments.
                     if (isArrival && !string.IsNullOrEmpty(tbDto.ArrivalDate) &&
                         DateTime.TryParse(tbDto.ArrivalDate, out var arrDate))
                     {
                         var localArrival = !string.IsNullOrEmpty(tbDto.Eta) && TimeSpan.TryParse(tbDto.Eta, out var etaTime)
                             ? arrDate.Add(etaTime) : arrDate;
-                        scheduledArrival = DateTime.SpecifyKind(localArrival.AddHours(-3), DateTimeKind.Utc);
+                        scheduledArrival = DateTime.SpecifyKind(localArrival, DateTimeKind.Unspecified);
                     }
                     if (!isArrival && !string.IsNullOrEmpty(tbDto.DepartureDate) &&
                         DateTime.TryParse(tbDto.DepartureDate, out var depDate))
                     {
                         var localDeparture = !string.IsNullOrEmpty(tbDto.Etd) && TimeSpan.TryParse(tbDto.Etd, out var etdTime)
                             ? depDate.Add(etdTime) : depDate;
-                        scheduledDeparture = DateTime.SpecifyKind(localDeparture.AddHours(-3), DateTimeKind.Utc);
+                        scheduledDeparture = DateTime.SpecifyKind(localDeparture, DateTimeKind.Unspecified);
                     }
 
                     // Key on (FlightNumber + date) so same flight number on different dates
@@ -1393,20 +1393,20 @@ public class EventsAirController : ApiControllerBase
 
                 bool isArrival = tb.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
 
-                // Parse dates — EventsAir stores times in local Jeddah time (UTC+3).
-                // Subtract 3 hours to convert to UTC before storing.
+                // Store times exactly as EventsAir provides them (no timezone conversion).
+                // Display must match EventsAir — no UTC offset adjustments.
                 DateTime? scheduledArrival = null, scheduledDeparture = null;
                 if (isArrival && !string.IsNullOrEmpty(tb.ArrivalDate) && DateTime.TryParse(tb.ArrivalDate, out var arrDate))
                 {
                     var localArrival = !string.IsNullOrEmpty(tb.Eta) && TimeSpan.TryParse(tb.Eta, out var etaTime)
                         ? arrDate.Add(etaTime) : arrDate;
-                    scheduledArrival = DateTime.SpecifyKind(localArrival.AddHours(-3), DateTimeKind.Utc);
+                    scheduledArrival = DateTime.SpecifyKind(localArrival, DateTimeKind.Unspecified);
                 }
                 if (!isArrival && !string.IsNullOrEmpty(tb.DepartureDate) && DateTime.TryParse(tb.DepartureDate, out var depDate))
                 {
                     var localDeparture = !string.IsNullOrEmpty(tb.Etd) && TimeSpan.TryParse(tb.Etd, out var etdTime)
                         ? depDate.Add(etdTime) : depDate;
-                    scheduledDeparture = DateTime.SpecifyKind(localDeparture.AddHours(-3), DateTimeKind.Utc);
+                    scheduledDeparture = DateTime.SpecifyKind(localDeparture, DateTimeKind.Unspecified);
                 }
 
                 // Find or create Flight — key on (FlightNumber + date) so same flight number
