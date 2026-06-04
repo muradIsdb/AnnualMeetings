@@ -12,6 +12,8 @@ public class AviationstackOptions
 {
     public string ApiKey { get; set; } = string.Empty;
     public string BaseUrl { get; set; } = "http://api.aviationstack.com/v1";
+    public int SyncIntervalMinutes { get; set; } = 5;
+    public int TrackingWindowHours { get; set; } = 12;
 }
 
 public class AviationstackClient : IFlightTrackerClient

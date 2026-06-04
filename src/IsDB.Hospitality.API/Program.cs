@@ -26,6 +26,13 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IsDB.Hospitality.Application.Common.Interfaces.IEmailService, IsDB.Hospitality.API.Services.EmailService>();
 builder.Services.AddScoped<IsDB.Hospitality.API.Services.NotificationTemplateService>();
 
+// SignalR for real-time flight updates
+builder.Services.AddSignalR();
+
+// Health checks — AviationStack API key validation
+builder.Services.AddHealthChecks()
+    .AddCheck<IsDB.Hospitality.API.HealthChecks.AviationstackHealthCheck>("aviationstack");
+
 // Register default HttpClient with SSL bypass for development/sandbox only
 if (builder.Environment.IsDevelopment())
 {
@@ -843,6 +850,13 @@ app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+
+// SignalR hub for real-time flight updates
+// FlightHub inherits FlightHubProxy so IHubContext<FlightHubProxy> resolves to the same hub
+app.MapHub<IsDB.Hospitality.API.Hubs.FlightHub>("/hubs/flights");
+
+// Health check endpoint
+app.MapHealthChecks("/health");
 
 // SPA fallback — all non-API routes return index.html for React Router
 app.MapFallbackToFile("index.html");
