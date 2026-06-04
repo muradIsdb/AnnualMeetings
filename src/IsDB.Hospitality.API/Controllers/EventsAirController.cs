@@ -619,8 +619,8 @@ public class EventsAirController : ApiControllerBase
                 foreach (var tbDto in travelBookings)
                 {
                      if (string.IsNullOrEmpty(tbDto.FlightNumber) || string.IsNullOrEmpty(tbDto.ContactId)) continue;
-                    // Normalise flight number at ingest: "TK 0334" → "TK334", "FZ 707" → "FZ707"
-                    tbDto.FlightNumber = FlightNumberHelper.Normalise(tbDto.FlightNumber);
+                    // Normalization disabled — store flight numbers exactly as EventsAir sends them
+                    // tbDto.FlightNumber = FlightNumberHelper.Normalise(tbDto.FlightNumber);
                     var guest = await _db.Guests
                         .Include(g => g.TravelBookings)
                         .ThenInclude(tb => tb.Flight)
@@ -654,27 +654,20 @@ public class EventsAirController : ApiControllerBase
                         scheduledDeparture = DateTime.SpecifyKind(localDeparture, DateTimeKind.Utc);
                     }
 
-                    // Key on (FlightNumber + date) so same flight number on different dates
-                    // creates separate rows (e.g. TK334 on June 4 vs TK334 on June 16).
-                    // tbDto.FlightNumber is already normalised above; also match against any
-                    // un-normalised DB rows by loading candidates and normalising in memory.
+                    // Key on (FlightNumber + date) — exact match, no normalization
                     var flightDate = (isArrival ? scheduledArrival : scheduledDeparture)?.Date;
                     Domain.Entities.Flight? flight = null;
                     if (flightDate.HasValue)
                     {
-                        // Load all flights for this date and match by normalised number in memory
-                        // to handle any un-normalised values still in the DB.
-                        var candidates = await _db.Flights
-                            .Where(f => f.ScheduledArrival.Date == flightDate.Value)
-                            .ToListAsync(cancellationToken);
-                        flight = candidates.FirstOrDefault(
-                            f => FlightNumberHelper.Normalise(f.FlightNumber) == tbDto.FlightNumber);
+                        flight = await _db.Flights.FirstOrDefaultAsync(
+                            f => f.FlightNumber == tbDto.FlightNumber &&
+                                 f.ScheduledArrival.Date == flightDate.Value,
+                            cancellationToken);
                     }
                     else
                     {
-                        var candidates = await _db.Flights.ToListAsync(cancellationToken);
-                        flight = candidates.FirstOrDefault(
-                            f => FlightNumberHelper.Normalise(f.FlightNumber) == tbDto.FlightNumber);
+                        flight = await _db.Flights.FirstOrDefaultAsync(
+                            f => f.FlightNumber == tbDto.FlightNumber, cancellationToken);
                     }
                     if (flight == null)
                     {
@@ -1382,12 +1375,9 @@ public class EventsAirController : ApiControllerBase
         // number on different dates creates separate rows.
         var flightsByKey = await _db.Flights
             .ToListAsync(cancellationToken);
-        // Key: "NORMALISED-FLIGHTNUMBER|yyyy-MM-dd"
-        // IMPORTANT: normalise the DB-stored flight number when building the dictionary key,
-        // not just the incoming value. Without this, a DB row stored as "TK 334" would not
-        // match an incoming "TK334" (already normalised), causing a duplicate row to be created.
+        // Normalization disabled — key on exact stored FlightNumber (uppercased) + date
         var flightsByNumber = flightsByKey
-            .GroupBy(f => $"{FlightNumberHelper.Normalise(f.FlightNumber).ToUpperInvariant()}|{f.ScheduledArrival.Date:yyyy-MM-dd}")
+            .GroupBy(f => $"{f.FlightNumber.ToUpperInvariant()}|{f.ScheduledArrival.Date:yyyy-MM-dd}")
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         int savedNew = 0, updatedExisting = 0, rebooked = 0;
@@ -1400,8 +1390,8 @@ public class EventsAirController : ApiControllerBase
             {
                 if (string.IsNullOrEmpty(tb.FlightNumber)) { skippedNoFlight++; continue; }
                 if (string.IsNullOrEmpty(tb.ContactId)) { skippedNoContact++; continue; }
-                // Normalise flight number at ingest: "TK 0334" → "TK334", "FZ 707" → "FZ707"
-                tb.FlightNumber = FlightNumberHelper.Normalise(tb.FlightNumber);
+                // Normalization disabled — store flight numbers exactly as EventsAir sends them
+                // tb.FlightNumber = FlightNumberHelper.Normalise(tb.FlightNumber);
                 if (!guestsByContactId.TryGetValue(tb.ContactId, out var guest)) { skippedNoGuest++; continue; }
 
                 bool isArrival = tb.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;

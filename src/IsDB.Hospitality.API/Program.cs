@@ -872,82 +872,9 @@ using (var scope = app.Services.CreateScope())
         logger.LogInformation("AviationStack AppConfig columns ensured.");
     }
 
-    // NormaliseFlightNumbers: runs on EVERY startup (always idempotent).
-    // EventsAir can push un-normalised flight numbers at any time, so we normalise
-    // and deduplicate on every startup rather than just once.
-    // Step 3 adds a UNIQUE index so the DB itself prevents future duplicates.
-    try
-    {
-        logger.LogInformation("Running NormaliseFlightNumbers (always-on idempotent cleanup)...");
-        // Step 1: Normalise all FlightNumber values in-place
-        await context.Database.ExecuteSqlRawAsync(@"
-            UPDATE ""Flights""
-            SET ""FlightNumber"" = UPPER(
-                REGEXP_REPLACE(
-                    REPLACE(""FlightNumber"", ' ', ''),
-                    '^([A-Za-z]{1,3})0+([0-9].*)$',
-                    '\1\2'
-                )
-            )
-            WHERE ""FlightNumber"" IS NOT NULL;
-        ");
-        // Step 2: Merge duplicate rows — group by (FlightNumber + date) so same flight number
-        // on different dates is NOT merged (e.g. TK334 June 4 vs TK334 June 16 stay separate).
-        await context.Database.ExecuteSqlRawAsync(@"
-            DO $$
-            DECLARE
-                dup RECORD;
-                canonical_id uuid;
-            BEGIN
-                FOR dup IN
-                    SELECT ""FlightNumber"", DATE(""ScheduledArrival"") AS arr_date
-                    FROM ""Flights""
-                    GROUP BY ""FlightNumber"", DATE(""ScheduledArrival"")
-                    HAVING COUNT(*) > 1
-                LOOP
-                    SELECT ""Id"" INTO canonical_id
-                    FROM ""Flights""
-                    WHERE ""FlightNumber"" = dup.""FlightNumber""
-                      AND DATE(""ScheduledArrival"") = dup.arr_date
-                    ORDER BY ""Id""
-                    LIMIT 1;
-
-                    UPDATE ""TravelBookings""
-                    SET ""FlightId"" = canonical_id
-                    WHERE ""FlightId"" IN (
-                        SELECT ""Id""
-                        FROM ""Flights""
-                        WHERE ""FlightNumber"" = dup.""FlightNumber""
-                          AND DATE(""ScheduledArrival"") = dup.arr_date
-                          AND ""Id"" <> canonical_id
-                    );
-
-                    DELETE FROM ""Flights""
-                    WHERE ""FlightNumber"" = dup.""FlightNumber""
-                      AND DATE(""ScheduledArrival"") = dup.arr_date
-                      AND ""Id"" <> canonical_id;
-                END LOOP;
-            END;
-            $$;
-        ");
-        // Step 3: Enforce uniqueness at DB level — (FlightNumber, DATE(ScheduledArrival)).
-        // This permanently prevents duplicate flight rows regardless of what EventsAir sends.
-        await context.Database.ExecuteSqlRawAsync(@"
-            CREATE UNIQUE INDEX IF NOT EXISTS ""UX_Flights_Number_ArrivalDate""
-            ON ""Flights"" (""FlightNumber"", DATE(""ScheduledArrival""));
-        ");
-        // Mark migration as applied in history table
-        await context.Database.ExecuteSqlRawAsync(@"
-            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
-            VALUES ('20260604300000_NormaliseFlightNumbers', '9.0.0')
-            ON CONFLICT DO NOTHING;
-        ");
-        logger.LogInformation("NormaliseFlightNumbers cleanup complete.");
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "NormaliseFlightNumbers cleanup failed (non-fatal). Will retry on next startup.");
-    }
+    // NormaliseFlightNumbers: DISABLED for testing — storing raw flight numbers from EventsAir
+    // to observe exactly what values EventsAir sends without any transformation.
+    logger.LogInformation("NormaliseFlightNumbers: disabled for raw data observation.");
 
     // AddAviationstackDateGuardDays: adds the configurable date guard tolerance column.
     try
