@@ -1,4 +1,5 @@
 using IsDB.Hospitality.Application.Common.Interfaces;
+using IsDB.Hospitality.Application.Common.Models;
 using IsDB.Hospitality.Domain.Entities;
 using IsDB.Hospitality.Infrastructure.BackgroundServices;
 using IsDB.Hospitality.Infrastructure.ExternalClients.FlightTracker;
@@ -525,13 +526,12 @@ public class SettingsController : ApiControllerBase
     /// Triggers an immediate AviationStack sync cycle outside the normal timer.
     /// Returns a summary of flights polled and updated.
     /// </summary>
-    [HttpPost("flight-tracking/sync-now")]
+     [HttpPost("flight-tracking/sync-now")]
     [Authorize(Roles = "Admin")]
     public async Task<ActionResult<SyncNowResult>> SyncFlightsNow()
     {
         if (_flightSync == null)
             return StatusCode(503, new SyncNowResult { Success = false, Message = "Flight sync service is not running." });
-
         try
         {
             var result = await _flightSync.TriggerSyncNowAsync(HttpContext.RequestAborted);
@@ -548,6 +548,101 @@ public class SettingsController : ApiControllerBase
             return Ok(new SyncNowResult { Success = false, Message = $"Sync failed: {ex.Message}" });
         }
     }
+
+    /// <summary>
+    /// Debug: sync a single flight by flight number and return detailed before/after comparison.
+    /// </summary>
+    [HttpPost("flight-tracking/debug-sync/{flightNumber}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> DebugSyncFlight(
+        string flightNumber,
+        [FromServices] IsDB.Hospitality.Infrastructure.Persistence.AppDbContext db,
+        [FromServices] IFlightTrackerClient flightTracker,
+        CancellationToken ct)
+    {
+        var flight = await db.Flights
+            .Include(f => f.TravelBookings).ThenInclude(tb => tb.Guest)
+            .FirstOrDefaultAsync(f => f.FlightNumber == flightNumber, ct);
+
+        if (flight == null)
+            return NotFound(new { message = $"Flight '{flightNumber}' not found in DB" });
+
+        var before = new
+        {
+            flight.FlightNumber,
+            flight.ScheduledArrival,
+            Status = flight.Status.ToString(),
+            flight.ActualTerminal,
+            flight.ActualGate,
+            flight.LiveDelayMinutes,
+            flight.LastTrackedAt,
+            GuestCount = flight.TravelBookings.Count,
+            Guests = flight.TravelBookings.Select(tb => new { tb.Guest.FirstName, tb.Guest.LastName, GuestStatus = tb.Guest.Status.ToString() }).ToList()
+        };
+
+        FlightStatusDto? status = null;
+        string? apiError = null;
+        try { status = await flightTracker.GetFlightStatusAsync(flightNumber, ct); }
+        catch (Exception ex) { apiError = ex.Message; }
+
+        if (status == null)
+            return Ok(new { before, apiResult = (object?)null, apiError = apiError ?? "GetFlightStatusAsync returned null", updated = false });
+
+        string? dateGuardReason = null;
+        if (status.ScheduledArrival.HasValue)
+        {
+            var dayDiff = Math.Abs((status.ScheduledArrival.Value.Date - flight.ScheduledArrival.Date).TotalDays);
+            if (dayDiff > 1)
+                dateGuardReason = $"Date guard: AviationStack={status.ScheduledArrival.Value.Date:yyyy-MM-dd}, DB={flight.ScheduledArrival.Date:yyyy-MM-dd}, diff={dayDiff}d";
+        }
+
+        var apiResult = new
+        {
+            status.FlightNumber,
+            status.Status,
+            status.ScheduledArrival,
+            status.ActualArrival,
+            status.Terminal,
+            status.Gate,
+            status.DelayMinutes
+        };
+
+        if (dateGuardReason != null)
+            return Ok(new { before, apiResult, dateGuardReason, updated = false });
+
+        bool changed = false;
+        var newStatus = ParseFlightStatusDebug(status.Status);
+        if (flight.Status != newStatus) { flight.Status = newStatus; changed = true; }
+        if (status.ActualArrival.HasValue && flight.ActualArrival != status.ActualArrival) { flight.ActualArrival = status.ActualArrival; changed = true; }
+        if (status.ActualDeparture.HasValue && flight.ActualDeparture != status.ActualDeparture) { flight.ActualDeparture = status.ActualDeparture; changed = true; }
+        if (status.Terminal != null && flight.ActualTerminal != status.Terminal) { flight.ActualTerminal = status.Terminal; changed = true; }
+        if (status.Gate != null && flight.ActualGate != status.Gate) { flight.ActualGate = status.Gate; changed = true; }
+        if (status.DelayMinutes.HasValue && flight.LiveDelayMinutes != status.DelayMinutes) { flight.LiveDelayMinutes = status.DelayMinutes; changed = true; }
+        flight.LastTrackedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        var after = new
+        {
+            flight.FlightNumber,
+            flight.ScheduledArrival,
+            Status = flight.Status.ToString(),
+            flight.ActualTerminal,
+            flight.ActualGate,
+            flight.LiveDelayMinutes,
+            flight.LastTrackedAt
+        };
+        return Ok(new { before, apiResult, dateGuardReason = (string?)null, changed, updated = changed, after });
+    }
+
+    private static IsDB.Hospitality.Domain.Enums.FlightStatus ParseFlightStatusDebug(string? s) => s?.ToLower() switch
+    {
+        "active" => IsDB.Hospitality.Domain.Enums.FlightStatus.Active,
+        "landed" => IsDB.Hospitality.Domain.Enums.FlightStatus.Landed,
+        "cancelled" => IsDB.Hospitality.Domain.Enums.FlightStatus.Cancelled,
+        "diverted" => IsDB.Hospitality.Domain.Enums.FlightStatus.Diverted,
+        "scheduled" => IsDB.Hospitality.Domain.Enums.FlightStatus.Scheduled,
+        _ => IsDB.Hospitality.Domain.Enums.FlightStatus.Unknown
+    };
 }
 
 // ─── DTOs ─────────────────────────────────────────────────────────────────────
