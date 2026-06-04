@@ -836,6 +836,42 @@ using (var scope = app.Services.CreateScope())
 
     }
 
+    // Ensure AviationStack columns exist in AppConfigs — runs for ALL database types (idempotent)
+    // This guard is needed because the EF model snapshot references these columns and EF will
+    // include them in all SELECT queries. If they don't exist the query throws a 500.
+    if (context.Database.IsNpgsql())
+    {
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'AppConfigs' AND column_name = 'AviationstackApiKey'
+                ) THEN
+                    ALTER TABLE ""AppConfigs"" ADD COLUMN ""AviationstackApiKey"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'AppConfigs' AND column_name = 'AviationstackSyncIntervalMinutes'
+                ) THEN
+                    ALTER TABLE ""AppConfigs"" ADD COLUMN ""AviationstackSyncIntervalMinutes"" integer NOT NULL DEFAULT 5;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'AppConfigs' AND column_name = 'AviationstackTrackingWindowHours'
+                ) THEN
+                    ALTER TABLE ""AppConfigs"" ADD COLUMN ""AviationstackTrackingWindowHours"" integer NOT NULL DEFAULT 12;
+                END IF;
+            END $$;
+        ");
+        // Mark the EF migration as applied so MigrateAsync won't try to run it again
+        await context.Database.ExecuteSqlRawAsync(@"
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260604200000_AddAviationstackConfigToAppConfig', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        ");
+        logger.LogInformation("AviationStack AppConfig columns ensured.");
+    }
+
     await DatabaseSeeder.SeedAsync(context, logger);
 
     // Seed notification templates (idempotent — only inserts missing keys)
