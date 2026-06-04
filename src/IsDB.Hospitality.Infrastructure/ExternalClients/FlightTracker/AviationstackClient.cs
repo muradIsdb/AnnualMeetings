@@ -103,19 +103,19 @@ public class AviationstackClient : IFlightTrackerClient
             if (flight.TryGetProperty("departure", out var dep))
             {
                 dto.DepartureAirport = dep.TryGetProperty("iata", out var depIata) ? depIata.GetString() : null;
-                if (dep.TryGetProperty("scheduled", out var schedDep) && DateTime.TryParse(schedDep.GetString(), out var sd))
-                    dto.ScheduledDeparture = sd;
-                if (dep.TryGetProperty("actual", out var actDep) && actDep.ValueKind != JsonValueKind.Null && DateTime.TryParse(actDep.GetString(), out var ad))
-                    dto.ActualDeparture = ad;
+                if (dep.TryGetProperty("scheduled", out var schedDep) && DateTimeOffset.TryParse(schedDep.GetString(), out var sd))
+                    dto.ScheduledDeparture = sd.UtcDateTime;
+                if (dep.TryGetProperty("actual", out var actDep) && actDep.ValueKind != JsonValueKind.Null && DateTimeOffset.TryParse(actDep.GetString(), out var ad))
+                    dto.ActualDeparture = ad.UtcDateTime;
             }
 
             if (flight.TryGetProperty("arrival", out var arr))
             {
                 dto.ArrivalAirport = arr.TryGetProperty("iata", out var arrIata) ? arrIata.GetString() : null;
-                if (arr.TryGetProperty("scheduled", out var schedArr) && DateTime.TryParse(schedArr.GetString(), out var sa))
-                    dto.ScheduledArrival = sa;
-                if (arr.TryGetProperty("actual", out var actArr) && actArr.ValueKind != JsonValueKind.Null && DateTime.TryParse(actArr.GetString(), out var aa))
-                    dto.ActualArrival = aa;
+                if (arr.TryGetProperty("scheduled", out var schedArr) && DateTimeOffset.TryParse(schedArr.GetString(), out var sa))
+                    dto.ScheduledArrival = sa.UtcDateTime;
+                if (arr.TryGetProperty("actual", out var actArr) && actArr.ValueKind != JsonValueKind.Null && DateTimeOffset.TryParse(actArr.GetString(), out var aa))
+                    dto.ActualArrival = aa.UtcDateTime;
                 dto.Terminal = arr.TryGetProperty("terminal", out var term) ? term.GetString() : null;
                 dto.Gate = arr.TryGetProperty("gate", out var gate) ? gate.GetString() : null;
                 if (arr.TryGetProperty("delay", out var delay) && delay.ValueKind != JsonValueKind.Null)
