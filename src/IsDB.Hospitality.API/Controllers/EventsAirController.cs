@@ -656,19 +656,25 @@ public class EventsAirController : ApiControllerBase
 
                     // Key on (FlightNumber + date) so same flight number on different dates
                     // creates separate rows (e.g. TK334 on June 4 vs TK334 on June 16).
+                    // tbDto.FlightNumber is already normalised above; also match against any
+                    // un-normalised DB rows by loading candidates and normalising in memory.
                     var flightDate = (isArrival ? scheduledArrival : scheduledDeparture)?.Date;
                     Domain.Entities.Flight? flight = null;
                     if (flightDate.HasValue)
                     {
-                        flight = await _db.Flights.FirstOrDefaultAsync(
-                            f => f.FlightNumber == tbDto.FlightNumber &&
-                                 f.ScheduledArrival.Date == flightDate.Value,
-                            cancellationToken);
+                        // Load all flights for this date and match by normalised number in memory
+                        // to handle any un-normalised values still in the DB.
+                        var candidates = await _db.Flights
+                            .Where(f => f.ScheduledArrival.Date == flightDate.Value)
+                            .ToListAsync(cancellationToken);
+                        flight = candidates.FirstOrDefault(
+                            f => FlightNumberHelper.Normalise(f.FlightNumber) == tbDto.FlightNumber);
                     }
                     else
                     {
-                        flight = await _db.Flights.FirstOrDefaultAsync(
-                            f => f.FlightNumber == tbDto.FlightNumber, cancellationToken);
+                        var candidates = await _db.Flights.ToListAsync(cancellationToken);
+                        flight = candidates.FirstOrDefault(
+                            f => FlightNumberHelper.Normalise(f.FlightNumber) == tbDto.FlightNumber);
                     }
                     if (flight == null)
                     {
@@ -1376,9 +1382,12 @@ public class EventsAirController : ApiControllerBase
         // number on different dates creates separate rows.
         var flightsByKey = await _db.Flights
             .ToListAsync(cancellationToken);
-        // Key: "FLIGHTNUMBER|yyyy-MM-dd"
+        // Key: "NORMALISED-FLIGHTNUMBER|yyyy-MM-dd"
+        // IMPORTANT: normalise the DB-stored flight number when building the dictionary key,
+        // not just the incoming value. Without this, a DB row stored as "TK 334" would not
+        // match an incoming "TK334" (already normalised), causing a duplicate row to be created.
         var flightsByNumber = flightsByKey
-            .GroupBy(f => $"{f.FlightNumber.ToUpperInvariant()}|{f.ScheduledArrival.Date:yyyy-MM-dd}")
+            .GroupBy(f => $"{FlightNumberHelper.Normalise(f.FlightNumber).ToUpperInvariant()}|{f.ScheduledArrival.Date:yyyy-MM-dd}")
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         int savedNew = 0, updatedExisting = 0, rebooked = 0;
