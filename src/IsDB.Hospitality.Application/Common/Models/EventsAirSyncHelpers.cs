@@ -472,9 +472,9 @@ public static class EventsAirSyncHelpers
                 .ToListAsync(cancellationToken),
             StringComparer.OrdinalIgnoreCase);
 
-        // Track the first ContactId seen per flight key so we can include both IDs in conflict messages.
-        // Pre-load from existing TravelBookings so flights that already exist in the DB also show a real ContactId.
-        var firstContactIdByFlightKey = await db.TravelBookings
+        // Track the first guest name seen per flight key so we can include both names in conflict messages.
+        // Pre-load from existing TravelBookings so flights that already exist in the DB also show a real name.
+        var firstGuestNameByFlightKey = await db.TravelBookings
             .Include(b => b.Guest)
             .Include(b => b.Flight)
             .Where(b => b.IsArrival)
@@ -482,9 +482,9 @@ public static class EventsAirSyncHelpers
             .Select(g => new
             {
                 FlightKey = g.First().Flight.FlightNumber + "|" + g.First().Flight.ScheduledArrival.Date.ToString("yyyy-MM-dd"),
-                ContactId = g.First().Guest.EventsAirContactId
+                GuestName = (g.First().Guest.FirstName + " " + g.First().Guest.LastName).Trim()
             })
-            .ToDictionaryAsync(x => x.FlightKey, x => x.ContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+            .ToDictionaryAsync(x => x.FlightKey, x => x.GuestName, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
         // Fetch the first Admin staff user's ID to use as creator for system-generated notifications.
         // Notifications require a non-null CreatedByStaffId FK.
@@ -553,7 +553,9 @@ public static class EventsAirSyncHelpers
                     };
                     db.Flights.Add(flight);
                     flightsByKey[flightKey] = flight;
-                    firstContactIdByFlightKey[flightKey] = tb.ContactId;
+                    // Store the first guest's name for use in conflict messages
+                    if (guestsByContactId.TryGetValue(tb.ContactId, out var firstGuest))
+                        firstGuestNameByFlightKey[flightKey] = $"{firstGuest.FirstName} {firstGuest.LastName}".Trim();
                 }
                 else
                 {
@@ -587,9 +589,10 @@ public static class EventsAirSyncHelpers
                                 result.RaisedConflictKeys.Add(conflictKey);
                                 existingConflictTitles.Add(alertTitle); // prevent a second guest on same flight raising another
 
-                                var firstContactId = firstContactIdByFlightKey.TryGetValue(flightKey, out var fid) ? fid : "unknown";
+                                var firstGuestName = firstGuestNameByFlightKey.TryGetValue(flightKey, out var fn) ? fn : "unknown";
+                                var currentGuestName = $"{guest.FirstName} {guest.LastName}".Trim();
                                 var conflictMessage = $"Flight {tb.FlightNumber} on {parsedDate.Date:dd MMM yyyy} has inconsistent arrival times across guests in EventsAir: "
-                                                   + $"{flight.ScheduledArrival:HH:mm} (guest {firstContactId}) vs {scheduledArrival.Value:HH:mm} (guest {tb.ContactId}). "
+                                                   + $"{flight.ScheduledArrival:HH:mm} ({firstGuestName}) vs {scheduledArrival.Value:HH:mm} ({currentGuestName}). "
                                                    + "Please correct the arrival time in EventsAir and re-sync.";
 
                                 // ── Alert (visible in the Alerts panel) ──────────────────────────
