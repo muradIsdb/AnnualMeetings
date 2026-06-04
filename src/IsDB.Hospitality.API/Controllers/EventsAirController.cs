@@ -1417,10 +1417,17 @@ public class EventsAirController : ApiControllerBase
                     scheduledDeparture = DateTime.SpecifyKind(localDeparture, DateTimeKind.Utc);
                 }
 
-                // Find or create Flight — key on (exact FlightNumber + date).
-                // StringComparer.OrdinalIgnoreCase on the dictionary handles case differences.
-                var flightDate = (isArrival ? scheduledArrival : scheduledDeparture)?.Date
-                    ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc).Date;
+                // Build the flight key from the RAW date string EventsAir sends (ArrivalDate or
+                // DepartureDate), NOT from the computed scheduledArrival/Departure datetime.
+                // This avoids the 2026-01-01 fallback merging all guests with a missing date.
+                // If the raw date is missing or unparseable, skip this booking entirely.
+                var rawDateStr = isArrival ? tb.ArrivalDate : tb.DepartureDate;
+                if (string.IsNullOrEmpty(rawDateStr) || !DateTime.TryParse(rawDateStr, out var parsedRawDate))
+                {
+                    skippedNoFlight++;
+                    continue;
+                }
+                var flightDate = parsedRawDate.Date;
                 var flightKey = $"{tb.FlightNumber}|{flightDate:yyyy-MM-dd}";
                 if (!flightsByNumber.TryGetValue(flightKey, out var flight))
                 {
@@ -1428,8 +1435,8 @@ public class EventsAirController : ApiControllerBase
                     {
                         FlightNumber = tb.FlightNumber,
                         AirlineName = tb.CarrierName ?? "Unknown",
-                        ScheduledArrival = scheduledArrival ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc),
-                        ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc),
+                        ScheduledArrival = scheduledArrival ?? DateTime.SpecifyKind(parsedRawDate, DateTimeKind.Utc),
+                        ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(parsedRawDate, DateTimeKind.Utc),
                         ArrivalPortName = tb.ArrivalPortName,
                         ArrivalPortIataCode = tb.ArrivalPortCode,
                         DeparturePortName = tb.DeparturePortName,
