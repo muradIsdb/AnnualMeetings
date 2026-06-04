@@ -526,7 +526,7 @@ public class SettingsController : ApiControllerBase
     /// Returns a summary of flights polled and updated.
     /// </summary>
     [HttpPost("flight-tracking/sync-now")]
-    [Authorize(Roles = "Administrator")]
+    [Authorize(Roles = "Admin")]
     public async Task<ActionResult<SyncNowResult>> SyncFlightsNow()
     {
         if (_flightSync == null)
