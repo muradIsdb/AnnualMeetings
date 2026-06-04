@@ -650,7 +650,22 @@ public class EventsAirController : ApiControllerBase
                         scheduledDeparture = DateTime.SpecifyKind(localDeparture.AddHours(-3), DateTimeKind.Utc);
                     }
 
-                    var flight = await _db.Flights.FirstOrDefaultAsync(f => f.FlightNumber == tbDto.FlightNumber, cancellationToken);
+                    // Key on (FlightNumber + date) so same flight number on different dates
+                    // creates separate rows (e.g. TK334 on June 4 vs TK334 on June 16).
+                    var flightDate = (isArrival ? scheduledArrival : scheduledDeparture)?.Date;
+                    Domain.Entities.Flight? flight = null;
+                    if (flightDate.HasValue)
+                    {
+                        flight = await _db.Flights.FirstOrDefaultAsync(
+                            f => f.FlightNumber == tbDto.FlightNumber &&
+                                 f.ScheduledArrival.Date == flightDate.Value,
+                            cancellationToken);
+                    }
+                    else
+                    {
+                        flight = await _db.Flights.FirstOrDefaultAsync(
+                            f => f.FlightNumber == tbDto.FlightNumber, cancellationToken);
+                    }
                     if (flight == null)
                     {
                         flight = new Domain.Entities.Flight
@@ -1353,9 +1368,14 @@ public class EventsAirController : ApiControllerBase
             .Include(g => g.TravelBookings).ThenInclude(tb => tb.Flight)
             .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
-        // Load all existing flights keyed by flight number
-        var flightsByNumber = await _db.Flights
-            .ToDictionaryAsync(f => f.FlightNumber, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        // Load all existing flights keyed by (FlightNumber, ArrivalDate) so same flight
+        // number on different dates creates separate rows.
+        var flightsByKey = await _db.Flights
+            .ToListAsync(cancellationToken);
+        // Key: "FLIGHTNUMBER|yyyy-MM-dd"
+        var flightsByNumber = flightsByKey
+            .GroupBy(f => $"{f.FlightNumber.ToUpperInvariant()}|{f.ScheduledArrival.Date:yyyy-MM-dd}")
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         int savedNew = 0, updatedExisting = 0, rebooked = 0;
         int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0, errorCount = 0;
@@ -1389,8 +1409,12 @@ public class EventsAirController : ApiControllerBase
                     scheduledDeparture = DateTime.SpecifyKind(localDeparture.AddHours(-3), DateTimeKind.Utc);
                 }
 
-                // Find or create Flight
-                if (!flightsByNumber.TryGetValue(tb.FlightNumber, out var flight))
+                // Find or create Flight — key on (FlightNumber + date) so same flight number
+                // on different dates creates separate rows (e.g. TK334 June 4 vs June 16).
+                var flightDate = (isArrival ? scheduledArrival : scheduledDeparture)?.Date
+                    ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc).Date;
+                var flightKey = $"{tb.FlightNumber.ToUpperInvariant()}|{flightDate:yyyy-MM-dd}";
+                if (!flightsByNumber.TryGetValue(flightKey, out var flight))
                 {
                     flight = new IsDB.Hospitality.Domain.Entities.Flight
                     {
@@ -1405,7 +1429,7 @@ public class EventsAirController : ApiControllerBase
                         Status = IsDB.Hospitality.Domain.Enums.FlightStatus.Scheduled
                     };
                     _db.Flights.Add(flight);
-                    flightsByNumber[tb.FlightNumber] = flight;
+                    flightsByNumber[flightKey] = flight;
                 }
                 else
                 {

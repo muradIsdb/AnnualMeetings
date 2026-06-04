@@ -8,13 +8,19 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
     /// 1. Normalises all existing Flight.FlightNumber values to canonical form
     ///    (remove spaces, strip leading zeros from numeric suffix).
     ///    e.g. "TK 0334" → "TK334", "FZ 707" → "FZ707", " LH612" → "LH612"
-    /// 2. For each set of duplicate rows that normalise to the same canonical value,
-    ///    picks one canonical row (the one whose FlightNumber is already canonical,
-    ///    or the first by Id), re-points all TravelBooking.FlightId references to it,
-    ///    and deletes the redundant rows.
-    /// After this migration, every FlightNumber in the Flights table is already in
-    /// canonical form, and the EventsAir sync controller normalises at ingest so no
-    /// new duplicates can be created.
+    /// 2. For each set of duplicate rows that normalise to the SAME canonical value
+    ///    AND the SAME date (date part of ScheduledArrival for arrival flights, or
+    ///    ScheduledDeparture for departure flights), picks one canonical row,
+    ///    re-points all TravelBooking.FlightId references to it, and deletes the
+    ///    redundant rows.
+    ///
+    /// IMPORTANT: Two flights with the same number but different dates are NOT
+    /// duplicates — e.g. TK334 on June 4 and TK334 on June 16 are separate flights.
+    /// The grouping key is (NormalizedFlightNumber, DATE(ScheduledArrival)).
+    ///
+    /// After this migration, every FlightNumber in the Flights table is in canonical
+    /// form, and the EventsAir sync controller normalises at ingest so no new
+    /// duplicates can be created.
     /// </summary>
     public partial class NormaliseFlightNumbers : Migration
     {
@@ -37,28 +43,30 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                 WHERE ""FlightNumber"" IS NOT NULL;
             ");
 
-            // Step 2: For each group of duplicate FlightNumber rows, keep the one with
-            // the smallest Id (deterministic), re-point all TravelBookings to it,
+            // Step 2: For each group of duplicate rows that share the same
+            // (FlightNumber, DATE(ScheduledArrival)) pair, keep the one with the
+            // smallest Id (deterministic), re-point all TravelBookings to it,
             // then delete the duplicates.
             //
-            // This is done in a single SQL block to avoid multiple round-trips.
+            // Flights with the same number but different dates are kept separate.
             migrationBuilder.Sql(@"
                 DO $$
                 DECLARE
                     dup RECORD;
                     canonical_id uuid;
                 BEGIN
-                    -- Find all FlightNumbers that appear more than once after normalisation
+                    -- Find all (FlightNumber, ArrivalDate) pairs that appear more than once
                     FOR dup IN
-                        SELECT ""FlightNumber""
+                        SELECT ""FlightNumber"", DATE(""ScheduledArrival"") AS arr_date
                         FROM ""Flights""
-                        GROUP BY ""FlightNumber""
+                        GROUP BY ""FlightNumber"", DATE(""ScheduledArrival"")
                         HAVING COUNT(*) > 1
                     LOOP
                         -- Pick the canonical row: smallest Id (deterministic)
                         SELECT ""Id"" INTO canonical_id
                         FROM ""Flights""
                         WHERE ""FlightNumber"" = dup.""FlightNumber""
+                          AND DATE(""ScheduledArrival"") = dup.arr_date
                         ORDER BY ""Id""
                         LIMIT 1;
 
@@ -69,12 +77,14 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                             SELECT ""Id""
                             FROM ""Flights""
                             WHERE ""FlightNumber"" = dup.""FlightNumber""
+                              AND DATE(""ScheduledArrival"") = dup.arr_date
                               AND ""Id"" <> canonical_id
                         );
 
                         -- Delete the duplicate rows (now safe — no TravelBookings reference them)
                         DELETE FROM ""Flights""
                         WHERE ""FlightNumber"" = dup.""FlightNumber""
+                          AND DATE(""ScheduledArrival"") = dup.arr_date
                           AND ""Id"" <> canonical_id;
                     END LOOP;
                 END;

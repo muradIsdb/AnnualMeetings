@@ -890,7 +890,8 @@ using (var scope = app.Services.CreateScope())
             )
             WHERE ""FlightNumber"" IS NOT NULL;
         ");
-        // Step 2: Merge duplicate rows — re-point TravelBookings to canonical row, delete duplicates
+        // Step 2: Merge duplicate rows — group by (FlightNumber + date) so same flight number
+        // on different dates is NOT merged (e.g. TK334 June 4 vs TK334 June 16 stay separate).
         await context.Database.ExecuteSqlRawAsync(@"
             DO $$
             DECLARE
@@ -898,14 +899,15 @@ using (var scope = app.Services.CreateScope())
                 canonical_id uuid;
             BEGIN
                 FOR dup IN
-                    SELECT ""FlightNumber""
+                    SELECT ""FlightNumber"", DATE(""ScheduledArrival"") AS arr_date
                     FROM ""Flights""
-                    GROUP BY ""FlightNumber""
+                    GROUP BY ""FlightNumber"", DATE(""ScheduledArrival"")
                     HAVING COUNT(*) > 1
                 LOOP
                     SELECT ""Id"" INTO canonical_id
                     FROM ""Flights""
                     WHERE ""FlightNumber"" = dup.""FlightNumber""
+                      AND DATE(""ScheduledArrival"") = dup.arr_date
                     ORDER BY ""Id""
                     LIMIT 1;
 
@@ -915,11 +917,13 @@ using (var scope = app.Services.CreateScope())
                         SELECT ""Id""
                         FROM ""Flights""
                         WHERE ""FlightNumber"" = dup.""FlightNumber""
+                          AND DATE(""ScheduledArrival"") = dup.arr_date
                           AND ""Id"" <> canonical_id
                     );
 
                     DELETE FROM ""Flights""
                     WHERE ""FlightNumber"" = dup.""FlightNumber""
+                      AND DATE(""ScheduledArrival"") = dup.arr_date
                       AND ""Id"" <> canonical_id;
                 END LOOP;
             END;
