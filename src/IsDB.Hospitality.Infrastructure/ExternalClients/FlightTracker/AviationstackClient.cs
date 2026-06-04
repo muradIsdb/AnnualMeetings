@@ -52,6 +52,7 @@ public class AviationstackClient : IFlightTrackerClient
 
     public async Task<FlightStatusDto?> GetFlightStatusAsync(
         string flightIata,
+        DateOnly? flightDate = null,
         CancellationToken cancellationToken = default,
         string? apiKeyOverride = null)
     {
@@ -63,7 +64,8 @@ public class AviationstackClient : IFlightTrackerClient
 
             // Use the override key (from DB) if provided; fall back to IOptions (appsettings/env)
             var effectiveKey = !string.IsNullOrWhiteSpace(apiKeyOverride) ? apiKeyOverride : _options.ApiKey;
-            var url = $"{_options.BaseUrl}/flights?access_key={effectiveKey}&flight_iata={Uri.EscapeDataString(normalised)}&limit=1";
+            var dateParam = flightDate.HasValue ? $"&flight_date={flightDate.Value:yyyy-MM-dd}" : string.Empty;
+            var url = $"{_options.BaseUrl}/flights?access_key={effectiveKey}&flight_iata={Uri.EscapeDataString(normalised)}{dateParam}&limit=1";
             var response = await _retryPolicy.ExecuteAsync(() => _httpClient.GetAsync(url, cancellationToken));
 
             if (!response.IsSuccessStatusCode)

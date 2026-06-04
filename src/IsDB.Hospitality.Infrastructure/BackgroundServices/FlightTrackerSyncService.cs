@@ -138,7 +138,8 @@ public class FlightTrackerSyncService : BackgroundService
 
             foreach (var flight in activeFlights)
             {
-                var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken, apiKey);
+                var flightDateOnly = DateOnly.FromDateTime(flight.ScheduledArrival.Date);
+                var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, flightDateOnly, cancellationToken, apiKey);
                 if (status == null) continue;
 
                 // Reject AviationStack results that belong to a different day's flight (configurable tolerance).
@@ -305,7 +306,8 @@ public class FlightTrackerSyncService : BackgroundService
 
             foreach (var flight in activeFlights)
             {
-                var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, cancellationToken, apiKey);
+                var flightDateOnly = DateOnly.FromDateTime(flight.ScheduledArrival.Date);
+                var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, flightDateOnly, cancellationToken, apiKey);
                 if (status == null) continue;
 
                 // Reject AviationStack results that belong to a different day's flight (configurable tolerance).

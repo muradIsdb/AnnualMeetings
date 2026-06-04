@@ -633,7 +633,8 @@ public class SettingsController : ApiControllerBase
 
         FlightStatusDto? status = null;
         string? apiError = null;
-        try { status = await flightTracker.GetFlightStatusAsync(flightNumber, ct, effectiveApiKey); }
+        var flightDateOnly = DateOnly.FromDateTime(flight.ScheduledArrival.Date);
+        try { status = await flightTracker.GetFlightStatusAsync(flightNumber, flightDateOnly, ct, effectiveApiKey); }
         catch (Exception ex) { apiError = ex.Message; }
 
         if (status == null)
