@@ -535,6 +535,35 @@ public static class EventsAirSyncHelpers
                     if (!string.IsNullOrEmpty(tb.DeparturePortCode))  flight.DeparturePortIataCode = tb.DeparturePortCode;
                     if (!string.IsNullOrEmpty(tb.CarrierName))        flight.AirlineName        = tb.CarrierName;
                     // ActualTerminal, ActualGate, Status are AviationStack-owned — never touch here
+
+                    // ── Conflict detection ────────────────────────────────────────────────────
+                    // If this guest's arrival time differs from the stored flight time, the
+                    // EventsAir data is inconsistent. Raise an Alert so the team can correct it.
+                    if (isArrival && scheduledArrival.HasValue)
+                    {
+                        var storedTime = flight.ScheduledArrival.TimeOfDay;
+                        var incomingTime = scheduledArrival.Value.TimeOfDay;
+                        // Tolerate up to 1 minute difference (rounding artefacts)
+                        if (Math.Abs((storedTime - incomingTime).TotalMinutes) > 1)
+                        {
+                            var conflictKey = $"FLIGHT_TIME_CONFLICT|{tb.FlightNumber}|{parsedDate.Date:yyyy-MM-dd}";
+                            // Avoid duplicate alerts: only raise one per flight+date per sync
+                            if (!result.RaisedConflictKeys.Contains(conflictKey))
+                            {
+                                result.RaisedConflictKeys.Add(conflictKey);
+                                db.Alerts.Add(new Alert
+                                {
+                                    Title           = $"Flight time conflict: {tb.FlightNumber} on {parsedDate.Date:dd MMM yyyy}",
+                                    Message         = $"Flight {tb.FlightNumber} on {parsedDate.Date:dd MMM yyyy} has inconsistent arrival times across guests in EventsAir: "
+                                                    + $"{flight.ScheduledArrival:HH:mm} (stored) vs {scheduledArrival.Value:HH:mm} (guest {tb.ContactId}). "
+                                                    + "Please correct the arrival time in EventsAir and re-sync.",
+                                    Severity        = AlertSeverity.Medium,
+                                    IsSystemGenerated = true
+                                });
+                                result.ConflictAlertCount++;
+                            }
+                        }
+                    }
                 }
 
                 var notes = tb.BookingNotes ?? tb.Comment;
@@ -666,12 +695,15 @@ public record EventsAirSyncContactDto(
 /// </summary>
 public class TravelSyncResult
 {
-    public int SavedNew         { get; set; }
-    public int UpdatedExisting  { get; set; }
-    public int Rebooked         { get; set; }
-    public int SkippedNoFlight  { get; set; }
-    public int SkippedNoContact { get; set; }
-    public int SkippedNoGuest   { get; set; }
-    public int ErrorCount       { get; set; }
-    public List<string> Errors  { get; } = new();
+    public int SavedNew            { get; set; }
+    public int UpdatedExisting     { get; set; }
+    public int Rebooked            { get; set; }
+    public int SkippedNoFlight     { get; set; }
+    public int SkippedNoContact    { get; set; }
+    public int SkippedNoGuest      { get; set; }
+    public int ErrorCount          { get; set; }
+    public int ConflictAlertCount  { get; set; }
+    public List<string> Errors     { get; } = new();
+    /// <summary>Tracks which flight+date conflicts have already raised an alert this sync run.</summary>
+    public HashSet<string> RaisedConflictKeys { get; } = new(StringComparer.OrdinalIgnoreCase);
 }
