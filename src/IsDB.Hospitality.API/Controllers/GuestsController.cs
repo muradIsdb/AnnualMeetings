@@ -1911,6 +1911,42 @@ public class GuestsController : ApiControllerBase
             return $"\"{ value.Replace("\"", "\"\"")}\"";
         return value;
     }
+
+    /// <summary>
+    /// Admin-only: directly update the scheduled arrival of a travel booking's linked flight.
+    /// Intended for testing the AviationStack sync against today's live data.
+    /// </summary>
+    [HttpPatch("{guestId:guid}/travel-bookings/{bookingId:guid}/scheduled-arrival")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> PatchTravelBookingScheduledArrival(
+        Guid guestId, Guid bookingId,
+        [FromBody] PatchScheduledArrivalRequest req,
+        [FromServices] AppDbContext db,
+        CancellationToken ct)
+    {
+        var booking = await db.TravelBookings
+            .Include(tb => tb.Flight)
+            .FirstOrDefaultAsync(tb => tb.Id == bookingId && tb.GuestId == guestId, ct);
+
+        if (booking == null)
+            return NotFound(new { message = "Travel booking not found" });
+
+        if (booking.Flight == null)
+            return BadRequest(new { message = "Booking has no linked flight" });
+
+        var oldDate = booking.Flight.ScheduledArrival;
+        booking.Flight.ScheduledArrival = req.ScheduledArrival.ToUniversalTime();
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new
+        {
+            bookingId,
+            flightId = booking.Flight.Id,
+            flightNumber = booking.Flight.FlightNumber,
+            oldScheduledArrival = oldDate,
+            newScheduledArrival = booking.Flight.ScheduledArrival
+        });
+    }
 }
 public record UpdateStatusRequest(GuestStatus Status, string? Notes = null);
 public record CompleteChecklistRequest(string? Notes = null);
@@ -1919,3 +1955,4 @@ public record SetStatusRequest(InboundStatus Status, string? Notes = null, strin
 public record SetOutboundStatusRequest(OutboundStatus Status, string? Notes = null);
 public record ForceStatusRequest(StatusTrack Track, int StatusValue, string? Notes = null);
 public record UpdateHotelAssignmentRequest(string? HotelName, string? RoomNumber);
+public record PatchScheduledArrivalRequest(DateTime ScheduledArrival);
