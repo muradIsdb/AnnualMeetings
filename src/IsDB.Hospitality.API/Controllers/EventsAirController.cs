@@ -1620,8 +1620,9 @@ public class EventsAirController : ApiControllerBase
             int tbUpdated = 0, flightsDeleted = 0;
             using (var cmd = dbConn.CreateCommand())
             {
-                // Step 1: nullify FlightId on all TravelBookings
-                cmd.CommandText = @"UPDATE ""TravelBookings"" SET ""FlightId"" = NULL WHERE ""FlightId"" IS NOT NULL";
+                // Step 1: delete TravelBookings rows that reference a flight
+                // (FlightId is NOT NULL constrained, so we must delete rather than nullify)
+                cmd.CommandText = @"DELETE FROM ""TravelBookings"" WHERE ""FlightId"" IS NOT NULL";
                 tbUpdated = await cmd.ExecuteNonQueryAsync(ct);
 
                 // Step 2: delete all Flights rows
@@ -1629,7 +1630,7 @@ public class EventsAirController : ApiControllerBase
                 flightsDeleted = await cmd.ExecuteNonQueryAsync(ct);
             }
             await dbConn.CloseAsync();
-            return Ok(new { success = true, travelBookingsNullified = tbUpdated, flightsDeleted });
+            return Ok(new { success = true, travelBookingsDeleted = tbUpdated, flightsDeleted });
         }
         catch (Exception ex)
         {
