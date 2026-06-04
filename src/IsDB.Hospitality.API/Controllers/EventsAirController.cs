@@ -1605,4 +1605,35 @@ public class EventsAirController : ApiControllerBase
             return StatusCode(500, new { success = false, error = ex.Message });
         }
     }
+
+    /// <summary>
+    /// TEMPORARY admin endpoint: delete all flight rows and nullify TravelBookings.FlightId
+    /// so the next EventsAir sync recreates them cleanly with correct date-keying.
+    /// </summary>
+    [HttpPost("reset-flights")]
+    public async Task<IActionResult> ResetFlights(CancellationToken ct)
+    {
+        try
+        {
+            var dbConn = _appDb.Database.GetDbConnection();
+            await dbConn.OpenAsync(ct);
+            int tbUpdated = 0, flightsDeleted = 0;
+            using (var cmd = dbConn.CreateCommand())
+            {
+                // Step 1: nullify FlightId on all TravelBookings
+                cmd.CommandText = @"UPDATE ""TravelBookings"" SET ""FlightId"" = NULL WHERE ""FlightId"" IS NOT NULL";
+                tbUpdated = await cmd.ExecuteNonQueryAsync(ct);
+
+                // Step 2: delete all Flights rows
+                cmd.CommandText = @"DELETE FROM ""Flights""";
+                flightsDeleted = await cmd.ExecuteNonQueryAsync(ct);
+            }
+            await dbConn.CloseAsync();
+            return Ok(new { success = true, travelBookingsNullified = tbUpdated, flightsDeleted });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, error = ex.Message });
+        }
+    }
 }
