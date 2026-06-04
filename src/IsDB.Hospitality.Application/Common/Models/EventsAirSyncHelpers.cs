@@ -2,6 +2,10 @@ using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using IsDB.Hospitality.Application.Common.Interfaces;
+using IsDB.Hospitality.Domain.Entities;
+using IsDB.Hospitality.Domain.Enums;
+using Microsoft.EntityFrameworkCore;
 
 namespace IsDB.Hospitality.Application.Common.Models;
 
@@ -420,7 +424,175 @@ public static class EventsAirSyncHelpers
         return result;
     }
 
-    // ─── Fetch custom field values ────────────────────────────────────────────
+    // ─── Process travel bookings into DB (shared by both sync paths) ──────────────
+
+    /// <summary>
+    /// Core flight+booking processing logic shared by both sync paths:
+    /// - GuestsController background guest sync
+    /// - EventsAirController manual travel sync
+    ///
+    /// Rules enforced here (single source of truth):
+    /// 1. Flight key = FlightNumber + raw ArrivalDate/DepartureDate (NOT computed datetime)
+    ///    → same flight on different dates = separate rows
+    /// 2. Skip booking if date is missing — never fall back to a placeholder date
+    /// 3. ScheduledArrival/ScheduledDeparture are set ONCE on row creation and never
+    ///    overwritten by subsequent guests on the same flight
+    /// 4. History is saved when a guest's flight changes (rebook)
+    /// </summary>
+    public static async Task<TravelSyncResult> ProcessTravelBookingsAsync(
+        IAppDbContext db,
+        List<EventsAirTravelDto> travelBookings,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new TravelSyncResult();
+
+        // Bulk-load active guests with their travel bookings and linked flights
+        var guestsByContactId = await db.Guests
+            .Where(g => g.IsActive)
+            .Include(g => g.TravelBookings)
+                .ThenInclude(tb => tb.Flight)
+            .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
+        // Bulk-load all existing flights keyed by (FlightNumber|Date).
+        // Same flight number on different dates = separate rows.
+        // Same flight number + same date = one row (updated in place).
+        var flightsByKey = await db.Flights
+            .ToDictionaryAsync(
+                f => $"{f.FlightNumber}|{f.ScheduledArrival.Date:yyyy-MM-dd}",
+                StringComparer.OrdinalIgnoreCase,
+                cancellationToken);
+
+        foreach (var tb in travelBookings)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(tb.FlightNumber))   { result.SkippedNoFlight++;   continue; }
+                if (string.IsNullOrEmpty(tb.ContactId))      { result.SkippedNoContact++;  continue; }
+                if (!guestsByContactId.TryGetValue(tb.ContactId, out var guest)) { result.SkippedNoGuest++; continue; }
+
+                bool isArrival = tb.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
+
+                // Parse scheduled times. EventsAir provides local Jeddah time (UTC+3) but we
+                // store them as DateTimeKind.Utc WITHOUT subtracting the offset so that the
+                // stored value is numerically identical to what EventsAir shows (e.g. 13:00
+                // stored as 13:00Z). The frontend strips the Z and displays 13:00.
+                DateTime? scheduledArrival = null, scheduledDeparture = null;
+                if (isArrival && !string.IsNullOrEmpty(tb.ArrivalDate) && DateTime.TryParse(tb.ArrivalDate, out var arrDate))
+                {
+                    var local = !string.IsNullOrEmpty(tb.Eta) && TimeSpan.TryParse(tb.Eta, out var eta)
+                        ? arrDate.Add(eta) : arrDate;
+                    scheduledArrival = DateTime.SpecifyKind(local, DateTimeKind.Utc);
+                }
+                if (!isArrival && !string.IsNullOrEmpty(tb.DepartureDate) && DateTime.TryParse(tb.DepartureDate, out var depDate))
+                {
+                    var local = !string.IsNullOrEmpty(tb.Etd) && TimeSpan.TryParse(tb.Etd, out var etd)
+                        ? depDate.Add(etd) : depDate;
+                    scheduledDeparture = DateTime.SpecifyKind(local, DateTimeKind.Utc);
+                }
+
+                // Build the flight key from the RAW date string (not the computed datetime).
+                // This prevents the 2026-01-01 fallback from merging all date-less guests.
+                var rawDateStr = isArrival ? tb.ArrivalDate : tb.DepartureDate;
+                if (string.IsNullOrEmpty(rawDateStr) || !DateTime.TryParse(rawDateStr, out var parsedDate))
+                {
+                    result.SkippedNoFlight++;
+                    continue;
+                }
+                var flightKey = $"{tb.FlightNumber}|{parsedDate.Date:yyyy-MM-dd}";
+
+                if (!flightsByKey.TryGetValue(flightKey, out var flight))
+                {
+                    // First guest on this flight+date — create the row
+                    flight = new Flight
+                    {
+                        FlightNumber       = tb.FlightNumber,
+                        AirlineName        = tb.CarrierName ?? "Unknown",
+                        ScheduledArrival   = scheduledArrival   ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc),
+                        ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc),
+                        ArrivalPortName    = tb.ArrivalPortName,
+                        ArrivalPortIataCode   = tb.ArrivalPortCode,
+                        DeparturePortName  = tb.DeparturePortName,
+                        DeparturePortIataCode = tb.DeparturePortCode,
+                        Status             = FlightStatus.Scheduled
+                    };
+                    db.Flights.Add(flight);
+                    flightsByKey[flightKey] = flight;
+                }
+                else
+                {
+                    // Subsequent guest on same flight+date — update non-date fields ONLY.
+                    // ScheduledArrival/ScheduledDeparture must NOT be overwritten: a later
+                    // guest's value would corrupt the date for all guests on this flight.
+                    if (!string.IsNullOrEmpty(tb.ArrivalPortName))    flight.ArrivalPortName    = tb.ArrivalPortName;
+                    if (!string.IsNullOrEmpty(tb.ArrivalPortCode))    flight.ArrivalPortIataCode   = tb.ArrivalPortCode;
+                    if (!string.IsNullOrEmpty(tb.DeparturePortName))  flight.DeparturePortName  = tb.DeparturePortName;
+                    if (!string.IsNullOrEmpty(tb.DeparturePortCode))  flight.DeparturePortIataCode = tb.DeparturePortCode;
+                    if (!string.IsNullOrEmpty(tb.CarrierName))        flight.AirlineName        = tb.CarrierName;
+                    // ActualTerminal, ActualGate, Status are AviationStack-owned — never touch here
+                }
+
+                var notes = tb.BookingNotes ?? tb.Comment;
+                var existingBooking = guest.TravelBookings.FirstOrDefault(b => b.IsArrival == isArrival);
+
+                if (existingBooking == null)
+                {
+                    db.TravelBookings.Add(new TravelBooking
+                    {
+                        GuestId      = guest.Id,
+                        Flight       = flight,   // navigation property — EF resolves FK on SaveChanges
+                        IsArrival    = isArrival,
+                        SeatClass    = tb.SeatClass,
+                        BookingNotes = notes,
+                        LastSyncedAt = DateTime.UtcNow
+                    });
+                    result.SavedNew++;
+                }
+                else if (existingBooking.FlightId != flight.Id)
+                {
+                    // Flight changed — save history then update the booking
+                    db.TravelBookingHistories.Add(new TravelBookingHistory
+                    {
+                        TravelBookingId          = existingBooking.Id,
+                        GuestId                  = guest.Id,
+                        PreviousFlightNumber     = existingBooking.Flight?.FlightNumber ?? "Unknown",
+                        PreviousAirlineName      = existingBooking.Flight?.AirlineName,
+                        PreviousScheduledArrival = existingBooking.Flight?.ScheduledArrival,
+                        PreviousScheduledDeparture = existingBooking.Flight?.ScheduledDeparture,
+                        PreviousDeparturePort    = existingBooking.Flight?.DeparturePortName,
+                        PreviousArrivalPort      = existingBooking.Flight?.ArrivalPortName,
+                        PreviousSeatClass        = existingBooking.SeatClass,
+                        ChangedAt                = DateTime.UtcNow
+                    });
+                    existingBooking.PreviousFlightNumber  = existingBooking.Flight?.FlightNumber;
+                    existingBooking.Flight                = flight;
+                    existingBooking.SeatClass             = tb.SeatClass;
+                    existingBooking.BookingNotes          = notes;
+                    existingBooking.ChangedSinceLastView  = true;
+                    existingBooking.ChangedAt             = DateTime.UtcNow;
+                    existingBooking.LastSyncedAt          = DateTime.UtcNow;
+                    result.Rebooked++;
+                }
+                else
+                {
+                    // Same flight — just refresh mutable fields
+                    existingBooking.SeatClass    = tb.SeatClass;
+                    existingBooking.BookingNotes = notes;
+                    existingBooking.LastSyncedAt = DateTime.UtcNow;
+                    result.UpdatedExisting++;
+                }
+            }
+            catch (Exception ex)
+            {
+                result.ErrorCount++;
+                if (result.Errors.Count < 5)
+                    result.Errors.Add($"ContactId={tb.ContactId} Flight={tb.FlightNumber}: {ex.Message}");
+            }
+        }
+
+        return result;
+    }
+
+    // ─── Fetch custom field values ──────────────────────────────────────────────────
 
     public static async Task<Dictionary<string, string>> FetchCustomFieldValuesAsync(
         string baseUrl, string eventCode, string accessToken, string fieldDefinitionId,
@@ -482,3 +654,18 @@ public record EventsAirSyncContactDto(
     string? JobTitle, string? OrganizationName, string? PrimaryEmail,
     string RegistrationTypeId, string RegistrationTypeName,
     string? Country = null, string? PhotoUrl = null, string? RankValue = null, string? VehicleTypeValue = null);
+
+/// <summary>
+/// Result counters returned by <see cref="EventsAirSyncHelpers.ProcessTravelBookingsAsync"/>.
+/// </summary>
+public class TravelSyncResult
+{
+    public int SavedNew         { get; set; }
+    public int UpdatedExisting  { get; set; }
+    public int Rebooked         { get; set; }
+    public int SkippedNoFlight  { get; set; }
+    public int SkippedNoContact { get; set; }
+    public int SkippedNoGuest   { get; set; }
+    public int ErrorCount       { get; set; }
+    public List<string> Errors  { get; } = new();
+}

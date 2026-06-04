@@ -382,183 +382,31 @@ public class GuestsController : ApiControllerBase
                 // and the booking is updated to point to the new flight.
                 // Scheduled flight fields are ALWAYS overwritten from EventsAir.
                 // ═══════════════════════════════════════════════════════════════
-                int savedNew = 0, updatedExisting = 0, rebooked = 0;
                 try
                 {
                     var travelBookings = await EventsAirSyncHelpers.FetchTravelBookingsByContactsAsync(apiBaseUrl, eventCode, token, httpClientFactory, syncedContactIds, CancellationToken.None);
-                    int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0;
                     Console.WriteLine($"[TRAVEL-SYNC] Processing {travelBookings.Count} travel bookings...");
                     foreach (var sample in travelBookings.Take(5))
                         Console.WriteLine($"[TRAVEL-SYNC] Sample: ContactId={sample.ContactId}, FlightNumber={sample.FlightNumber}, TravelType={sample.TravelTypeName}, ArrivalDate={sample.ArrivalDate}");
-                    int errorCount = 0;
-                    // ── Bulk-load active guests with travel bookings + flights ──
-                    var guestsByContactId = await bgDb.Guests
-                        .Where(g => g.IsActive)
-                        .Include(g => g.TravelBookings)
-                            .ThenInclude(tb => tb.Flight)
-                        .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase);
 
-                    // ── Bulk-load all flights keyed by (FlightNumber|Date) ────
-                    // Key on BOTH flight number AND date so that the same flight on
-                    // different days is stored as separate rows (e.g. TK334 Jun 5
-                    // and TK334 Jun 16 are two distinct rows).
-                    var allFlights = await bgDb.Flights.ToListAsync();
-                    var flightsByNumber = allFlights
-                        .ToDictionary(
-                            f => $"{f.FlightNumber}|{f.ScheduledArrival.Date:yyyy-MM-dd}",
-                            StringComparer.OrdinalIgnoreCase);
-
-                    foreach (var tbDto in travelBookings)
-                    {
-                      try
-                      {
-                        if (string.IsNullOrEmpty(tbDto.FlightNumber)) { skippedNoFlight++; continue; }
-                        if (string.IsNullOrEmpty(tbDto.ContactId)) { skippedNoContact++; continue; }
-                        if (!guestsByContactId.TryGetValue(tbDto.ContactId, out var guest)) { skippedNoGuest++; continue; }
-
-                        bool isArrival = tbDto.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
-
-                        // Parse scheduled times from EventsAir
-                        DateTime? scheduledArrival = null;
-                        DateTime? scheduledDeparture = null;
-                        if (isArrival && !string.IsNullOrEmpty(tbDto.ArrivalDate))
-                        {
-                            if (DateTime.TryParse(tbDto.ArrivalDate, out var arrDate))
-                            {
-                                arrDate = DateTime.SpecifyKind(arrDate, DateTimeKind.Utc);
-                                scheduledArrival = !string.IsNullOrEmpty(tbDto.Eta) && TimeSpan.TryParse(tbDto.Eta, out var etaTime)
-                                    ? arrDate.Add(etaTime) : arrDate;
-                            }
-                        }
-                        if (!isArrival && !string.IsNullOrEmpty(tbDto.DepartureDate))
-                        {
-                            if (DateTime.TryParse(tbDto.DepartureDate, out var depDate))
-                            {
-                                depDate = DateTime.SpecifyKind(depDate, DateTimeKind.Utc);
-                                scheduledDeparture = !string.IsNullOrEmpty(tbDto.Etd) && TimeSpan.TryParse(tbDto.Etd, out var etdTime)
-                                    ? depDate.Add(etdTime) : depDate;
-                            }
-                        }
-
-                        // Build the flight key from the RAW date string EventsAir sends.
-                        // Skip if date is missing — never fall back to 2026-01-01 (that merges
-                        // all date-less guests into one row).
-                        var rawDateStr2 = isArrival ? tbDto.ArrivalDate : tbDto.DepartureDate;
-                        if (string.IsNullOrEmpty(rawDateStr2) || !DateTime.TryParse(rawDateStr2, out var parsedRawDate2))
-                        {
-                            skippedNoFlight++;
-                            continue;
-                        }
-                        var flightDate2 = parsedRawDate2.Date;
-                        var flightKey2 = $"{tbDto.FlightNumber}|{flightDate2:yyyy-MM-dd}";
-
-                        // Find or create the Flight record using the in-memory dictionary
-                        if (!flightsByNumber.TryGetValue(flightKey2, out var flight))
-                        {
-                            flight = new Flight
-                            {
-                                FlightNumber = tbDto.FlightNumber,
-                                AirlineName = tbDto.CarrierName ?? "Unknown",
-                                ScheduledArrival = scheduledArrival ?? DateTime.SpecifyKind(parsedRawDate2, DateTimeKind.Utc),
-                                ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(parsedRawDate2, DateTimeKind.Utc),
-                                ArrivalPortName = tbDto.ArrivalPortName,
-                                ArrivalPortIataCode = tbDto.ArrivalPortCode,
-                                DeparturePortName = tbDto.DeparturePortName,
-                                DeparturePortIataCode = tbDto.DeparturePortCode,
-                                Status = FlightStatus.Scheduled
-                            };
-                            bgDb.Flights.Add(flight);
-                            flightsByNumber[flightKey2] = flight; // keep dict in sync
-                        }
-                        else
-                        {
-                            // Do NOT overwrite ScheduledArrival/ScheduledDeparture — those are
-                            // set once when the row is created. Overwriting them with a subsequent
-                            // guest's value corrupts the date for all guests on that flight.
-                            if (!string.IsNullOrEmpty(tbDto.ArrivalPortName)) flight.ArrivalPortName = tbDto.ArrivalPortName;
-                            if (!string.IsNullOrEmpty(tbDto.ArrivalPortCode)) flight.ArrivalPortIataCode = tbDto.ArrivalPortCode;
-                            if (!string.IsNullOrEmpty(tbDto.DeparturePortName)) flight.DeparturePortName = tbDto.DeparturePortName;
-                            if (!string.IsNullOrEmpty(tbDto.DeparturePortCode)) flight.DeparturePortIataCode = tbDto.DeparturePortCode;
-                            if (!string.IsNullOrEmpty(tbDto.CarrierName)) flight.AirlineName = tbDto.CarrierName;
-                            // NOTE: ActualTerminal, ActualGate, Status are Aviationstack-owned — never overwrite here
-                        }
-
-                        var notes = tbDto.BookingNotes ?? tbDto.Comment;
-
-                        // Find the existing booking for this guest+direction (arrival OR departure)
-                        // A guest has at most ONE arrival and ONE departure booking.
-                        var existingBooking = guest.TravelBookings.FirstOrDefault(b => b.IsArrival == isArrival);
-
-                        if (existingBooking == null)
-                        {
-                            // No booking yet for this direction — create new
-                            // Use Flight navigation property (not FlightId) so EF resolves FK correctly
-                            // even when the Flight was just added in this same unit-of-work
-                            bgDb.TravelBookings.Add(new TravelBooking
-                            {
-                                GuestId = guest.Id,
-                                Flight = flight,
-                                IsArrival = isArrival,
-                                SeatClass = tbDto.SeatClass,
-                                BookingNotes = notes,
-                                LastSyncedAt = DateTime.UtcNow
-                            });
-                            savedNew++;
-                        }
-                        else if (existingBooking.FlightId != flight.Id)
-                        {
-                            // Flight number changed — save history, update booking, flag as changed
-                            bgDb.TravelBookingHistories.Add(new TravelBookingHistory
-                            {
-                                TravelBookingId = existingBooking.Id,
-                                GuestId = guest.Id,
-                                PreviousFlightNumber = existingBooking.Flight?.FlightNumber ?? "Unknown",
-                                PreviousAirlineName = existingBooking.Flight?.AirlineName,
-                                PreviousScheduledArrival = existingBooking.Flight?.ScheduledArrival,
-                                PreviousScheduledDeparture = existingBooking.Flight?.ScheduledDeparture,
-                                PreviousDeparturePort = existingBooking.Flight?.DeparturePortName,
-                                PreviousArrivalPort = existingBooking.Flight?.ArrivalPortName,
-                                PreviousSeatClass = existingBooking.SeatClass,
-                                ChangedAt = DateTime.UtcNow
-                            });
-                            existingBooking.PreviousFlightNumber = existingBooking.Flight?.FlightNumber;
-                            existingBooking.FlightId = flight.Id;
-                            existingBooking.SeatClass = tbDto.SeatClass;
-                            existingBooking.BookingNotes = notes;
-                            existingBooking.ChangedSinceLastView = true;
-                            existingBooking.ChangedAt = DateTime.UtcNow;
-                            existingBooking.LastSyncedAt = DateTime.UtcNow;
-                            rebooked++;
-                        }
-                        else
-                        {
-                            // Same flight — just update mutable fields
-                            existingBooking.SeatClass = tbDto.SeatClass;
-                            existingBooking.BookingNotes = notes;
-                            existingBooking.LastSyncedAt = DateTime.UtcNow;
-                            updatedExisting++;
-                        }
-                      }
-                      catch (Exception bookingEx)
-                      {
-                        errorCount++;
-                        if (errorCount <= 5) Console.WriteLine($"[TRAVEL-SYNC] Error processing booking {tbDto.Id}: {bookingEx.Message}");
-                        foreach (var entry in bgDb.ChangeTracker.Entries().Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added || e.State == Microsoft.EntityFrameworkCore.EntityState.Modified))
-                            entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
-                      }
-                    }
-                    // Single SaveChangesAsync for the entire Pass 3 batch
+                    // ── Delegate all flight+booking processing to the shared helper ────────────
+                    // This is the single source of truth for flight deduplication rules.
+                    var syncResult = await EventsAirSyncHelpers.ProcessTravelBookingsAsync(bgDb, travelBookings);
                     await bgDb.SaveChangesAsync();
-                    Console.WriteLine($"[TRAVEL-SYNC] Results: {savedNew} new, {updatedExisting} updated, {rebooked} rebooked (history saved), {errorCount} errors, skipped: {skippedNoFlight} no flight, {skippedNoContact} no contact, {skippedNoGuest} no guest match");
+
+                    Console.WriteLine($"[TRAVEL-SYNC] Results: {syncResult.SavedNew} new, {syncResult.UpdatedExisting} updated, {syncResult.Rebooked} rebooked, {syncResult.ErrorCount} errors, skipped: {syncResult.SkippedNoFlight} no flight, {syncResult.SkippedNoContact} no contact, {syncResult.SkippedNoGuest} no guest match");
+                    foreach (var err in syncResult.Errors)
+                        Console.WriteLine($"[TRAVEL-SYNC] Error: {err}");
+
                     // Store diagnostics on job so sync-status endpoint can return them
-                    job.TravelFetched = travelBookings.Count;
-                    job.TravelSavedNew = savedNew;
-                    job.TravelUpdated = updatedExisting;
-                    job.TravelRebooked = rebooked;
-                    job.TravelSkippedNoFlight = skippedNoFlight;
-                    job.TravelSkippedNoContact = skippedNoContact;
-                    job.TravelSkippedNoGuest = skippedNoGuest;
-                    job.TravelErrors = errorCount;
+                    job.TravelFetched          = travelBookings.Count;
+                    job.TravelSavedNew         = syncResult.SavedNew;
+                    job.TravelUpdated          = syncResult.UpdatedExisting;
+                    job.TravelRebooked         = syncResult.Rebooked;
+                    job.TravelSkippedNoFlight  = syncResult.SkippedNoFlight;
+                    job.TravelSkippedNoContact = syncResult.SkippedNoContact;
+                    job.TravelSkippedNoGuest   = syncResult.SkippedNoGuest;
+                    job.TravelErrors           = syncResult.ErrorCount;
                 }
                 catch (Exception ex)
                 {
@@ -574,7 +422,7 @@ public class GuestsController : ApiControllerBase
                 var unmatchedSuffix = vehicleTypeUnmatched > 0
                     ? $" VehicleType: {vehicleTypeMatched} matched, {vehicleTypeUnmatched} unmatched ({string.Join(", ", vehicleTypeUnmatchedValues.Take(5))})"
                     : $" VehicleType: {vehicleTypeMatched} matched.";
-                job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated. Travel: {savedNew} new, {updatedExisting} updated, {rebooked} rebooked.{unmatchedSuffix}";
+                job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated. Travel: {job.TravelSavedNew} new, {job.TravelUpdated} updated, {job.TravelRebooked} rebooked.{unmatchedSuffix}";
                 Console.WriteLine($"[SYNC] All passes complete. {added} new, {updated} updated, {deactivated} deactivated.");
 
                 // ── Write comprehensive sync log entry ────────────────────────
@@ -605,7 +453,7 @@ public class GuestsController : ApiControllerBase
                         RecordsAdded = added,
                         RecordsUpdated = updated,
                         RecordsDeactivated = deactivated,
-                        TravelBookingsSynced = savedNew + updatedExisting + rebooked
+                        TravelBookingsSynced = job.TravelSavedNew + job.TravelUpdated + job.TravelRebooked
                     });
                     await logDb.SaveChangesAsync();
                 }
