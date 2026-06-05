@@ -88,7 +88,7 @@ public class AviationstackClient : IFlightTrackerClient
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
             return ParseFlightResponse(json, flightIata);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not InvalidOperationException { Message: var m } || !m.Contains("AviationStack API key"))
         {
             _logger.LogError(ex, "Error fetching flight status for {FlightIata}", flightIata);
             return null;
@@ -100,6 +100,19 @@ public class AviationstackClient : IFlightTrackerClient
         try
         {
             var doc = JsonSerializer.Deserialize<JsonElement>(json);
+
+            // AviationStack returns HTTP 200 with {"error":{"code":"...","message":"..."}} for API key errors.
+            if (doc.TryGetProperty("error", out var errorProp))
+            {
+                var code = errorProp.TryGetProperty("code", out var c) ? c.GetString() : null;
+                var msg  = errorProp.TryGetProperty("message", out var m) ? m.GetString() : "Unknown error";
+                // Auth-related error codes from AviationStack
+                if (code is "invalid_access_key" or "missing_access_key" or "inactive_user" or "https_access_restricted")
+                    throw new InvalidOperationException(
+                        $"AviationStack API key error ({code}): {msg}. Please update the API key in Settings \u2192 Flight Tracking.");
+                return null; // Other API errors (e.g. rate limit) — skip silently
+            }
+
             var data = doc.GetProperty("data");
             if (data.GetArrayLength() == 0) return null;
 
@@ -137,7 +150,7 @@ public class AviationstackClient : IFlightTrackerClient
 
             return dto;
         }
-        catch
+        catch (Exception ex) when (ex is not InvalidOperationException { Message: var m } || !m.Contains("AviationStack API key"))
         {
             return null;
         }
