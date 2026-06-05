@@ -113,11 +113,29 @@
 
 ---
 
+## Issue 9 — EventsAir OAuth Token Rate Limiting Silently Empties Travel Bookings
+
+**Problem:** After one successful travel sync (178 bookings), all subsequent syncs within the same hour returned `travelFetched: 0` with `Success` status. No error was raised. The pattern repeated: one good sync, then silence until the next token refresh.
+
+**Root cause:** EventsAir imposes an undocumented per-token query quota on `travelBookings` GraphQL requests. Once a token's quota is exhausted, EventsAir silently returns empty `travelBookings` arrays for every contact — no HTTP error, no GraphQL error field, just empty data. The app cached the OAuth token for ~59 minutes (`expires_in - 60`), so all syncs within the same hour shared the same token and accumulated against the same quota counter. After the first full sync consumed the quota, every subsequent sync in that hour returned nothing.
+
+**Confirmed by test:** A fresh token obtained directly from Microsoft OAuth returned 6 bookings for the same 5 contacts that returned 0 with the cached token.
+
+**Fix (commit `075a465`):** Before calling `FetchTravelBookingsByContactsAsync` in both the manual sync path (`GuestsController`) and the background sync path (`EventsAirSyncService`), request a brand-new token directly from Microsoft OAuth — bypassing the memory cache. This ensures each travel sync pass starts with a clean quota counter.
+
+**Lessons:**
+- **EventsAir throttles per OAuth token, not per IP or per client.** A fresh token from the same client ID immediately bypasses the limit. This is unusual — most APIs throttle at the client or IP level.
+- **Silent empty responses are the hardest failure mode to diagnose.** The sync log showed `Success` with `Travel: 0`, which is indistinguishable from a legitimate "no changes" run without additional context.
+- **Diagnostic test script is now available** at `/home/ubuntu/test_token_refresh.py`. Run it with `CLIENT_SECRET='...' python3 test_token_refresh.py` to instantly confirm whether the cached token is rate-limited vs. EventsAir being down.
+- **The token cache is still valid for Pass 1 and Pass 2** (contacts fetch). Only the travel bookings pass needs a fresh token. This keeps the optimization for the bulk of the sync while fixing the quota issue for the sensitive travel pass.
+
+---
+
 ## General Lessons
 
 | Theme | Lesson |
 |-------|--------|
-| **EventsAir API reliability** | EventsAir returns HTTP 500 intermittently and silently returns empty data under query complexity load. Both must be handled explicitly. |
+| **EventsAir API reliability** | EventsAir returns HTTP 500 intermittently, silently returns empty data under query complexity load, and silently empties travel bookings once a token's per-query quota is exhausted. All three failure modes must be handled explicitly. |
 | **Silent failures** | A `Success` sync status with `travelFetched: 0` is not necessarily correct. Consider adding a `Warning` state for anomalous-but-not-errored conditions. |
 | **Single source of truth** | All travel booking processing must go through `ProcessTravelBookingsAsync`. Any new sync entry point must call this helper, never reimplement inline. |
 | **Bundle surgery** | Effective as a one-off fix but leaves no maintainable source. Limit to emergency fixes; recover source code for any page that requires repeated changes. |
@@ -142,3 +160,5 @@
 | `610af1d` | perf: batch size 10→25, merge Pass1+2 saves, cache field mappings 1h |
 | `4172527` | fix: detect flight date changes in EventsAir and update flight row in-place |
 | `c6fad0a` | fix: revert travel booking batch size 25→10 (EventsAir silent empty response) |
+| `29ef58c` | fix: handle reverse flight date change (target row already exists — relink instead of update in-place) |
+| `075a465` | fix: use fresh OAuth token for travel bookings pass to bypass per-token rate limit |
