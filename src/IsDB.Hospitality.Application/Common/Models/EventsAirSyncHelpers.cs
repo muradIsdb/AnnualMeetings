@@ -555,25 +555,47 @@ public static class EventsAirSyncHelpers
                         if (sharedBookingCount == 1)
                         {
                             // This guest is the only one on the old flight row.
-                            // Update the row in-place to preserve AviationStack live data.
                             var oldKey = $"{priorBooking.Flight.FlightNumber}|{priorFlightDate:yyyy-MM-dd}";
-                            priorBooking.Flight.ScheduledArrival   = scheduledArrival   ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
-                            priorBooking.Flight.ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
-                            // Re-key the dictionary so subsequent lookups find the updated row
-                            if (flightsByKey.ContainsKey(oldKey))
-                                flightsByKey.Remove(oldKey);
-                            flightsByKey[flightKey] = priorBooking.Flight;
-                            // Also update the firstGuestName map
-                            if (firstGuestNameByFlightKey.ContainsKey(oldKey))
+
+                            if (flightsByKey.TryGetValue(flightKey, out var targetFlight))
                             {
-                                var name = firstGuestNameByFlightKey[oldKey];
-                                firstGuestNameByFlightKey.Remove(oldKey);
-                                firstGuestNameByFlightKey[flightKey] = name;
+                                // A flight row for the new date already exists in the DB.
+                                // Capture the orphaned source row BEFORE relinking, then delete it.
+                                var orphanedFlight = priorBooking.Flight;
+                                // Relink this guest's booking to the existing target row.
+                                priorBooking.Flight = targetFlight;
+                                // Delete the now-orphaned source row (confirmed: only this guest was on it).
+                                db.Flights.Remove(orphanedFlight);
+                                // Remove the orphaned row from the dictionary
+                                if (flightsByKey.ContainsKey(oldKey))
+                                    flightsByKey.Remove(oldKey);
+                                if (firstGuestNameByFlightKey.ContainsKey(oldKey))
+                                    firstGuestNameByFlightKey.Remove(oldKey);
+                                // The booking is already relinked; the normal update path below
+                                // will handle any field updates on the target flight row.
+                            }
+                            else
+                            {
+                                // No row exists for the new date yet.
+                                // Update the existing row in-place to preserve AviationStack data.
+                                priorBooking.Flight.ScheduledArrival   = scheduledArrival   ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
+                                priorBooking.Flight.ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
+                                // Re-key the dictionary so subsequent lookups find the updated row
+                                if (flightsByKey.ContainsKey(oldKey))
+                                    flightsByKey.Remove(oldKey);
+                                flightsByKey[flightKey] = priorBooking.Flight;
+                                // Also update the firstGuestName map
+                                if (firstGuestNameByFlightKey.ContainsKey(oldKey))
+                                {
+                                    var name = firstGuestNameByFlightKey[oldKey];
+                                    firstGuestNameByFlightKey.Remove(oldKey);
+                                    firstGuestNameByFlightKey[flightKey] = name;
+                                }
                             }
                         }
                         // If sharedBookingCount > 1, other guests are still on the old flight.
                         // Leave the old row intact; the new flightKey will create a new row below
-                        // and the rebook step (line 646) will relink this guest's booking to it.
+                        // and the rebook step below will relink this guest's booking to it.
                     }
                 }
 
