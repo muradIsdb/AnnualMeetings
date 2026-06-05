@@ -454,44 +454,18 @@ public static class EventsAirSyncHelpers
                 .ThenInclude(tb => tb.Flight)
             .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
-        // Bulk-load all existing flights keyed by (FlightNumber|Date).
-        // Same flight number on different dates = separate rows.
-        // Same flight number + same date = one row (updated in place).
+        // Bulk-load all existing flights keyed by (FlightNumber|Date|HHmm).
+        // Same flight number on different dates OR different times = separate rows.
+        // This ensures arrival time changes in EventsAir are picked up correctly.
         var flightsByKey = await db.Flights
             .ToDictionaryAsync(
-                f => $"{f.FlightNumber}|{f.ScheduledArrival.Date:yyyy-MM-dd}",
+                f => $"{f.FlightNumber}|{f.ScheduledArrival.Date:yyyy-MM-dd}|{f.ScheduledArrival:HHmm}",
                 StringComparer.OrdinalIgnoreCase,
                 cancellationToken);
 
-        // Pre-load titles of existing unresolved conflict alerts so we don't raise duplicates
-        // across multiple sync runs for the same unresolved conflict.
-        var existingConflictTitles = new HashSet<string>(
-            await db.Alerts
-                .Where(a => !a.IsResolved && a.Title.StartsWith("Flight time conflict:"))
-                .Select(a => a.Title)
-                .ToListAsync(cancellationToken),
-            StringComparer.OrdinalIgnoreCase);
-
-        // Track the first guest name seen per flight key so we can include both names in conflict messages.
-        // Pre-load from existing TravelBookings so flights that already exist in the DB also show a real name.
-        var firstGuestNameByFlightKey = await db.TravelBookings
-            .Include(b => b.Guest)
-            .Include(b => b.Flight)
-            .Where(b => b.IsArrival)
-            .GroupBy(b => b.FlightId)
-            .Select(g => new
-            {
-                FlightKey = g.First().Flight.FlightNumber + "|" + g.First().Flight.ScheduledArrival.Date.ToString("yyyy-MM-dd"),
-                GuestName = (g.First().Guest.FirstName + " " + g.First().Guest.LastName).Trim()
-            })
-            .ToDictionaryAsync(x => x.FlightKey, x => x.GuestName, StringComparer.OrdinalIgnoreCase, cancellationToken);
-
-        // Fetch the first Admin staff user's ID to use as creator for system-generated notifications.
-        // Notifications require a non-null CreatedByStaffId FK.
-        var systemStaffId = await db.StaffUsers
-            .Where(s => s.Roles.Any(r => r.Role == UserRole.Admin))
-            .Select(s => s.Id)
-            .FirstOrDefaultAsync(cancellationToken);
+        // firstGuestNameByFlightKey is no longer needed: with a time-aware key, each unique
+        // flight+date+time gets its own row, so there are no same-row time conflicts to report.
+        var firstGuestNameByFlightKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var tb in travelBookings)
         {
@@ -534,70 +508,13 @@ public static class EventsAirSyncHelpers
                     result.SkippedNoFlight++;
                     continue;
                 }
-                var flightKey = $"{tb.FlightNumber}|{parsedDate.Date:yyyy-MM-dd}";
+                // Build the flight key from flight number, date, and scheduled time (HHmm).
+                // Including time ensures arrival time changes in EventsAir create a new row
+                // and relink the booking, rather than being silently ignored.
+                var scheduledTime = (isArrival ? scheduledArrival : scheduledDeparture)
+                    ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
+                var flightKey = $"{tb.FlightNumber}|{parsedDate.Date:yyyy-MM-dd}|{scheduledTime:HHmm}";
 
-                // ── Flight date change detection ─────────────────────────────────────────
-                // If the guest already has a booking for this travel type and its flight
-                // date differs from what EventsAir is now sending, the date was changed in
-                // EventsAir. We need to reconcile the flight row before the key lookup so
-                // the correct flight row is found (or created) below.
-                var priorBooking = guest.TravelBookings.FirstOrDefault(b => b.IsArrival == isArrival);
-                if (priorBooking?.Flight != null)
-                {
-                    var priorFlightDate = priorBooking.Flight.ScheduledArrival.Date;
-                    var incomingDate    = parsedDate.Date;
-                    if (priorFlightDate != incomingDate)
-                    {
-                        // The date changed. Check how many active bookings share the old flight row.
-                        var sharedBookingCount = await db.TravelBookings
-                            .CountAsync(b => b.FlightId == priorBooking.FlightId, cancellationToken);
-
-                        if (sharedBookingCount == 1)
-                        {
-                            // This guest is the only one on the old flight row.
-                            var oldKey = $"{priorBooking.Flight.FlightNumber}|{priorFlightDate:yyyy-MM-dd}";
-
-                            if (flightsByKey.TryGetValue(flightKey, out var targetFlight))
-                            {
-                                // A flight row for the new date already exists in the DB.
-                                // Capture the orphaned source row BEFORE relinking, then delete it.
-                                var orphanedFlight = priorBooking.Flight;
-                                // Relink this guest's booking to the existing target row.
-                                priorBooking.Flight = targetFlight;
-                                // Delete the now-orphaned source row (confirmed: only this guest was on it).
-                                db.Flights.Remove(orphanedFlight);
-                                // Remove the orphaned row from the dictionary
-                                if (flightsByKey.ContainsKey(oldKey))
-                                    flightsByKey.Remove(oldKey);
-                                if (firstGuestNameByFlightKey.ContainsKey(oldKey))
-                                    firstGuestNameByFlightKey.Remove(oldKey);
-                                // The booking is already relinked; the normal update path below
-                                // will handle any field updates on the target flight row.
-                            }
-                            else
-                            {
-                                // No row exists for the new date yet.
-                                // Update the existing row in-place to preserve AviationStack data.
-                                priorBooking.Flight.ScheduledArrival   = scheduledArrival   ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
-                                priorBooking.Flight.ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
-                                // Re-key the dictionary so subsequent lookups find the updated row
-                                if (flightsByKey.ContainsKey(oldKey))
-                                    flightsByKey.Remove(oldKey);
-                                flightsByKey[flightKey] = priorBooking.Flight;
-                                // Also update the firstGuestName map
-                                if (firstGuestNameByFlightKey.ContainsKey(oldKey))
-                                {
-                                    var name = firstGuestNameByFlightKey[oldKey];
-                                    firstGuestNameByFlightKey.Remove(oldKey);
-                                    firstGuestNameByFlightKey[flightKey] = name;
-                                }
-                            }
-                        }
-                        // If sharedBookingCount > 1, other guests are still on the old flight.
-                        // Leave the old row intact; the new flightKey will create a new row below
-                        // and the rebook step below will relink this guest's booking to it.
-                    }
-                }
 
                 if (!flightsByKey.TryGetValue(flightKey, out var flight))
                 {
@@ -622,9 +539,8 @@ public static class EventsAirSyncHelpers
                 }
                 else
                 {
-                    // Subsequent guest on same flight+date — update non-date fields ONLY.
-                    // ScheduledArrival/ScheduledDeparture must NOT be overwritten: a later
-                    // guest's value would corrupt the date for all guests on this flight.
+                    // Subsequent guest on same flight+date+time — update non-key fields only.
+                    // ScheduledArrival/ScheduledDeparture are part of the key and must not be overwritten.
                     if (!string.IsNullOrEmpty(tb.ArrivalPortName))    flight.ArrivalPortName    = tb.ArrivalPortName;
                     if (!string.IsNullOrEmpty(tb.ArrivalPortCode))    flight.ArrivalPortIataCode   = tb.ArrivalPortCode;
                     if (!string.IsNullOrEmpty(tb.DeparturePortName))  flight.DeparturePortName  = tb.DeparturePortName;
@@ -632,60 +548,10 @@ public static class EventsAirSyncHelpers
                     if (!string.IsNullOrEmpty(tb.CarrierName))        flight.AirlineName        = tb.CarrierName;
                     // ActualTerminal, ActualGate, Status are AviationStack-owned — never touch here
 
-                    // ── Conflict detection ────────────────────────────────────────────────────
-                    // If this guest's arrival time differs from the stored flight time, the
-                    // EventsAir data is inconsistent. Raise an Alert so the team can correct it.
-                    if (isArrival && scheduledArrival.HasValue)
-                    {
-                        var storedTime = flight.ScheduledArrival.TimeOfDay;
-                        var incomingTime = scheduledArrival.Value.TimeOfDay;
-                        // Tolerate up to 1 minute difference (rounding artefacts)
-                        if (Math.Abs((storedTime - incomingTime).TotalMinutes) > 1)
-                        {
-                            var conflictKey = $"FLIGHT_TIME_CONFLICT|{tb.FlightNumber}|{parsedDate.Date:yyyy-MM-dd}";
-                            // Avoid duplicate alerts: only raise one per flight+date per sync run
-                            // AND skip if an unresolved alert for this conflict already exists in the DB
-                            var alertTitle = $"Flight time conflict: {tb.FlightNumber} on {parsedDate.Date:dd MMM yyyy}";
-                            if (!result.RaisedConflictKeys.Contains(conflictKey)
-                                && !existingConflictTitles.Contains(alertTitle))
-                            {
-                                result.RaisedConflictKeys.Add(conflictKey);
-                                existingConflictTitles.Add(alertTitle); // prevent a second guest on same flight raising another
+                    // Note: conflict detection (same flight+date, different times) is no longer needed
+                    // because the time-aware key ensures each unique time gets its own flight row.
+                    // Two guests on TK334 at different times will be on separate rows automatically.
 
-                                var firstGuestName = firstGuestNameByFlightKey.TryGetValue(flightKey, out var fn) ? fn : "unknown";
-                                var currentGuestName = $"{guest.FirstName} {guest.LastName}".Trim();
-                                var conflictMessage = $"Flight {tb.FlightNumber} on {parsedDate.Date:dd MMM yyyy} has inconsistent arrival times across guests in EventsAir: "
-                                                   + $"{flight.ScheduledArrival:HH:mm} ({firstGuestName}) vs {scheduledArrival.Value:HH:mm} ({currentGuestName}). "
-                                                   + "Please correct the arrival time in EventsAir and re-sync.";
-
-                                // ── Alert (visible in the Alerts panel) ──────────────────────────
-                                db.Alerts.Add(new Alert
-                                {
-                                    Title             = alertTitle,
-                                    Message           = conflictMessage,
-                                    Severity          = AlertSeverity.Medium,
-                                    IsSystemGenerated = true
-                                });
-
-                                // ── Notifications to Admin, Airport, and Transport roles ─────────
-                                if (systemStaffId != Guid.Empty)
-                                {
-                                    foreach (var role in new[] { "Admin", "Airport", "Transport" })
-                                    {
-                                        db.Notifications.Add(new Notification
-                                        {
-                                            Message          = $"⚠ {alertTitle} — {conflictMessage}",
-                                            TargetRoles      = role,
-                                            Priority         = AlertSeverity.Medium,
-                                            CreatedByStaffId = systemStaffId
-                                        });
-                                    }
-                                }
-
-                                result.ConflictAlertCount++;
-                            }
-                        }
-                    }
                 }
 
                 var notes = tb.BookingNotes ?? tb.Comment;
