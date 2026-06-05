@@ -536,6 +536,47 @@ public static class EventsAirSyncHelpers
                 }
                 var flightKey = $"{tb.FlightNumber}|{parsedDate.Date:yyyy-MM-dd}";
 
+                // ── Flight date change detection ─────────────────────────────────────────
+                // If the guest already has a booking for this travel type and its flight
+                // date differs from what EventsAir is now sending, the date was changed in
+                // EventsAir. We need to reconcile the flight row before the key lookup so
+                // the correct flight row is found (or created) below.
+                var priorBooking = guest.TravelBookings.FirstOrDefault(b => b.IsArrival == isArrival);
+                if (priorBooking?.Flight != null)
+                {
+                    var priorFlightDate = priorBooking.Flight.ScheduledArrival.Date;
+                    var incomingDate    = parsedDate.Date;
+                    if (priorFlightDate != incomingDate)
+                    {
+                        // The date changed. Check how many active bookings share the old flight row.
+                        var sharedBookingCount = await db.TravelBookings
+                            .CountAsync(b => b.FlightId == priorBooking.FlightId, cancellationToken);
+
+                        if (sharedBookingCount == 1)
+                        {
+                            // This guest is the only one on the old flight row.
+                            // Update the row in-place to preserve AviationStack live data.
+                            var oldKey = $"{priorBooking.Flight.FlightNumber}|{priorFlightDate:yyyy-MM-dd}";
+                            priorBooking.Flight.ScheduledArrival   = scheduledArrival   ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
+                            priorBooking.Flight.ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
+                            // Re-key the dictionary so subsequent lookups find the updated row
+                            if (flightsByKey.ContainsKey(oldKey))
+                                flightsByKey.Remove(oldKey);
+                            flightsByKey[flightKey] = priorBooking.Flight;
+                            // Also update the firstGuestName map
+                            if (firstGuestNameByFlightKey.ContainsKey(oldKey))
+                            {
+                                var name = firstGuestNameByFlightKey[oldKey];
+                                firstGuestNameByFlightKey.Remove(oldKey);
+                                firstGuestNameByFlightKey[flightKey] = name;
+                            }
+                        }
+                        // If sharedBookingCount > 1, other guests are still on the old flight.
+                        // Leave the old row intact; the new flightKey will create a new row below
+                        // and the rebook step (line 646) will relink this guest's booking to it.
+                    }
+                }
+
                 if (!flightsByKey.TryGetValue(flightKey, out var flight))
                 {
                     // First guest on this flight+date — create the row
