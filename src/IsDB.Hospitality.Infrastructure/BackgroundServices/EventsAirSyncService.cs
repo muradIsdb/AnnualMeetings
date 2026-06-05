@@ -67,6 +67,17 @@ public class EventsAirSyncService : BackgroundService
         {
             try
             {
+                // Read interval from DB BEFORE delaying, so it updates even if startup sync failed
+                using (var scope = _serviceProvider.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var config = await db.EventsAirConfigs.FirstOrDefaultAsync(stoppingToken);
+                    if (config != null && config.SyncIntervalMinutes > 0)
+                    {
+                        _syncInterval = TimeSpan.FromMinutes(config.SyncIntervalMinutes);
+                    }
+                }
+                
                 await Task.Delay(_syncInterval, stoppingToken);
             }
             catch (OperationCanceledException)
@@ -106,9 +117,7 @@ public class EventsAirSyncService : BackgroundService
             return;
         }
 
-        // Update interval from DB config so the next sleep uses the latest value
-        if (config.SyncIntervalMinutes > 0)
-            _syncInterval = TimeSpan.FromMinutes(config.SyncIntervalMinutes);
+        // Interval is now read at the top of the recurring loop, no need to update here
 
         if (!config.IsActive || !config.AutoSyncEnabled)
         {
