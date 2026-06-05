@@ -310,17 +310,8 @@ public class EventsAirSyncService : BackgroundService
                 // in EventsAir are picked up correctly on the next sync.
                 var syncResult = await EventsAirSyncHelpers.ProcessTravelBookingsAsync(db, travelBookings, cancellationToken);
 
-                // ── Orphan cleanup: delete flight rows with no remaining bookings ─────────
-                var orphanFlightIds = await db.Flights
-                    .Where(f => !db.TravelBookings.Any(tb => tb.FlightId == f.Id))
-                    .Select(f => f.Id)
-                    .ToListAsync(cancellationToken);
-                if (orphanFlightIds.Count > 0)
-                {
-                    var orphans = await db.Flights.Where(f => orphanFlightIds.Contains(f.Id)).ToListAsync(cancellationToken);
-                    db.Flights.RemoveRange(orphans);
-                    _logger.LogInformation("Orphan flight cleanup: removed {Count} flight rows with no bookings.", orphans.Count);
-                }
+                // Orphan cleanup is no longer needed because ProcessTravelBookingsAsync
+                // now truncates and reloads all flights from scratch.
 
                 await db.SaveChangesAsync(cancellationToken);
                 travelSynced = syncResult.SavedNew + syncResult.UpdatedExisting + syncResult.Rebooked;

@@ -447,21 +447,21 @@ public static class EventsAirSyncHelpers
     {
         var result = new TravelSyncResult();
 
-        // Bulk-load active guests with their travel bookings and linked flights
+        // ── Option A: Truncate-and-reload within the same transaction ──
+        // First, clear all existing flight data. Because we do this here, 
+        // it runs inside the single SaveChangesAsync transaction, so the UI
+        // never sees an empty state.
+        db.TravelBookingHistories.RemoveRange(db.TravelBookingHistories);
+        db.TravelBookings.RemoveRange(db.TravelBookings);
+        db.Flights.RemoveRange(db.Flights);
+
+        // Bulk-load active guests to link the new bookings
         var guestsByContactId = await db.Guests
             .Where(g => g.IsActive)
-            .Include(g => g.TravelBookings)
-                .ThenInclude(tb => tb.Flight)
             .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
-        // Bulk-load all existing flights keyed by (FlightNumber|Date|HHmm).
-        // Same flight number on different dates OR different times = separate rows.
-        // This ensures arrival time changes in EventsAir are picked up correctly.
-        var flightsByKey = await db.Flights
-            .ToDictionaryAsync(
-                f => $"{f.FlightNumber}|{f.ScheduledArrival.Date:yyyy-MM-dd}|{f.ScheduledArrival:HHmm}",
-                StringComparer.OrdinalIgnoreCase,
-                cancellationToken);
+        // Track flights we create in this pass to avoid duplicates within the new dataset
+        var flightsByKey = new Dictionary<string, Flight>(StringComparer.OrdinalIgnoreCase);
 
         // firstGuestNameByFlightKey is no longer needed: with a time-aware key, each unique
         // flight+date+time gets its own row, so there are no same-row time conflicts to report.
@@ -555,54 +555,18 @@ public static class EventsAirSyncHelpers
                 }
 
                 var notes = tb.BookingNotes ?? tb.Comment;
-                var existingBooking = guest.TravelBookings.FirstOrDefault(b => b.IsArrival == isArrival);
-
-                if (existingBooking == null)
+                
+                // We just deleted everything, so we always insert fresh bookings
+                db.TravelBookings.Add(new TravelBooking
                 {
-                    db.TravelBookings.Add(new TravelBooking
-                    {
-                        GuestId      = guest.Id,
-                        Flight       = flight,   // navigation property — EF resolves FK on SaveChanges
-                        IsArrival    = isArrival,
-                        SeatClass    = tb.SeatClass,
-                        BookingNotes = notes,
-                        LastSyncedAt = DateTime.UtcNow
-                    });
-                    result.SavedNew++;
-                }
-                else if (existingBooking.FlightId != flight.Id)
-                {
-                    // Flight changed — save history then update the booking
-                    db.TravelBookingHistories.Add(new TravelBookingHistory
-                    {
-                        TravelBookingId          = existingBooking.Id,
-                        GuestId                  = guest.Id,
-                        PreviousFlightNumber     = existingBooking.Flight?.FlightNumber ?? "Unknown",
-                        PreviousAirlineName      = existingBooking.Flight?.AirlineName,
-                        PreviousScheduledArrival = existingBooking.Flight?.ScheduledArrival,
-                        PreviousScheduledDeparture = existingBooking.Flight?.ScheduledDeparture,
-                        PreviousDeparturePort    = existingBooking.Flight?.DeparturePortName,
-                        PreviousArrivalPort      = existingBooking.Flight?.ArrivalPortName,
-                        PreviousSeatClass        = existingBooking.SeatClass,
-                        ChangedAt                = DateTime.UtcNow
-                    });
-                    existingBooking.PreviousFlightNumber  = existingBooking.Flight?.FlightNumber;
-                    existingBooking.Flight                = flight;
-                    existingBooking.SeatClass             = tb.SeatClass;
-                    existingBooking.BookingNotes          = notes;
-                    existingBooking.ChangedSinceLastView  = true;
-                    existingBooking.ChangedAt             = DateTime.UtcNow;
-                    existingBooking.LastSyncedAt          = DateTime.UtcNow;
-                    result.Rebooked++;
-                }
-                else
-                {
-                    // Same flight — just refresh mutable fields
-                    existingBooking.SeatClass    = tb.SeatClass;
-                    existingBooking.BookingNotes = notes;
-                    existingBooking.LastSyncedAt = DateTime.UtcNow;
-                    result.UpdatedExisting++;
-                }
+                    GuestId      = guest.Id,
+                    Flight       = flight,   // navigation property — EF resolves FK on SaveChanges
+                    IsArrival    = isArrival,
+                    SeatClass    = tb.SeatClass,
+                    BookingNotes = notes,
+                    LastSyncedAt = DateTime.UtcNow
+                });
+                result.SavedNew++;
             }
             catch (Exception ex)
             {
