@@ -71,6 +71,17 @@ public class AviationstackClient : IFlightTrackerClient
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Aviationstack returned {StatusCode} for flight {FlightIata}", response.StatusCode, flightIata);
+
+                // 401/403 means the API key is invalid or expired — surface this as a hard failure
+                // so the sync log records "Failed" and the UI indicator turns red.
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+                    response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                {
+                    throw new InvalidOperationException(
+                        $"AviationStack API key is invalid or unauthorised (HTTP {(int)response.StatusCode}). " +
+                        "Please update the API key in Settings → Flight Tracking.");
+                }
+
                 return null;
             }
 
