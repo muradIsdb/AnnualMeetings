@@ -67,6 +67,17 @@ public class EventsAirSyncService : BackgroundService
         {
             try
             {
+                // Read interval from DB BEFORE delaying, so it updates even if startup sync failed
+                using (var scope = _serviceProvider.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var config = await db.EventsAirConfigs.FirstOrDefaultAsync(stoppingToken);
+                    if (config != null && config.SyncIntervalMinutes > 0)
+                    {
+                        _syncInterval = TimeSpan.FromMinutes(config.SyncIntervalMinutes);
+                    }
+                }
+                
                 await Task.Delay(_syncInterval, stoppingToken);
             }
             catch (OperationCanceledException)
@@ -106,9 +117,7 @@ public class EventsAirSyncService : BackgroundService
             return;
         }
 
-        // Update interval from DB config so the next sleep uses the latest value
-        if (config.SyncIntervalMinutes > 0)
-            _syncInterval = TimeSpan.FromMinutes(config.SyncIntervalMinutes);
+        // Interval is now read at the top of the recurring loop, no need to update here
 
         if (!config.IsActive || !config.AutoSyncEnabled)
         {
@@ -175,8 +184,26 @@ public class EventsAirSyncService : BackgroundService
             // ══════════════════════════════════════════════════════════════════
             // PASS 1: Fetch contacts with DedicatedCar=True and upsert guests
             // ══════════════════════════════════════════════════════════════════
+            // Load field GUIDs from DB filtered by active event code
+            const string defaultDedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+            const string defaultRankGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+            var fieldMappings = await db.SyncFieldMappings
+                .Where(f => f.EventCode == null || f.EventCode == eventCode)
+                .ToListAsync(cancellationToken);
+            var dedicatedCarGuid = (fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+                ?? fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase)))
+                ?.EventsAirFieldGuid ?? defaultDedicatedCarGuid;
+            var rankGuid = (fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+                ?? fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase)))
+                ?.EventsAirFieldGuid ?? defaultRankGuid;
+            _logger.LogInformation("EventsAir background sync using DedicatedCar GUID={DedicatedCarGuid}, Rank GUID={RankGuid} for event {EventCode}.",
+                dedicatedCarGuid, rankGuid, eventCode);
             var contacts = await EventsAirSyncHelpers.FetchContactsWithDedicatedCarAsync(
-                apiBaseUrl, eventCode, token, httpClientFactory, cancellationToken);
+                apiBaseUrl, eventCode, token, httpClientFactory, cancellationToken, dedicatedCarGuid, rankGuid);
 
             _logger.LogInformation("EventsAir background sync Pass 1: {Count} contacts with DedicatedCar=True.", contacts.Count);
 
@@ -274,132 +301,22 @@ public class EventsAirSyncService : BackgroundService
             // ══════════════════════════════════════════════════════════════════
             try
             {
-                var travelBookings = await EventsAirSyncHelpers.FetchTravelBookingsAsync(
-                    apiBaseUrl, eventCode, token, httpClientFactory, cancellationToken);
+                // Use per-contact batched query (avoids hanging global travelBookings query)
+                var travelBookings = await EventsAirSyncHelpers.FetchTravelBookingsByContactsAsync(
+                    apiBaseUrl, eventCode, token, httpClientFactory, syncedContactIds, cancellationToken);
 
-                // ── Bulk-load active guests with their travel bookings + flights ──
-                var guestsByContactId = await db.Guests
-                    .Where(g => g.IsActive)
-                    .Include(g => g.TravelBookings)
-                        .ThenInclude(tb => tb.Flight)
-                    .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+                // ── Delegate all flight+booking processing to the shared helper ────────────
+                // Uses the time-aware key (FlightNumber|Date|HHmm) so date AND time changes
+                // in EventsAir are picked up correctly on the next sync.
+                var syncResult = await EventsAirSyncHelpers.ProcessTravelBookingsAsync(db, travelBookings, cancellationToken);
 
-                // ── Bulk-load all flights keyed by flight number ──────────────
-                var flightsByNumber = await db.Flights
-                    .ToDictionaryAsync(f => f.FlightNumber, StringComparer.OrdinalIgnoreCase, cancellationToken);
+                // Orphan cleanup is no longer needed because ProcessTravelBookingsAsync
+                // now truncates and reloads all flights from scratch.
 
-                foreach (var tbDto in travelBookings)
-                {
-                    if (string.IsNullOrEmpty(tbDto.FlightNumber) || string.IsNullOrEmpty(tbDto.ContactId))
-                        continue;
-
-                    if (!guestsByContactId.TryGetValue(tbDto.ContactId, out var guest))
-                        continue;
-
-                    bool isArrival = tbDto.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
-
-                    // Parse scheduled times
-                    DateTime? scheduledArrival = null;
-                    DateTime? scheduledDeparture = null;
-
-                    if (isArrival && !string.IsNullOrEmpty(tbDto.ArrivalDate) &&
-                        DateTime.TryParse(tbDto.ArrivalDate, out var arrDate))
-                    {
-                        scheduledArrival = !string.IsNullOrEmpty(tbDto.Eta) &&
-                            TimeSpan.TryParse(tbDto.Eta, out var etaTime)
-                            ? arrDate.Add(etaTime) : arrDate;
-                    }
-                    if (!isArrival && !string.IsNullOrEmpty(tbDto.DepartureDate) &&
-                        DateTime.TryParse(tbDto.DepartureDate, out var depDate))
-                    {
-                        scheduledDeparture = !string.IsNullOrEmpty(tbDto.Etd) &&
-                            TimeSpan.TryParse(tbDto.Etd, out var etdTime)
-                            ? depDate.Add(etdTime) : depDate;
-                    }
-
-                    // Find or create the Flight record using the in-memory dictionary
-                    if (!flightsByNumber.TryGetValue(tbDto.FlightNumber, out var flight))
-                    {
-                        flight = new Flight
-                        {
-                            FlightNumber = tbDto.FlightNumber,
-                            AirlineName = tbDto.CarrierName ?? "Unknown",
-                            ScheduledArrival = scheduledArrival ?? DateTime.MinValue,
-                            ScheduledDeparture = scheduledDeparture ?? DateTime.MinValue,
-                            ArrivalPortName = tbDto.ArrivalPortName,
-                            DeparturePortName = tbDto.DeparturePortName,
-                            Status = FlightStatus.Scheduled
-                        };
-                        db.Flights.Add(flight);
-                        flightsByNumber[tbDto.FlightNumber] = flight; // keep dict in sync
-                    }
-                    else
-                    {
-                        // Always overwrite scheduled fields (EventsAir-owned)
-                        if (scheduledArrival.HasValue) flight.ScheduledArrival = scheduledArrival.Value;
-                        if (scheduledDeparture.HasValue) flight.ScheduledDeparture = scheduledDeparture.Value;
-                        if (!string.IsNullOrEmpty(tbDto.ArrivalPortName)) flight.ArrivalPortName = tbDto.ArrivalPortName;
-                        if (!string.IsNullOrEmpty(tbDto.DeparturePortName)) flight.DeparturePortName = tbDto.DeparturePortName;
-                        if (!string.IsNullOrEmpty(tbDto.CarrierName)) flight.AirlineName = tbDto.CarrierName;
-                    }
-
-                    // Replace-on-rebooking: find existing booking by direction (arrival/departure)
-                    var existingBooking = guest.TravelBookings.FirstOrDefault(b => b.IsArrival == isArrival);
-                    var notes = tbDto.BookingNotes ?? tbDto.Comment;
-
-                    if (existingBooking == null)
-                    {
-                        // New booking
-                        db.TravelBookings.Add(new TravelBooking
-                        {
-                            GuestId = guest.Id,
-                            FlightId = flight.Id,
-                            IsArrival = isArrival,
-                            SeatClass = tbDto.SeatClass,
-                            BookingNotes = notes,
-                            LastSyncedAt = DateTime.UtcNow
-                        });
-                    }
-                    else if (existingBooking.FlightId != flight.Id)
-                    {
-                        // Flight changed — save history and update booking
-                        db.TravelBookingHistories.Add(new TravelBookingHistory
-                        {
-                            Id = Guid.NewGuid(),
-                            TravelBookingId = existingBooking.Id,
-                            GuestId = guest.Id,
-                            PreviousFlightNumber = existingBooking.Flight?.FlightNumber ?? "",
-                            PreviousAirlineName = existingBooking.Flight?.AirlineName,
-                            PreviousScheduledArrival = existingBooking.Flight?.ScheduledArrival,
-                            PreviousScheduledDeparture = existingBooking.Flight?.ScheduledDeparture,
-                            PreviousDeparturePort = existingBooking.Flight?.DeparturePortName,
-                            PreviousArrivalPort = existingBooking.Flight?.ArrivalPortName,
-                            PreviousSeatClass = existingBooking.SeatClass,
-                            ChangedAt = DateTime.UtcNow
-                        });
-
-                        existingBooking.FlightId = flight.Id;
-                        existingBooking.SeatClass = tbDto.SeatClass;
-                        existingBooking.BookingNotes = notes;
-                        existingBooking.ChangedSinceLastView = true;
-                        existingBooking.PreviousFlightNumber = existingBooking.Flight?.FlightNumber;
-                        existingBooking.ChangedAt = DateTime.UtcNow;
-                        existingBooking.LastSyncedAt = DateTime.UtcNow;
-                    }
-                    else
-                    {
-                        // Same flight — update mutable fields only
-                        existingBooking.SeatClass = tbDto.SeatClass;
-                        existingBooking.BookingNotes = notes;
-                        existingBooking.LastSyncedAt = DateTime.UtcNow;
-                    }
-
-                    travelSynced++;
-                }
-
-                // Single SaveChangesAsync for the entire Pass 3 batch
                 await db.SaveChangesAsync(cancellationToken);
-                _logger.LogInformation("EventsAir background sync Pass 3: {Count} travel bookings processed.", travelSynced);
+                travelSynced = syncResult.SavedNew + syncResult.UpdatedExisting + syncResult.Rebooked;
+                _logger.LogInformation("EventsAir background sync Pass 3: {New} new, {Updated} updated, {Rebooked} rebooked, {Errors} errors.",
+                    syncResult.SavedNew, syncResult.UpdatedExisting, syncResult.Rebooked, syncResult.ErrorCount);
             }
             catch (Exception ex)
             {

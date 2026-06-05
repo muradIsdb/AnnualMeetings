@@ -25,6 +25,7 @@ public class GuestDto
     public string? SpecialRequirements { get; set; }
     public string? Notes { get; set; }
     public string? RankValue { get; set; }
+    public string? VehicleTypeValue { get; set; }
     public string? DedicatedCar { get; set; }
     public string? RegistrationTypeName { get; set; }
     public Guid? DeservedCarClassId { get; set; }

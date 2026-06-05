@@ -8,8 +8,9 @@
 
 import { useState, useMemo } from 'react'
 import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query'
-import { Car, RefreshCw, AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Truck } from 'lucide-react'
+import { Car, RefreshCw, AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Truck, CheckCircle2 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { useNavigate } from 'react-router-dom'
 
 import { guestsApi, vehiclesApi, dashboardApi } from '../../api/services'
 import { InboundStatus } from '../../types'
@@ -207,6 +208,7 @@ function DepartureCard({ guest }: { guest: GuestSummary }) {
 
 export default function TransportDashboard() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [selectedGuest, setSelectedGuest] = useState<GuestSummary | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [departuresOpen, setDeparturesOpen] = useState(true)
@@ -285,73 +287,126 @@ export default function TransportDashboard() {
       <div className="p-4 md:p-6 space-y-5 max-w-7xl mx-auto w-full">
 
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
               <Car className="w-5 h-5 text-amber-600" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-gray-900">Transportation</h1>
-              <p className="text-sm text-gray-500">Vehicle dispatch &amp; assignment</p>
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Transport Dashboard</h1>
+              <p className="text-xs sm:text-sm text-gray-400 mt-0.5">Real-time fleet and dispatch overview</p>
             </div>
           </div>
-          <button
-            onClick={() => {
-              refetch()
-              queryClient.invalidateQueries({ queryKey: ['dashboard'] })
-            }}
-            className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <span className="text-xs text-gray-400 hidden sm:inline">Auto-refreshes every 30s</span>
+            <button
+              onClick={() => {
+                refetch()
+                queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+              }}
+              className="flex items-center gap-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5 bg-white hover:bg-gray-50 w-full sm:w-auto justify-center transition-colors"
+              title="Refresh"
+            >
+              <RefreshCw className="w-4 h-4" /> Refresh
+            </button>
+          </div>
         </div>
 
         {/* Summary stats */}
         {summary && (
           <>
             <div>
-              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-                Fleet Overview
-              </h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                <div className="card text-center">
-                  <div className="flex items-center justify-center mb-2">
-                    <Car className="w-5 h-5 text-isdb-green" />
-                  </div>
-                  <p className="text-3xl font-bold text-isdb-green">{summary.vehiclesAvailable ?? 0}</p>
-                  <p className="text-sm text-gray-500 mt-1">Vehicles Available</p>
-                  <p className="text-xs text-gray-400 mt-0.5">of {(summary as any).vehiclesTotal ?? 0} total</p>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                Fleet Status
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
+                <div className="bg-white rounded-2xl border border-gray-100 p-3 sm:p-4 hover:shadow-md transition-shadow">
+                  <p className="text-xs text-gray-400 mb-1">Total Vehicles</p>
+                  <p className="text-2xl sm:text-3xl font-bold text-gray-900">{(summary as any).vehiclesTotal ?? 0}</p>
+                  <p className="text-xs text-gray-400 mt-1">entire fleet</p>
                 </div>
-                <div className="card text-center">
-                  <div className="flex items-center justify-center mb-2">
-                    <Car className="w-5 h-5 text-amber-400" />
+
+                <div className="bg-white rounded-2xl border border-gray-100 p-3 sm:p-4 hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="w-2 h-2 rounded-full bg-green-500 inline-block flex-shrink-0"></span>
+                    <p className="text-xs text-gray-400">Available</p>
                   </div>
-                  <p className="text-3xl font-bold text-amber-600">{summary.vehiclesAssigned ?? 0}</p>
-                  <p className="text-sm text-gray-500 mt-1">Vehicles Assigned</p>
+                  <p className="text-2xl sm:text-3xl font-bold text-green-600">{summary.vehiclesAvailable ?? 0}</p>
+                  <p className="text-xs text-gray-400 mt-1">ready to assign</p>
                 </div>
-                <div className="card text-center">
-                  <div className="flex items-center justify-center mb-2">
-                    <CheckCircle className="w-5 h-5 text-isdb-green" />
+
+                <div className="bg-white rounded-2xl border border-gray-100 p-3 sm:p-4 hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 inline-block flex-shrink-0"></span>
+                    <p className="text-xs text-gray-400">Assigned</p>
                   </div>
-                  <p className="text-3xl font-bold text-isdb-green">{summary.driversAvailable ?? 0}</p>
-                  <p className="text-sm text-gray-500 mt-1">Drivers Available</p>
-                  <p className="text-xs text-gray-400 mt-0.5">of {(summary as any).driversTotal ?? 0} total</p>
+                  <p className="text-2xl sm:text-3xl font-bold text-amber-500">{summary.vehiclesAssigned ?? 0}</p>
+                  <p className="text-xs text-gray-400 mt-1">with a guest</p>
                 </div>
-                <div className="card text-center border-amber-200 bg-amber-50">
-                  <div className="flex items-center justify-center mb-2">
-                    <AlertTriangle className="w-5 h-5 text-amber-500" />
+
+                <div className="bg-white rounded-2xl border border-gray-100 p-3 sm:p-4 hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="w-2 h-2 rounded-full bg-gray-400 inline-block flex-shrink-0"></span>
+                    <p className="text-xs text-gray-400">Not Provided</p>
                   </div>
-                  <p className="text-3xl font-bold text-amber-600">{summary.guestsWithoutVehicle ?? 0}</p>
-                  <p className="text-sm text-gray-600 mt-1">Guests Without Vehicle</p>
+                  <p className="text-2xl sm:text-3xl font-bold text-gray-500">{(summary as any).vehiclesNotProvided ?? 0}</p>
+                  <p className="text-xs text-gray-400 mt-1">pending delivery</p>
                 </div>
-                <div className="card text-center">
-                  <div className="flex items-center justify-center mb-2">
-                    <Car className="w-5 h-5 text-blue-400" />
+
+                <div className="bg-white rounded-2xl border border-gray-100 p-3 sm:p-4 hover:shadow-md transition-shadow">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="w-2 h-2 rounded-full bg-red-400 inline-block flex-shrink-0"></span>
+                    <p className="text-xs text-gray-400">Out of Service</p>
                   </div>
-                  <p className="text-3xl font-bold text-blue-600">{(summary as any).guestsDeservingVehicle ?? 0}</p>
-                  <p className="text-sm text-gray-500 mt-1">Guests Deserving</p>
-                  <p className="text-xs text-gray-400 mt-0.5">car class assigned</p>
+                  <p className="text-2xl sm:text-3xl font-bold text-red-500">{(summary as any).vehiclesOutOfService ?? 0}</p>
+                  <p className="text-xs text-gray-400 mt-1">unavailable</p>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-gray-100 p-3 sm:p-4 hover:shadow-md transition-shadow col-span-2 sm:col-span-1">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="w-2 h-2 rounded-full bg-blue-500 inline-block flex-shrink-0"></span>
+                    <p className="text-xs text-gray-400">Drivers</p>
+                  </div>
+                  <p className="text-2xl sm:text-3xl font-bold text-blue-600">{summary.driversAvailable ?? 0}</p>
+                  <p className="text-xs text-gray-400 mt-1">of {(summary as any).driversTotal ?? 0} total</p>
+                </div>
+              </div>
+            </div>
+
+            {/* GUESTS NEEDING ATTENTION */}
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Guests Needing Attention</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 p-4 flex items-center justify-between gap-3">
+                  <div className="flex items-start gap-3 min-w-0">
+                    <AlertTriangle className="text-amber-500 w-6 h-6 mt-0.5 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-2xl font-bold text-amber-700">{summary.guestsWithoutVehicle ?? 0}</p>
+                      <p className="text-sm font-semibold text-amber-800 leading-tight">Guests Without Vehicle</p>
+                      <p className="text-xs text-amber-600 mt-0.5">Deserve a car class · need assignment</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      const searchInput = document.querySelector('input[placeholder*="Search"]') as HTMLInputElement;
+                      if (searchInput) searchInput.focus();
+                    }}
+                    className="bg-amber-500 hover:bg-amber-600 text-white text-xs sm:text-sm font-semibold px-3 sm:px-4 py-2 rounded-xl flex items-center gap-1 transition-colors flex-shrink-0"
+                  >
+                    <Truck className="w-4 h-4" /> <span className="hidden sm:inline">Dispatch</span><span className="sm:hidden">Go</span>
+                  </button>
+                </div>
+
+                <div className="rounded-2xl border border-green-200 bg-green-50 p-4 flex items-center justify-between gap-3">
+                  <div className="flex items-start gap-3 min-w-0">
+                    <CheckCircle2 className="text-green-500 w-6 h-6 mt-0.5 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-2xl font-bold text-green-700">{(summary as any).guestsAssignedWithoutDedicated ?? 0}</p>
+                      <p className="text-sm font-semibold text-green-800 leading-tight">Assigned w/o Dedicated Car</p>
+                      <p className="text-xs text-green-600 mt-0.5">No anomalies detected</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold bg-green-100 text-green-700 px-3 py-1 rounded-full border border-green-200 flex-shrink-0">All Clear</span>
                 </div>
               </div>
             </div>
@@ -359,9 +414,20 @@ export default function TransportDashboard() {
             {/* Fleet by class */}
             {summary.fleetByClass && summary.fleetByClass.length > 0 && (
               <div>
-                <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-                  Fleet by Class
-                </h2>
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Fleet by Class</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Vehicle availability per car class</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => navigate('/transport/fleet')}
+                      className="text-xs border border-gray-200 text-gray-600 px-3 py-1.5 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+                    >
+                      Fleet Mgmt
+                    </button>
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {summary.fleetByClass.map((fc) => {
                     const critical = (fc as any).guestsDeserving > 0 && fc.available === 0
@@ -372,43 +438,57 @@ export default function TransportDashboard() {
                     return (
                       <div
                         key={(fc as any).classId ?? fc.className}
-                        className={`card border ${
+                        className={`bg-white rounded-2xl border p-4 hover:shadow-md transition-shadow ${
                           critical
-                            ? 'border-red-200 bg-red-50'
+                            ? 'border-red-200 bg-red-50/30'
                             : warning
-                            ? 'border-amber-200 bg-amber-50'
-                            : 'border-gray-200'
+                            ? 'border-amber-200 bg-amber-50/30'
+                            : 'border-gray-100'
                         }`}
                       >
-                        <div className="flex items-center gap-2 mb-3">
-                          <span
-                            className="w-3 h-3 rounded-full flex-shrink-0"
-                            style={{ backgroundColor: (fc as any).classColor ?? '#6B7280' }}
-                          />
-                          <span className="font-semibold text-sm text-gray-900 truncate">
-                            {fc.className}
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className="w-3 h-3 rounded-full flex-shrink-0"
+                              style={{ backgroundColor: (fc as any).classColor ?? '#6B7280' }}
+                            />
+                            <span className="text-sm font-semibold text-gray-800 truncate" title={fc.className}>
+                              {fc.className}
+                            </span>
+                          </div>
+                          <span className="text-xs font-bold text-gray-500 bg-gray-50 px-2 py-0.5 rounded-full flex-shrink-0 border border-gray-100">
+                            {(fc as any).totalVehicles} total
                           </span>
                         </div>
-                        <div className="grid grid-cols-3 gap-2 text-center">
-                          <div>
-                            <p className="text-xl font-bold text-isdb-green">{fc.available}</p>
-                            <p className="text-xs text-gray-500 mt-0.5">Available</p>
+                        
+                        <div className="grid grid-cols-4 gap-1 text-center">
+                          <div className="bg-green-50 rounded-xl py-2">
+                            <p className="text-lg font-bold text-green-600">{fc.available}</p>
+                            <p className="text-[10px] sm:text-xs text-green-600 mt-0.5">Avail.</p>
                           </div>
-                          <div>
-                            <p className="text-xl font-bold text-amber-600">{fc.assigned}</p>
-                            <p className="text-xs text-gray-500 mt-0.5">Assigned</p>
+                          <div className="bg-amber-50 rounded-xl py-2">
+                            <p className="text-lg font-bold text-amber-500">{fc.assigned}</p>
+                            <p className="text-[10px] sm:text-xs text-amber-500 mt-0.5">Assigned</p>
                           </div>
-                          <div>
-                            <p
-                              className={`text-xl font-bold ${
-                                critical ? 'text-red-600' : warning ? 'text-amber-600' : 'text-gray-700'
-                              }`}
-                            >
+                          <div className="bg-gray-50 rounded-xl py-2">
+                            <p className="text-lg font-bold text-gray-400">{(fc as any).notProvided ?? 0}</p>
+                            <p className="text-[10px] sm:text-xs text-gray-400 mt-0.5 truncate px-1">Not Prov.</p>
+                          </div>
+                          <div className={`rounded-xl py-2 ${(fc as any).guestsDeserving > 0 ? 'bg-blue-50' : 'bg-gray-50'}`}>
+                            <p className={`text-lg font-bold ${(fc as any).guestsDeserving > 0 ? 'text-blue-600' : 'text-gray-400'}`}>
                               {(fc as any).guestsDeserving}
                             </p>
-                            <p className="text-xs text-gray-500 mt-0.5">Guests</p>
+                            <p className={`text-[10px] sm:text-xs mt-0.5 ${(fc as any).guestsDeserving > 0 ? 'text-blue-500' : 'text-gray-400'}`}>
+                              Guests
+                            </p>
                           </div>
                         </div>
+                        
+                        {(fc as any).outOfService > 0 && (
+                          <div className="mt-2 text-xs text-red-500 font-medium text-center bg-red-50 py-1 rounded-lg">
+                            {(fc as any).outOfService} out of service
+                          </div>
+                        )}
                       </div>
                     )
                   })}

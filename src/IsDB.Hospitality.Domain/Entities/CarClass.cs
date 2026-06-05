@@ -18,6 +18,9 @@ public class CarClass : BaseEntity
     /// <summary>Display sort order in lists.</summary>
     public int SortOrder { get; set; } = 0;
 
+    /// <summary>The EventsAir event code this car class belongs to. Null = legacy (treated as current event).</summary>
+    public string? EventCode { get; set; }
+
     // Navigation
     public ICollection<Vehicle> Vehicles { get; set; } = new List<Vehicle>();
     public ICollection<Guest> Guests { get; set; } = new List<Guest>();

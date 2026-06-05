@@ -162,6 +162,134 @@ export interface RegistrationTypeStats {
   departed: number
 }
 
+// ─── Control Room Dashboard Types ─────────────────────────────────────────────
+
+export interface FleetByClassItem {
+  classId: string
+  className: string
+  classColor?: string
+  sortOrder: number
+  totalVehicles: number
+  available: number
+  assigned: number
+  outOfService: number
+  notProvided: number
+  guestsDeserving: number
+}
+
+export interface ReceptionSummary {
+  totalArriving: number
+  scheduled: number
+  arrivedAtAirport: number
+  receivedByEmbassy: number
+  inTransitToHotel: number
+  atHotel: number
+  everArrived: number
+  everReceived: number
+  inTransferToAirport: number
+  atAirport: number
+  boardingCompleted: number
+  flights: ReceptionFlight[]
+}
+
+export interface ReceptionFlight {
+  flightId: string
+  flightNumber: string
+  airlineName: string
+  scheduledArrival: string
+  flightStatus: string
+  liveDelayMinutes?: number
+  totalGuests: number
+  scheduled: number
+  arrivedAtAirport: number
+  receivedByEmbassy: number
+  inTransitToHotel: number
+}
+
+export interface HotelGuestCount {
+  hotelName: string
+  guestCount: number
+  withRoomCount: number
+  noRoomCount: number
+}
+
+export interface HotelSummary {
+  totalAtHotel: number
+  enRouteToHotel: number
+  departingActive: number
+  noRoomAssigned: number
+  byHotel: HotelGuestCount[]
+  outboundAtHotel: number
+  inTransferToAirport: number
+  atAirport: number
+  boardingCompleted: number
+}
+
+export interface DayArrival {
+  dateLabel: string
+  dateIso: string
+  scheduled: number
+  arrived: number
+  pending: number
+}
+
+export interface ArrivalsByDay {
+  days: DayArrival[]
+}
+
+export interface ActivityFeedItem {
+  type: string
+  actorName: string
+  actorInitials: string
+  action: string
+  guestName?: string
+  occurredAt: string
+}
+
+export interface HourlyActivity {
+  hourLabel: string
+  count: number
+}
+
+export interface UserActivitySummary {
+  activeUsers: number
+  totalActions: number
+  guestUpdates: number
+  assignments: number
+  hotelUpdates: number
+  markedAsArrived: number
+  recentFeed: ActivityFeedItem[]
+  hourlyBreakdown: HourlyActivity[]
+}
+
+export interface DepartureHotelStat {
+  hotelId: string
+  hotelName: string
+  count: number
+}
+
+export interface DepartureHourStat {
+  hourId: string
+  hourLabel: string
+  displayOrder: number
+  count: number
+  byHotel: DepartureHotelStat[]
+}
+
+export interface DepartureDayStat {
+  dayId: string
+  dayLabel: string
+  displayOrder: number
+  count: number
+  byHour: DepartureHourStat[]
+}
+
+export interface DepartureStats {
+  totalRegistrations: number
+  byHotel: DepartureHotelStat[]
+  byDay: DepartureDayStat[]
+}
+
 export const dashboardApi = {
   getSummary: async (): Promise<DashboardSummary> => {
     const { data } = await apiClient.get<DashboardSummary>('/dashboard/summary')
@@ -172,6 +300,29 @@ export const dashboardApi = {
     const { data } = await apiClient.get<RegistrationTypeStats[]>('/dashboard/registration-type-stats')
     return data
   },
+
+  getHotelSummary: async (): Promise<HotelSummary> => {
+    const { data } = await apiClient.get<HotelSummary>('/dashboard/hotel-summary')
+    return data
+  },
+
+  getReceptionSummary: async (from?: string, to?: string): Promise<ReceptionSummary> => {
+    const params: Record<string, string> = {}
+    if (from) params.from = from
+    if (to) params.to = to
+    const { data } = await apiClient.get<ReceptionSummary>('/dashboard/reception-summary', { params })
+    return data
+  },
+
+  getArrivalsByDay: async (): Promise<ArrivalsByDay> => {
+    const { data } = await apiClient.get<ArrivalsByDay>('/dashboard/arrivals-by-day')
+    return data
+  },
+
+  getUserActivity: async (): Promise<UserActivitySummary> => {
+    const { data } = await apiClient.get<UserActivitySummary>('/dashboard/user-activity')
+    return data
+  },
 }
 
 // ─── Departure Requests ───────────────────────────────────────────────────────
@@ -179,6 +330,11 @@ export const dashboardApi = {
 export const departureApi = {
   create: async (request: CreateDepartureRequest): Promise<{ id: string; message: string }> => {
     const { data } = await apiClient.post<{ id: string; message: string }>('/departurerequests', request)
+    return data
+  },
+
+  getStats: async (): Promise<DepartureStats> => {
+    const { data } = await apiClient.get<DepartureStats>('/departure-requests/stats')
     return data
   },
 }

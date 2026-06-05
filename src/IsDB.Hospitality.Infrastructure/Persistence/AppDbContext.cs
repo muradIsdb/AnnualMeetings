@@ -37,6 +37,8 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<NotificationTemplate> NotificationTemplates => Set<NotificationTemplate>();
     public DbSet<CarClassRule> CarClassRules => Set<CarClassRule>();
     public DbSet<TravelBookingHistory> TravelBookingHistories => Set<TravelBookingHistory>();
+    public DbSet<VehicleStatusHistory> VehicleStatusHistories => Set<VehicleStatusHistory>();
+    public DbSet<FlightSyncLog> FlightSyncLogs => Set<FlightSyncLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -194,6 +196,20 @@ public class AppDbContext : DbContext, IAppDbContext
             .WithMany(tb => tb.History)
             .HasForeignKey(h => h.TravelBookingId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        // VehicleStatusHistory → Vehicle (many-to-one)
+        modelBuilder.Entity<VehicleStatusHistory>()
+            .HasOne(h => h.Vehicle)
+            .WithMany(v => v.StatusHistory)
+            .HasForeignKey(h => h.VehicleId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // VehicleStatusHistory → StaffUser (optional)
+        modelBuilder.Entity<VehicleStatusHistory>()
+            .HasOne(h => h.ChangedByStaff)
+            .WithMany()
+            .HasForeignKey(h => h.ChangedByStaffId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         // TravelBooking -> Flight (Many-to-One)
         modelBuilder.Entity<TravelBooking>()

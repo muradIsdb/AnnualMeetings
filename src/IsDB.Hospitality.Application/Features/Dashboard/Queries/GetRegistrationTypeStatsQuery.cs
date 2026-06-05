@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IsDB.Hospitality.Application.Features.Dashboard.Queries;
 
-public record GetRegistrationTypeStatsQuery : IRequest<List<RegistrationTypeStatsDto>>;
+public record GetRegistrationTypeStatsQuery(string? ActiveEventCode = null) : IRequest<List<RegistrationTypeStatsDto>>;
 
 public class GetRegistrationTypeStatsQueryHandler
     : IRequestHandler<GetRegistrationTypeStatsQuery, List<RegistrationTypeStatsDto>>
@@ -23,7 +23,8 @@ public class GetRegistrationTypeStatsQueryHandler
         CancellationToken cancellationToken)
     {
         var guests = await _context.Guests
-            .Where(g => g.IsActive)
+            .Where(g => g.IsActive
+                && (request.ActiveEventCode == null || g.EventCode == null || g.EventCode == request.ActiveEventCode))
             .Select(g => new
             {
                 g.RegistrationTypeName,

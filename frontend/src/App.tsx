@@ -7,6 +7,7 @@ import LoginPage from './pages/auth/LoginPage'
 import AirportDashboard from './pages/airport/AirportDashboard'
 import GuestDetailPage from './pages/airport/GuestDetailPage'
 import TransportDashboard from './pages/transport/TransportDashboard'
+import TransportRoleDashboard from './pages/transport/TransportRoleDashboard'
 import HotelDashboard from './pages/hotel/HotelDashboard'
 import HotelDashboardPage from './pages/hotel/HotelDashboardPage'
 import HotelArrivalsQueuePage from './pages/hotel/HotelArrivalsQueuePage'
@@ -14,6 +15,7 @@ import HotelGuestDirectoryPage from './pages/hotel/HotelGuestDirectoryPage'
 import HotelGuestDetailPage from './pages/hotel/HotelGuestDetailPage'
 import HotelManagementPage from './pages/hotel/HotelManagementPage'
 import ControlRoomDashboard from './pages/controlroom/ControlRoomDashboard'
+import OpsOverview from './pages/controlroom/OpsOverview'
 import DepartureFormPage from './pages/departure/DepartureFormPage'
 import DepartureManagePage from './pages/departure/DepartureManagePage'
 import DepartureStatsPage from './pages/departure/DepartureStatsPage'
@@ -128,6 +130,11 @@ export default function App() {
           } />
 
           {/* Transport Module */}
+          <Route path="transport/dashboard" element={
+            <ProtectedRoute allowedRoles={[UserRole.Transport, UserRole.ControlRoom, UserRole.Admin]}>
+              <TransportRoleDashboard />
+            </ProtectedRoute>
+          } />
           <Route path="transport" element={
             <ProtectedRoute allowedRoles={[UserRole.Transport, UserRole.ControlRoom, UserRole.Admin]}>
               <TransportDashboard />
@@ -173,10 +180,15 @@ export default function App() {
               <ControlRoomDashboard />
             </ProtectedRoute>
           } />
+          <Route path="control-room/ops" element={
+            <ProtectedRoute allowedRoles={[UserRole.ControlRoom, UserRole.Admin]}>
+              <OpsOverview />
+            </ProtectedRoute>
+          } />
 
           {/* ── Liaison Module (read-only) ── */}
           <Route path="liaison/dashboard" element={
-            <ProtectedRoute allowedRoles={[UserRole.Liaison, UserRole.Admin]}>
+            <ProtectedRoute allowedRoles={[UserRole.Liaison, UserRole.ControlRoom, UserRole.Admin]}>
               <LiaisonDashboard />
             </ProtectedRoute>
           } />

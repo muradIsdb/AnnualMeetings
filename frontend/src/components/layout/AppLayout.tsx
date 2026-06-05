@@ -44,9 +44,11 @@ type NavItem = {
 // ─── Page definitions with pageIds ────────────────────────────────────────────
 const mainNavItems: NavItem[] = [
   { to: '/airport',         label: 'Airport',           icon: Plane,          pageId: 'airport.dashboard' },
+  { to: '/transport/dashboard', label: 'Transport Dashboard', icon: LayoutDashboard, roles: [UserRole.Transport, UserRole.Admin] },
   { to: '/transport',       label: 'Transport',          icon: Car,            pageId: 'transport.dashboard' },
   { to: '/departure-stats', label: 'Departure Shuttle',  icon: Bus,            pageId: 'transport.departure_stats' },
   { to: '/control-room',    label: 'Control Room',       icon: LayoutDashboard, pageId: 'controlroom.dashboard' },
+  { to: '/control-room/ops', label: 'Ops Overview',       icon: LayoutDashboard, roles: [UserRole.ControlRoom, UserRole.Admin] },
 ]
 
 const hotelNavItems: NavItem[] = [

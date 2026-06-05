@@ -94,6 +94,14 @@ public class StaffController : ApiControllerBase
         if (!string.IsNullOrWhiteSpace(dto.Password))
             user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
 
+        // Fix 2: If deactivating, immediately invalidate the refresh token so the
+        // user cannot obtain a new access token even if they still hold a refresh token.
+        if (!dto.IsActive)
+        {
+            user.RefreshToken = null;
+            user.RefreshTokenExpiresAt = DateTime.UtcNow.AddYears(-1);
+        }
+
         // Replace roles
         _db.StaffUserRoles.RemoveRange(user.Roles);
         user.Roles = parsedRoles.Select(r => new StaffUserRole
@@ -130,8 +138,10 @@ public class StaffController : ApiControllerBase
         var user = await _db.StaffUsers.FindAsync(id);
         if (user == null) return NotFound();
 
-        // Soft delete — just deactivate
+        // Soft delete — deactivate and immediately invalidate refresh token (Fix 2)
         user.IsActive = false;
+        user.RefreshToken = null;
+        user.RefreshTokenExpiresAt = DateTime.UtcNow.AddYears(-1);
         await _db.SaveChangesAsync();
         return NoContent();
     }

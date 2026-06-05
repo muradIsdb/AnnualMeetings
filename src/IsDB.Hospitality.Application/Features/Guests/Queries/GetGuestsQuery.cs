@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IsDB.Hospitality.Application.Features.Guests.Queries;
 
-public record GetGuestsQuery(GuestStatus? Status = null, bool? IsCritical = null) : IRequest<List<GuestSummaryDto>>;
+public record GetGuestsQuery(GuestStatus? Status = null, bool? IsCritical = null, string? ActiveEventCode = null) : IRequest<List<GuestSummaryDto>>;
 
 public class GetGuestsQueryHandler : IRequestHandler<GetGuestsQuery, List<GuestSummaryDto>>
 {
@@ -21,6 +21,10 @@ public class GetGuestsQueryHandler : IRequestHandler<GetGuestsQuery, List<GuestS
     public async Task<List<GuestSummaryDto>> Handle(GetGuestsQuery request, CancellationToken cancellationToken)
     {
         var query = _context.Guests.Where(g => g.IsActive).AsQueryable();
+
+        // Filter by active event code: show guests with no event code (legacy) or matching the active event
+        if (!string.IsNullOrWhiteSpace(request.ActiveEventCode))
+            query = query.Where(g => g.EventCode == null || g.EventCode == request.ActiveEventCode);
 
         if (request.Status.HasValue)
             query = query.Where(g => g.Status == request.Status.Value);
@@ -45,6 +49,7 @@ public class GetGuestsQueryHandler : IRequestHandler<GetGuestsQuery, List<GuestS
                 Notes = g.Notes,
                 RegistrationTypeName = g.RegistrationTypeName,
                 RankValue = g.RankValue,
+                VehicleTypeValue = g.VehicleTypeValue,
                 DedicatedCar = g.DedicatedCar,
                 DeservedCarClassId = g.DeservedCarClassId,
                 DeservedCarClassName = g.DeservedCarClass != null ? g.DeservedCarClass.Name : null,

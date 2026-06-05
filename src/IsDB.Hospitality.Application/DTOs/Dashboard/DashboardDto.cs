@@ -8,6 +8,8 @@ public class DashboardSummaryDto
 {
     public int TotalGuests { get; set; }
     public int ArrivingCount { get; set; }
+    /// <summary>Guests with InboundStatus==Arrived AND ReceivedByEmbassyTeam==false (currently at airport, not yet handed over).</summary>
+    public int AtAirportCount { get; set; }
     public int ReceivedByEmbassyCount { get; set; }
     public int OnTheWayToHotelCount { get; set; }
     public int AtHotelCount { get; set; }
@@ -22,6 +24,7 @@ public class DashboardSummaryDto
     public int VehiclesAvailable { get; set; }
     public int VehiclesAssigned { get; set; }
     public int VehiclesOutOfService { get; set; }
+    public int VehiclesNotProvided { get; set; }
     public int DriversTotal { get; set; }
     public int DriversAvailable { get; set; }
     public int DriversAssigned { get; set; }
@@ -48,6 +51,7 @@ public class FleetByClassDto
     public int Available { get; set; }
     public int Assigned { get; set; }
     public int OutOfService { get; set; }
+    public int NotProvided { get; set; }
     public int GuestsDeserving { get; set; }
 }
 
@@ -83,6 +87,7 @@ public class GuestSummaryDto
     public string? Notes { get; set; }
     public string? RegistrationTypeName { get; set; }
     public string? RankValue { get; set; }
+    public string? VehicleTypeValue { get; set; }
     public string? DedicatedCar { get; set; }
     public DateTime? ArrivalTime { get; set; }
     public Guid? DeservedCarClassId { get; set; }

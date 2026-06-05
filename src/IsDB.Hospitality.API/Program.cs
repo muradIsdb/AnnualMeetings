@@ -26,6 +26,13 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IsDB.Hospitality.Application.Common.Interfaces.IEmailService, IsDB.Hospitality.API.Services.EmailService>();
 builder.Services.AddScoped<IsDB.Hospitality.API.Services.NotificationTemplateService>();
 
+// SignalR for real-time flight updates
+builder.Services.AddSignalR();
+
+// Health checks — AviationStack API key validation
+builder.Services.AddHealthChecks()
+    .AddCheck<IsDB.Hospitality.API.HealthChecks.AviationstackHealthCheck>("aviationstack");
+
 // Register default HttpClient with SSL bypass for development/sandbox only
 if (builder.Environment.IsDevelopment())
 {
@@ -66,10 +73,16 @@ builder.Services.AddCors(options =>
     });
 });
 
+// In-memory cache for ActiveUserFilter (IsActive check)
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IsDB.Hospitality.API.Filters.ActiveUserFilter>();
+
 builder.Services.AddControllers(options =>
 {
     options.Conventions.Add(new Microsoft.AspNetCore.Mvc.ApplicationModels.RouteTokenTransformerConvention(
         new SlugifyParameterTransformer()));
+    // Globally enforce IsActive check on every authenticated request
+    options.Filters.AddService<IsDB.Hospitality.API.Filters.ActiveUserFilter>();
 });
 builder.Services.AddRouting(options => options.LowercaseUrls = true);
 builder.Services.AddEndpointsApiExplorer();
@@ -141,6 +154,22 @@ using (var scope = app.Services.CreateScope())
             isFreshDatabase = migrationCount == 0;
         }
         await dbConn.CloseAsync();
+
+        // ALWAYS ensure LicensePlate is nullable, regardless of which DB path is taken.
+        // This runs before MigrateAsync() so the EF migration can succeed if it hasn't run yet.
+        logger.LogInformation("Ensuring Vehicles.LicensePlate is nullable (idempotent pre-check)...");
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Vehicles' AND column_name = 'LicensePlate'
+                    AND is_nullable = 'NO'
+                ) THEN
+                    ALTER TABLE ""Vehicles"" ALTER COLUMN ""LicensePlate"" DROP NOT NULL;
+                END IF;
+            END $$;
+        ");
+        logger.LogInformation("LicensePlate nullable pre-check complete.");
 
         if (isFreshDatabase || isEfCoreCreatedDb)
         {
@@ -249,6 +278,22 @@ using (var scope = app.Services.CreateScope())
             CREATE INDEX IF NOT EXISTS ""IX_GuestStatusHistories_GuestId"" ON ""GuestStatusHistories""(""GuestId"");
             CREATE INDEX IF NOT EXISTS ""IX_GuestStatusHistories_ChangedByStaffId"" ON ""GuestStatusHistories""(""ChangedByStaffId"");
 
+            -- Create VehicleStatusHistories table if missing
+            CREATE TABLE IF NOT EXISTS ""VehicleStatusHistories"" (
+                ""Id""                 uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+                ""VehicleId""          uuid        NOT NULL REFERENCES ""Vehicles""(""Id"") ON DELETE CASCADE,
+                ""OldStatus""          integer     NOT NULL,
+                ""NewStatus""          integer     NOT NULL,
+                ""ChangedByStaffId""   uuid        NULL REFERENCES ""StaffUsers""(""Id"") ON DELETE SET NULL,
+                ""ChangedByName""      text        NULL,
+                ""ChangedByRole""      integer     NULL,
+                ""Notes""              text        NULL,
+                ""CreatedAt""          timestamptz NOT NULL DEFAULT now(),
+                ""UpdatedAt""          timestamptz NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS ""IX_VehicleStatusHistories_VehicleId"" ON ""VehicleStatusHistories""(""VehicleId"");
+            CREATE INDEX IF NOT EXISTS ""IX_VehicleStatusHistories_ChangedByStaffId"" ON ""VehicleStatusHistories""(""ChangedByStaffId"");
+
             -- Add TargetRole to Alerts if missing
             DO $$ BEGIN
                 IF NOT EXISTS (
@@ -284,6 +329,14 @@ using (var scope = app.Services.CreateScope())
             INSERT INTO ""AppConfigs"" (""Id"", ""EventTitle"", ""MinimumLeadTimeHours"", ""UpdatedAt"")
             VALUES (1, 'IsDB Annual Meetings 2025', 2, now())
             ON CONFLICT DO NOTHING;
+
+            -- AppConfigs schema update: add columns added after initial deployment
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""EventTimezone"" text NOT NULL DEFAULT 'UTC';
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""PlaCardTheme"" text NOT NULL DEFAULT 'light';
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""EventLogoBase64"" text NULL;
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""AviationstackApiKey"" text NULL;
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""AviationstackSyncIntervalMinutes"" integer NOT NULL DEFAULT 5;
+            ALTER TABLE ""AppConfigs"" ADD COLUMN IF NOT EXISTS ""AviationstackTrackingWindowHours"" integer NOT NULL DEFAULT 12;
 
             -- DepartureRequests schema update: add new columns if missing (each checked individually)
             DO $$ BEGIN
@@ -562,12 +615,115 @@ using (var scope = app.Services.CreateScope())
             END $$;
         ");
 
+        // Make LicensePlate nullable in Vehicles (MakeVehicleLicensePlateOptional migration)
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Vehicles' AND column_name = 'LicensePlate'
+                    AND is_nullable = 'NO'
+                ) THEN
+                    ALTER TABLE ""Vehicles"" ALTER COLUMN ""LicensePlate"" DROP NOT NULL;
+                END IF;
+            END $$;
+            DROP INDEX IF EXISTS ""IX_Vehicles_LicensePlate"";
+            CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Vehicles_LicensePlate""
+                ON ""Vehicles""(""LicensePlate"")
+                WHERE ""LicensePlate"" IS NOT NULL;
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260601100000_MakeVehicleLicensePlateOptional', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        ");
+
+        // Add VehicleTypeValue to Guests if missing (AddVehicleTypeValueToGuest migration)
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Guests' AND column_name = 'VehicleTypeValue'
+                ) THEN
+                    ALTER TABLE ""Guests"" ADD COLUMN ""VehicleTypeValue"" text NULL;
+                END IF;
+            END $$;
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260603100000_AddVehicleTypeValueToGuest', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        ");
+
         // Apply all remaining pending migrations
         logger.LogInformation("Applying pending migrations...");
         await context.Database.MigrateAsync();
         logger.LogInformation("Migrations applied successfully.");
 
         } // end else (existing database)
+
+        // Add EventCode columns to event-scoped entities — runs for ALL database types (idempotent)
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='CarClasses' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""CarClasses"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='Vehicles' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""Vehicles"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='Drivers' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""Drivers"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='CarClassRules' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""CarClassRules"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='EventsAirSyncLogs' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""EventsAirSyncLogs"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='Guests' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""Guests"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='SyncFieldMappings' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""SyncFieldMappings"" ADD COLUMN ""EventCode"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='Notifications' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""Notifications"" ADD COLUMN ""EventCode"" text NULL;
+                    -- Backfill existing notifications with the active event code
+                    UPDATE ""Notifications""
+                    SET ""EventCode"" = (SELECT ""EventCode"" FROM ""EventsAirConfigs"" LIMIT 1)
+                    WHERE ""EventCode"" IS NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='DepartureRequests' AND column_name='EventCode'
+                ) THEN
+                    ALTER TABLE ""DepartureRequests"" ADD COLUMN ""EventCode"" text NULL;
+                    -- Backfill existing departure requests with the active event code
+                    UPDATE ""DepartureRequests""
+                    SET ""EventCode"" = (SELECT ""EventCode"" FROM ""EventsAirConfigs"" LIMIT 1)
+                    WHERE ""EventCode"" IS NULL;
+                END IF;
+            END $$;
+        ");
 
         // Notifications tables — Postgres path (safe to run on every startup, idempotent)
         await context.Database.ExecuteSqlRawAsync(@"
@@ -600,6 +756,24 @@ using (var scope = app.Services.CreateScope())
                 PRIMARY KEY (""NotificationId"", ""StaffUserId"")
             );
             CREATE INDEX IF NOT EXISTS ""IX_NotificationReads_StaffUserId"" ON ""NotificationReads""(""StaffUserId"");
+        ");
+
+        // VehicleStatusHistories table — safe to run on every startup, idempotent
+        await context.Database.ExecuteSqlRawAsync(@"
+            CREATE TABLE IF NOT EXISTS ""VehicleStatusHistories"" (
+                ""Id""                 uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+                ""VehicleId""          uuid        NOT NULL REFERENCES ""Vehicles""(""Id"") ON DELETE CASCADE,
+                ""OldStatus""          integer     NOT NULL,
+                ""NewStatus""          integer     NOT NULL,
+                ""ChangedByStaffId""   uuid        NULL REFERENCES ""StaffUsers""(""Id"") ON DELETE SET NULL,
+                ""ChangedByName""      text        NULL,
+                ""ChangedByRole""      integer     NULL,
+                ""Notes""              text        NULL,
+                ""CreatedAt""          timestamptz NOT NULL DEFAULT now(),
+                ""UpdatedAt""          timestamptz NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS ""IX_VehicleStatusHistories_VehicleId"" ON ""VehicleStatusHistories""(""VehicleId"");
+            CREATE INDEX IF NOT EXISTS ""IX_VehicleStatusHistories_ChangedByStaffId"" ON ""VehicleStatusHistories""(""ChangedByStaffId"");
         ");
     }
     else
@@ -662,6 +836,106 @@ using (var scope = app.Services.CreateScope())
 
     }
 
+    // Ensure AviationStack columns exist in AppConfigs — runs for ALL database types (idempotent)
+    // This guard is needed because the EF model snapshot references these columns and EF will
+    // include them in all SELECT queries. If they don't exist the query throws a 500.
+    if (context.Database.IsNpgsql())
+    {
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'AppConfigs' AND column_name = 'AviationstackApiKey'
+                ) THEN
+                    ALTER TABLE ""AppConfigs"" ADD COLUMN ""AviationstackApiKey"" text NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'AppConfigs' AND column_name = 'AviationstackSyncIntervalMinutes'
+                ) THEN
+                    ALTER TABLE ""AppConfigs"" ADD COLUMN ""AviationstackSyncIntervalMinutes"" integer NOT NULL DEFAULT 5;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'AppConfigs' AND column_name = 'AviationstackTrackingWindowHours'
+                ) THEN
+                    ALTER TABLE ""AppConfigs"" ADD COLUMN ""AviationstackTrackingWindowHours"" integer NOT NULL DEFAULT 12;
+                END IF;
+            END $$;
+        ");
+        // Mark the EF migration as applied so MigrateAsync won't try to run it again
+        await context.Database.ExecuteSqlRawAsync(@"
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260604200000_AddAviationstackConfigToAppConfig', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        ");
+        logger.LogInformation("AviationStack AppConfig columns ensured.");
+    }
+
+    // NormaliseFlightNumbers: DISABLED for testing — storing raw flight numbers from EventsAir
+    // to observe exactly what values EventsAir sends without any transformation.
+    logger.LogInformation("NormaliseFlightNumbers: disabled for raw data observation.");
+
+    // AddAviationstackDateGuardDays: adds the configurable date guard tolerance column.
+    try
+    {
+        logger.LogInformation("Running AddAviationstackDateGuardDays migration...");
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'AppConfigs' AND column_name = 'AviationstackDateGuardDays'
+                ) THEN
+                    ALTER TABLE ""AppConfigs"" ADD COLUMN ""AviationstackDateGuardDays"" integer NOT NULL DEFAULT 1;
+                END IF;
+            END $$;
+        ");
+        await context.Database.ExecuteSqlRawAsync(@"
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260604500000_AddAviationstackDateGuardDays', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        ");
+        logger.LogInformation("AddAviationstackDateGuardDays migration complete.");
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "AddAviationstackDateGuardDays migration failed (non-fatal).");
+    }
+
+    // AddFlightSyncLogsTable: creates the FlightSyncLogs table for sync history inventory.
+    try
+    {
+        logger.LogInformation("Running AddFlightSyncLogsTable migration...");
+        await context.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "FlightSyncLogs" (
+                "Id"                   uuid         NOT NULL DEFAULT gen_random_uuid(),
+                "SyncedAt"             timestamptz  NOT NULL DEFAULT now(),
+                "TriggerSource"        text         NOT NULL DEFAULT 'Scheduled',
+                "Status"               text         NOT NULL DEFAULT 'Success',
+                "FlightsInWindow"      integer      NOT NULL DEFAULT 0,
+                "FlightsQueried"       integer      NOT NULL DEFAULT 0,
+                "FlightsUpdated"       integer      NOT NULL DEFAULT 0,
+                "DurationMs"           integer      NOT NULL DEFAULT 0,
+                "Message"              text         NULL,
+                "InitiatedByStaffName" text         NULL,
+                "CreatedAt"            timestamptz  NOT NULL DEFAULT now(),
+                "UpdatedAt"            timestamptz  NOT NULL DEFAULT now(),
+                CONSTRAINT "PK_FlightSyncLogs" PRIMARY KEY ("Id")
+            );
+            CREATE INDEX IF NOT EXISTS "IX_FlightSyncLogs_SyncedAt"
+                ON "FlightSyncLogs" ("SyncedAt" DESC);
+            INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+            VALUES ('20260604400000_AddFlightSyncLogsTable', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        """);
+        logger.LogInformation("AddFlightSyncLogsTable migration complete.");
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "AddFlightSyncLogsTable migration failed (non-fatal).");
+    }
+
     await DatabaseSeeder.SeedAsync(context, logger);
 
     // Seed notification templates (idempotent — only inserts missing keys)
@@ -684,6 +958,13 @@ app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+
+// SignalR hub for real-time flight updates
+// FlightHub inherits FlightHubProxy so IHubContext<FlightHubProxy> resolves to the same hub
+app.MapHub<IsDB.Hospitality.API.Hubs.FlightHub>("/hubs/flights");
+
+// Health check endpoint
+app.MapHealthChecks("/health");
 
 // SPA fallback — all non-API routes return index.html for React Router
 app.MapFallbackToFile("index.html");

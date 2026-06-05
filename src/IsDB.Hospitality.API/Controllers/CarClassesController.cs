@@ -12,11 +12,16 @@ public class CarClassesController : ApiControllerBase
     private readonly AppDbContext _db;
     public CarClassesController(AppDbContext db) { _db = db; }
 
+    private async Task<string?> GetActiveEventCodeAsync() =>
+        (await _db.EventsAirConfigs.FirstOrDefaultAsync())?.EventCode;
+
     // GET /api/car-classes
     [HttpGet]
     public async Task<ActionResult<List<object>>> GetAll()
     {
+        var activeEventCode = await GetActiveEventCodeAsync();
         var classes = await _db.CarClasses
+            .Where(c => c.EventCode == null || c.EventCode == activeEventCode)
             .OrderBy(c => c.SortOrder).ThenBy(c => c.Name)
             .ToListAsync();
 
@@ -71,9 +76,11 @@ public class CarClassesController : ApiControllerBase
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { message = "Name is required." });
 
-        if (await _db.CarClasses.AnyAsync(c => c.Name.ToLower() == req.Name.Trim().ToLower()))
+        var activeEventCode = await GetActiveEventCodeAsync();
+        if (await _db.CarClasses.AnyAsync(c =>
+            (c.EventCode == null || c.EventCode == activeEventCode) &&
+            c.Name.ToLower() == req.Name.Trim().ToLower()))
             return BadRequest(new { message = "A car class with this name already exists." });
-
         var carClass = new CarClass
         {
             Id          = Guid.NewGuid(),
@@ -81,6 +88,7 @@ public class CarClassesController : ApiControllerBase
             Description = req.Description?.Trim(),
             Color       = req.Color?.Trim(),
             SortOrder   = req.SortOrder ?? 0,
+            EventCode   = activeEventCode,
         };
 
         _db.CarClasses.Add(carClass);
@@ -100,8 +108,12 @@ public class CarClassesController : ApiControllerBase
         var carClass = await _db.CarClasses.FindAsync(id);
         if (carClass == null) return NotFound();
 
-        // Check name uniqueness (excluding self)
-        if (await _db.CarClasses.AnyAsync(c => c.Id != id && c.Name.ToLower() == req.Name.Trim().ToLower()))
+        // Check name uniqueness (excluding self, scoped to active event)
+        var activeEventCode2 = await GetActiveEventCodeAsync();
+        if (await _db.CarClasses.AnyAsync(c =>
+            c.Id != id &&
+            (c.EventCode == null || c.EventCode == activeEventCode2) &&
+            c.Name.ToLower() == req.Name.Trim().ToLower()))
             return BadRequest(new { message = "A car class with this name already exists." });
 
         carClass.Name        = req.Name.Trim();
@@ -134,6 +146,62 @@ public class CarClassesController : ApiControllerBase
         _db.CarClasses.Remove(carClass);
         await _db.SaveChangesAsync();
         return NoContent();
+    }
+
+    // GET /api/car-classes/{id}/history — provision history for all vehicles in a class
+    [HttpGet("{id:guid}/history")]
+    [Authorize(Roles = "Admin,Transport")]
+    public async Task<IActionResult> GetHistory(
+        Guid id,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        [FromQuery] string? fromDate = null,
+        [FromQuery] string? toDate = null)
+    {
+        var carClass = await _db.CarClasses.FindAsync(id);
+        if (carClass == null) return NotFound();
+
+        var query = _db.VehicleStatusHistories
+            .Include(h => h.Vehicle)
+            .Where(h => h.Vehicle.CarClassId == id);
+
+        if (!string.IsNullOrWhiteSpace(fromDate) && DateTime.TryParse(fromDate, out var from))
+            query = query.Where(h => h.CreatedAt >= from.ToUniversalTime());
+
+        if (!string.IsNullOrWhiteSpace(toDate) && DateTime.TryParse(toDate, out var to))
+            query = query.Where(h => h.CreatedAt <= to.ToUniversalTime().AddDays(1));
+
+        var total = await query.CountAsync();
+
+        var items = await query
+            .OrderByDescending(h => h.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(h => new
+            {
+                h.Id,
+                VehicleId       = h.VehicleId,
+                VehiclePlate    = h.Vehicle.LicensePlate,
+                VehicleMake     = h.Vehicle.Make,
+                VehicleModel    = h.Vehicle.Model,
+                OldStatus       = h.OldStatus.ToString(),
+                NewStatus       = h.NewStatus.ToString(),
+                h.ChangedByName,
+                ChangedByRole   = h.ChangedByRole.HasValue ? h.ChangedByRole.ToString() : null,
+                h.Notes,
+                ChangedAt       = h.CreatedAt,
+            })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            CarClassId   = id,
+            CarClassName = carClass.Name,
+            Total        = total,
+            Page         = page,
+            PageSize     = pageSize,
+            Items        = items,
+        });
     }
 
     // PATCH /api/car-classes/reorder  — update sort orders in bulk

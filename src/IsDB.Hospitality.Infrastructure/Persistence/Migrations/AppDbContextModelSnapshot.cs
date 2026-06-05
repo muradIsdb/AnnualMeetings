@@ -109,6 +109,18 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("AviationstackApiKey")
+                        .HasColumnType("text");
+
+                    b.Property<int>("AviationstackSyncIntervalMinutes")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("AviationstackTrackingWindowHours")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("AviationstackDateGuardDays")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.ToTable("AppConfigs");
@@ -280,6 +292,9 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Property<string>("Email")
                         .IsRequired()
                         .HasMaxLength(200)
+                        .HasColumnType("text");
+
+                    b.Property<string>("EventCode")
                         .HasColumnType("text");
 
                     b.Property<string>("FullName")
@@ -656,6 +671,9 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Property<string>("RankValue")
                         .HasColumnType("text");
 
+                    b.Property<string>("VehicleTypeValue")
+                        .HasColumnType("text");
+
                     b.Property<bool>("ReceivedByEmbassyTeam")
                         .HasColumnType("boolean");
 
@@ -801,6 +819,9 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("CreatedByStaffId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("EventCode")
+                        .HasColumnType("text");
 
                     b.Property<string>("Message")
                         .IsRequired()
@@ -1365,7 +1386,6 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                         .HasColumnType("boolean");
 
                     b.Property<string>("LicensePlate")
-                        .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("text");
 
@@ -1394,7 +1414,8 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.HasIndex("CurrentGuestId");
 
                     b.HasIndex("LicensePlate")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"LicensePlate\" IS NOT NULL");
 
                     b.ToTable("Vehicles");
                 });
@@ -1776,6 +1797,26 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Navigation("Assignments");
 
                     b.Navigation("Driver");
+
+                    b.Navigation("StatusHistory");
+                });
+
+            modelBuilder.Entity("IsDB.Hospitality.Domain.Entities.VehicleStatusHistory", b =>
+                {
+                    b.HasOne("IsDB.Hospitality.Domain.Entities.Vehicle", "Vehicle")
+                        .WithMany("StatusHistory")
+                        .HasForeignKey("VehicleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IsDB.Hospitality.Domain.Entities.StaffUser", "ChangedByStaff")
+                        .WithMany()
+                        .HasForeignKey("ChangedByStaffId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("ChangedByStaff");
+
+                    b.Navigation("Vehicle");
                 });
 #pragma warning restore 612, 618
         }
