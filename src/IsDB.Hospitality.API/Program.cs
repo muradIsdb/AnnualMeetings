@@ -937,7 +937,14 @@ using (var scope = app.Services.CreateScope())
             CREATE INDEX IF NOT EXISTS "IX_SystemLogs_Severity_OccurredAt" ON "SystemLogs" ("Severity", "OccurredAt");
             CREATE INDEX IF NOT EXISTS "IX_SystemLogs_Module_OccurredAt" ON "SystemLogs" ("Module", "OccurredAt");
             CREATE INDEX IF NOT EXISTS "IX_SystemLogs_StaffUserId" ON "SystemLogs" ("StaffUserId");
-            
+
+            -- Idempotent column additions (handles partial table creation from earlier failed deployments)
+            ALTER TABLE "SystemLogs" ADD COLUMN IF NOT EXISTS "StaffName"      text NULL;
+            ALTER TABLE "SystemLogs" ADD COLUMN IF NOT EXISTS "CorrelationId"  text NULL;
+            ALTER TABLE "SystemLogs" ADD COLUMN IF NOT EXISTS "RequestPath"    text NULL;
+            ALTER TABLE "SystemLogs" ADD COLUMN IF NOT EXISTS "StaffUserId"    uuid NULL;
+            ALTER TABLE "SystemLogs" ADD COLUMN IF NOT EXISTS "Detail"         text NULL;
+
             DO $$ BEGIN
                 IF NOT EXISTS (
                     SELECT 1 FROM information_schema.columns
