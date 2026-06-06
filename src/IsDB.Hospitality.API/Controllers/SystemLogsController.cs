@@ -107,6 +107,21 @@ public class SystemLogsController : ControllerBase
         return File(bytes, "text/csv", $"system-logs-{DateTime.UtcNow:yyyy-MM-dd}.csv");
     }
 
+    [HttpPost("test")]
+    public async Task<IActionResult> TestLog()
+    {
+        try
+        {
+            await _logService.LogAsync(LogSeverity.Information, "Test", "Test log entry from API", "This is a test detail.");
+            var count = await _db.SystemLogs.CountAsync();
+            return Ok(new { message = "Test log written.", totalLogs = count });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message, inner = ex.InnerException?.Message, stack = ex.StackTrace });
+        }
+    }
+
     [HttpDelete]
     public async Task<IActionResult> ClearLogs()
     {
