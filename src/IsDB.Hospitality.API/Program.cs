@@ -650,6 +650,15 @@ using (var scope = app.Services.CreateScope())
             ON CONFLICT DO NOTHING;
         ");
 
+        // Mark AddSystemLogs migration as already applied — the schema changes (SystemLogs table
+        // and LogRetentionDays column) are handled by the raw SQL block in Program.cs below.
+        // The EF-generated migration file is SQLite-shaped and would fail on PostgreSQL.
+        await context.Database.ExecuteSqlRawAsync(@"
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260606093155_AddSystemLogs', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        ");
+
         // Apply all remaining pending migrations
         logger.LogInformation("Applying pending migrations...");
         await context.Database.MigrateAsync();
