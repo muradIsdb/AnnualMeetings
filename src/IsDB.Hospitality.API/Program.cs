@@ -944,6 +944,8 @@ using (var scope = app.Services.CreateScope())
             ALTER TABLE "SystemLogs" ADD COLUMN IF NOT EXISTS "RequestPath"    text NULL;
             ALTER TABLE "SystemLogs" ADD COLUMN IF NOT EXISTS "StaffUserId"    uuid NULL;
             ALTER TABLE "SystemLogs" ADD COLUMN IF NOT EXISTS "Detail"         text NULL;
+            ALTER TABLE "SystemLogs" ADD COLUMN IF NOT EXISTS "CreatedAt"      timestamptz NOT NULL DEFAULT now();
+            ALTER TABLE "SystemLogs" ADD COLUMN IF NOT EXISTS "UpdatedAt"      timestamptz NOT NULL DEFAULT now();
 
             DO $$ BEGIN
                 IF NOT EXISTS (
