@@ -178,6 +178,7 @@ public class GuestsController : ApiControllerBase
         [FromServices] IHttpClientFactory httpClientFactory,
         [FromServices] IMemoryCache cache,
         [FromServices] IServiceScopeFactory scopeFactory,
+        [FromServices] ISystemLogService systemLogService,
         CancellationToken cancellationToken)
     {
         var config = await db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
@@ -477,12 +478,29 @@ public class GuestsController : ApiControllerBase
                 {
                     Console.WriteLine($"[SYNC] Warning: could not write sync log: {logEx.Message}");
                 }
+                // ── Write to System Logs (success) ────────────────────────────
+                await systemLogService.LogAsync(
+                    LogSeverity.Information,
+                    "EventsAir Sync",
+                    $"Manual sync completed: {added} added, {updated} updated, {deactivated} deactivated",
+                    job.Message,
+                    null,
+                    callerStaffId,
+                    callerStaffName);
             }
             catch (Exception ex)
             {
                 job.State = "error"; job.Message = ex.Message; job.FinishedAt = DateTime.UtcNow;
                 Console.WriteLine($"[SYNC] Error: {ex.Message}\n{ex.StackTrace}");
-
+                // ── Write to System Logs (failure) ────────────────────────────
+                await systemLogService.LogAsync(
+                    LogSeverity.Error,
+                    "EventsAir Sync",
+                    "Manual sync failed",
+                    ex.Message,
+                    null,
+                    callerStaffId,
+                    callerStaffName);
                 // ── Write failure log entry ───────────────────────────────────
                 try
                 {

@@ -366,9 +366,16 @@ public class FlightTrackerSyncService : BackgroundService
             if (inWindow == 0)
                 logMessage = "No active flights within the tracking window.";
             else if (queried == 0)
-                logMessage = $"Sync complete — {inWindow} flight(s) in window, none due for live data yet.";
+                logMessage = $"Sync complete \u2014 {inWindow} flight(s) in window, none due for live data yet.";
             else
-                logMessage = $"Sync complete — {queried} flight(s) queried, {updated} updated.";
+                logMessage = $"Sync complete \u2014 {queried} flight(s) queried, {updated} updated.";
+
+            await _systemLogService.LogAsync(
+                LogSeverity.Information,
+                "AviationStack Sync",
+                logMessage!,
+                $"Flights in window: {inWindow}, queried: {queried}, updated: {updated}",
+                null, null, initiatedByStaffName);
 
             return new SyncResult(queried, updated, logMessage);
         }
@@ -378,6 +385,12 @@ public class FlightTrackerSyncService : BackgroundService
             var inner2 = ex.InnerException?.InnerException?.Message ?? ex.InnerException?.Message ?? "(none)";
             logMessage = $"Sync failed: {ex.Message} | Inner: {inner2}";
             _logger.LogError(ex, "Manual flight sync failed.");
+            await _systemLogService.LogAsync(
+                LogSeverity.Error,
+                "AviationStack Sync",
+                "Flight sync failed",
+                logMessage,
+                null, null, initiatedByStaffName);
             return new SyncResult(queried, updated, logMessage);
         }
         finally
