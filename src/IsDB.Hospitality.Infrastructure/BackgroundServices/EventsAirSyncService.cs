@@ -345,7 +345,9 @@ public class EventsAirSyncService : BackgroundService
             await WriteSyncLogAsync(db, "Success", message, added + updated, deactivated, (int)sw.ElapsedMilliseconds,
                 added: added, updated: updated, travelSynced: travelSynced,
                 triggerSource: isStartupSync ? "Startup" : "System Auto-Sync", syncType: "Scheduled");
-
+            await _systemLogService.LogAsync(LogSeverity.Information, "EventsAir Sync",
+                $"Sync completed successfully in {sw.ElapsedMilliseconds}ms",
+                $"Added: {added}, Updated: {updated}, Deactivated: {deactivated}, Travel bookings: {travelSynced}");
             _logger.LogInformation(
                 "EventsAir background sync completed. Added={Added}, Updated={Updated}, Deactivated={Deactivated}, Travel={Travel}.",
                 added, updated, deactivated, travelSynced);
@@ -360,6 +362,8 @@ public class EventsAirSyncService : BackgroundService
             await db.SaveChangesAsync(CancellationToken.None);
             await WriteSyncLogAsync(db, "Failed", ex.Message, 0, 0, (int)sw.ElapsedMilliseconds,
                 triggerSource: isStartupSync ? "Startup" : "System Auto-Sync", syncType: "Scheduled");
+            await _systemLogService.LogAsync(LogSeverity.Error, "EventsAir Sync",
+                "Sync failed", ex.ToString());
         }
     }
 
