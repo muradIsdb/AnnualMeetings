@@ -18,6 +18,11 @@ public class AppConfig
     public int MinimumLeadTimeHours { get; set; } = 2;
 
     /// <summary>
+    /// Number of days to keep system logs before auto-purging. Default 90.
+    /// </summary>
+    public int LogRetentionDays { get; set; } = 90;
+
+    /// <summary>
     /// IANA timezone identifier for the event location (e.g. "Asia/Riyadh").
     /// Used to convert UTC server time to local event time for pickup hour filtering.
     /// </summary>

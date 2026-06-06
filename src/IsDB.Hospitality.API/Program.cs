@@ -903,6 +903,48 @@ using (var scope = app.Services.CreateScope())
         logger.LogWarning(ex, "AddAviationstackDateGuardDays migration failed (non-fatal).");
     }
 
+    // AddSystemLogsTable: creates the SystemLogs table for centralized error and issue logging.
+    try
+    {
+        logger.LogInformation("Running AddSystemLogsTable migration...");
+        await context.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "SystemLogs" (
+                "Id"                   uuid         NOT NULL DEFAULT gen_random_uuid(),
+                "OccurredAt"           timestamptz  NOT NULL DEFAULT now(),
+                "Severity"             integer      NOT NULL,
+                "Module"               text         NOT NULL,
+                "Title"                text         NOT NULL,
+                "Detail"               text         NULL,
+                "RequestPath"          text         NULL,
+                "StaffUserId"          uuid         NULL,
+                "StaffName"            text         NULL,
+                "CorrelationId"        text         NULL,
+                "CreatedAt"            timestamptz  NOT NULL DEFAULT now(),
+                "UpdatedAt"            timestamptz  NOT NULL DEFAULT now(),
+                CONSTRAINT "PK_SystemLogs" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_SystemLogs_StaffUsers_StaffUserId" FOREIGN KEY ("StaffUserId") REFERENCES "StaffUsers" ("Id") ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS "IX_SystemLogs_OccurredAt" ON "SystemLogs" ("OccurredAt" DESC);
+            CREATE INDEX IF NOT EXISTS "IX_SystemLogs_Severity_OccurredAt" ON "SystemLogs" ("Severity", "OccurredAt");
+            CREATE INDEX IF NOT EXISTS "IX_SystemLogs_Module_OccurredAt" ON "SystemLogs" ("Module", "OccurredAt");
+            CREATE INDEX IF NOT EXISTS "IX_SystemLogs_StaffUserId" ON "SystemLogs" ("StaffUserId");
+            
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'AppConfigs' AND column_name = 'LogRetentionDays'
+                ) THEN
+                    ALTER TABLE "AppConfigs" ADD COLUMN "LogRetentionDays" integer NOT NULL DEFAULT 30;
+                END IF;
+            END $$;
+        """);
+        logger.LogInformation("AddSystemLogsTable migration complete.");
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "AddSystemLogsTable migration failed (non-fatal).");
+    }
+
     // AddFlightSyncLogsTable: creates the FlightSyncLogs table for sync history inventory.
     try
     {
@@ -948,6 +990,7 @@ using (var scope = app.Services.CreateScope())
 app.UseSwagger();
 app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "IsDB Hospitality API v1"));
 
+app.UseMiddleware<IsDB.Hospitality.API.Middlewares.GlobalExceptionMiddleware>();
 app.UseSerilogRequestLogging();
 app.UseCors("AllowFrontend");
 

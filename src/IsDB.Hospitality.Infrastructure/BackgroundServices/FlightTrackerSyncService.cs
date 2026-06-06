@@ -20,15 +20,18 @@ public class FlightTrackerSyncService : BackgroundService
 
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<FlightTrackerSyncService> _logger;
+    private readonly ISystemLogService _systemLogService;
     private readonly AviationstackOptions _options;
 
     public FlightTrackerSyncService(
         IServiceProvider serviceProvider,
         ILogger<FlightTrackerSyncService> logger,
+        ISystemLogService systemLogService,
         IOptions<AviationstackOptions> options)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _systemLogService = systemLogService;
         _options = options.Value;
     }
 
@@ -48,6 +51,7 @@ public class FlightTrackerSyncService : BackgroundService
                 if (string.IsNullOrWhiteSpace(apiKey) || apiKey == "REPLACE_WITH_AVIATIONSTACK_API_KEY")
                 {
                     _logger.LogWarning("AviationStack API key is not configured. Skipping flight sync cycle.");
+                    await _systemLogService.LogAsync(LogSeverity.Warning, "FlightTracker", "Sync skipped: API key not configured");
                 }
                 else
                 {
@@ -231,6 +235,7 @@ public class FlightTrackerSyncService : BackgroundService
             var inner1 = ex.InnerException?.InnerException?.Message ?? ex.InnerException?.Message ?? "(none)";
             logMessage = $"Sync failed: {ex.Message} | Inner: {inner1}";
             _logger.LogError(ex, "Flight tracker sync failed.");
+            await _systemLogService.LogAsync(LogSeverity.Error, "FlightTracker", "Sync failed", ex.ToString());
         }
         finally
         {

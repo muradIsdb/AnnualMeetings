@@ -39,6 +39,7 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<TravelBookingHistory> TravelBookingHistories => Set<TravelBookingHistory>();
     public DbSet<VehicleStatusHistory> VehicleStatusHistories => Set<VehicleStatusHistory>();
     public DbSet<FlightSyncLog> FlightSyncLogs => Set<FlightSyncLog>();
+    public DbSet<SystemLog> SystemLogs => Set<SystemLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -184,6 +185,25 @@ public class AppDbContext : DbContext, IAppDbContext
             .WithMany()
             .HasForeignKey(r => r.CarClassId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        // SystemLogs indexes
+        modelBuilder.Entity<SystemLog>()
+            .HasIndex(l => l.OccurredAt)
+            .IsDescending();
+        
+        modelBuilder.Entity<SystemLog>()
+            .HasIndex(l => new { l.Severity, l.OccurredAt })
+            .IsDescending(false, true);
+            
+        modelBuilder.Entity<SystemLog>()
+            .HasIndex(l => new { l.Module, l.OccurredAt })
+            .IsDescending(false, true);
+
+        modelBuilder.Entity<SystemLog>()
+            .HasOne(l => l.StaffUser)
+            .WithMany()
+            .HasForeignKey(l => l.StaffUserId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         // CarClassRule — unique index on RegistrationTypeName
         modelBuilder.Entity<CarClassRule>()

@@ -1,4 +1,5 @@
 using IsDB.Hospitality.Application.Common.Models;
+using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Domain.Entities;
 using IsDB.Hospitality.Domain.Enums;
 using IsDB.Hospitality.Infrastructure.Persistence;
@@ -20,14 +21,16 @@ public class EventsAirSyncService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<EventsAirSyncService> _logger;
+    private readonly ISystemLogService _systemLogService;
 
     // Default interval used only before the first DB read
     private TimeSpan _syncInterval = TimeSpan.FromMinutes(15);
 
-    public EventsAirSyncService(IServiceProvider serviceProvider, ILogger<EventsAirSyncService> logger)
+    public EventsAirSyncService(IServiceProvider serviceProvider, ILogger<EventsAirSyncService> logger, ISystemLogService systemLogService)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _systemLogService = systemLogService;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -59,6 +62,7 @@ public class EventsAirSyncService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "EventsAir startup sync failed.");
+                await _systemLogService.LogAsync(LogSeverity.Error, "EventsAirSync", "Startup sync failed", ex.ToString());
             }
         }
 
@@ -96,6 +100,7 @@ public class EventsAirSyncService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unhandled error in EventsAir background sync loop.");
+                await _systemLogService.LogAsync(LogSeverity.Critical, "EventsAirSync", "Unhandled error in background loop", ex.ToString());
             }
         }
 
@@ -130,6 +135,7 @@ public class EventsAirSyncService : BackgroundService
             string.IsNullOrWhiteSpace(config.EventCode) || string.IsNullOrWhiteSpace(config.ApiBaseUrl))
         {
             _logger.LogWarning("EventsAir background sync skipped: credentials or EventCode not configured.");
+            await _systemLogService.LogAsync(LogSeverity.Warning, "EventsAirSync", "Sync skipped: credentials or EventCode not configured");
             return;
         }
 
@@ -168,6 +174,7 @@ public class EventsAirSyncService : BackgroundService
         {
             sw.Stop();
             _logger.LogError(ex, "EventsAir background sync failed: could not acquire token.");
+            await _systemLogService.LogAsync(LogSeverity.Error, "EventsAirSync", "Failed to acquire token", ex.ToString());
             config.LastSyncAt = DateTime.UtcNow;
             config.LastSyncStatus = "Failed";
             config.LastSyncMessage = $"Token acquisition failed: {ex.Message}";
