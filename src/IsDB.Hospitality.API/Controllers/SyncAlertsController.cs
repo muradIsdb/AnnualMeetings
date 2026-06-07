@@ -182,6 +182,70 @@ public class SyncAlertsController : ControllerBase
         return Ok(new { resolved = alerts.Count });
     }
 
+    // ─── POST /api/transport-actions/seed-test ────────────────────────────────
+    /// <summary>Inserts one test SyncAlert of each type for UI verification. Admin only.</summary>
+    [HttpPost("seed-test")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> SeedTestAlerts()
+    {
+        // Remove any previously seeded test alerts to avoid duplicates
+        var existing = await _db.SyncAlerts
+            .Where(a => a.Notes == "[TEST]")
+            .ToListAsync();
+        _db.SyncAlerts.RemoveRange(existing);
+
+        // Pick a real guest and vehicle from the DB for realistic data
+        var guest = await _db.Guests.Where(g => g.DeservedCarClassId != null).FirstOrDefaultAsync()
+                 ?? await _db.Guests.FirstOrDefaultAsync();
+        var vehicle = await _db.Vehicles.Include(v => v.CarClass).FirstOrDefaultAsync();
+        var now = DateTime.UtcNow;
+
+        _db.SyncAlerts.AddRange(
+            new SyncAlert
+            {
+                AlertType          = SyncAlertType.GuestRemoved,
+                GuestId            = guest?.Id,
+                GuestName          = guest != null ? $"{guest.FirstName} {guest.LastName}".Trim() : "Test Guest",
+                EventsAirContactId = guest?.EventsAirContactId,
+                OldValue           = "Active",
+                NewValue           = "Removed from EventsAir",
+                SyncSource         = SyncAlertSource.ManualSync,
+                DetectedAt         = now,
+                Notes              = "[TEST]"
+            },
+            new SyncAlert
+            {
+                AlertType          = SyncAlertType.CarClassMismatch,
+                GuestId            = guest?.Id,
+                GuestName          = guest != null ? $"{guest.FirstName} {guest.LastName}".Trim() : "Test Guest",
+                EventsAirContactId = guest?.EventsAirContactId,
+                VehicleId          = vehicle?.Id,
+                VehiclePlate       = vehicle?.LicensePlate,
+                CarClassName       = vehicle?.CarClass?.Name,
+                OldValue           = "Hyundai Sonata",
+                NewValue           = "Tayota Camry",
+                SyncSource         = SyncAlertSource.ManualSync,
+                DetectedAt         = now.AddSeconds(-5),
+                Notes              = "[TEST]"
+            },
+            new SyncAlert
+            {
+                AlertType          = SyncAlertType.RegTypeChanged,
+                GuestId            = guest?.Id,
+                GuestName          = guest != null ? $"{guest.FirstName} {guest.LastName}".Trim() : "Test Guest",
+                EventsAirContactId = guest?.EventsAirContactId,
+                OldValue           = "Governor",
+                NewValue           = "Observer",
+                SyncSource         = SyncAlertSource.AutoSync,
+                DetectedAt         = now.AddSeconds(-10),
+                Notes              = "[TEST]"
+            }
+        );
+
+        await _db.SaveChangesAsync();
+        return Ok(new { seeded = 3, message = "3 test alerts inserted (GuestRemoved, CarClassMismatch, RegTypeChanged)." });
+    }
+
     // ─── DELETE /api/sync-alerts/{id} ─────────────────────────────────────────
     /// <summary>Permanently deletes a resolved alert (Admin only).</summary>
     [HttpDelete("{id:guid}")]
@@ -200,3 +264,5 @@ public class SyncAlertsController : ControllerBase
 }
 
 public record ResolveRequest(string? Notes);
+
+
