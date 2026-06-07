@@ -1,7 +1,7 @@
 /**
  * SyncAlertsPage.source.jsx
  *
- * Source file for the Sync Alerts page (/transport/sync-issues).
+ * Source file for the Sync Alerts page (/transport/sync-notifications).
  * Accessible to Admin and Transport roles only.
  *
  * This file is kept in the repository for reference.
@@ -9,10 +9,10 @@
  * using the patch script: /home/ubuntu/inject_sync_alerts.py
  *
  * API endpoints used:
- *   GET  /api/sync-issues          - list with filters: type, resolved, search, page, pageSize
- *   POST /api/sync-issues/{id}/resolve  - mark as resolved (body: { notes })
- *   POST /api/sync-issues/resolve-all   - bulk resolve all open alerts
- *   GET  /api/sync-issues/summary       - { guestRemoved, regTypeChanged, carClassMismatch, totalOpen, totalResolved }
+ *   GET  /api/sync-notifications          - list with filters: type, resolved, search, page, pageSize
+ *   POST /api/sync-notifications/{id}/resolve  - mark as resolved (body: { notes })
+ *   POST /api/sync-notifications/resolve-all   - bulk resolve all open alerts
+ *   GET  /api/sync-notifications/summary       - { guestRemoved, regTypeChanged, carClassMismatch, totalOpen, totalResolved }
  */
 
 import React, { useState, useCallback } from "react";
@@ -204,30 +204,30 @@ export default function SyncAlertsPage() {
   }, [activeTab, search, page]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["sync-issues", activeTab, search, page],
-    queryFn: () => ax.get("/sync-issues", { params: params() }).then((r) => r.data),
+    queryKey: ["sync-notifications", activeTab, search, page],
+    queryFn: () => ax.get("/sync-notifications", { params: params() }).then((r) => r.data),
     refetchInterval: 30000,
   });
 
   const { data: summary } = useQuery({
-    queryKey: ["sync-issues-summary"],
-    queryFn: () => ax.get("/sync-issues/summary").then((r) => r.data),
+    queryKey: ["sync-notifications-summary"],
+    queryFn: () => ax.get("/sync-notifications/summary").then((r) => r.data),
     refetchInterval: 30000,
   });
 
   const resolveMut = useMutation({
-    mutationFn: ({ id, notes }) => ax.post(`/sync-issues/${id}/resolve`, { notes }),
+    mutationFn: ({ id, notes }) => ax.post(`/sync-notifications/${id}/resolve`, { notes }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["sync-issues"] });
-      qc.invalidateQueries({ queryKey: ["sync-issues-summary"] });
+      qc.invalidateQueries({ queryKey: ["sync-notifications"] });
+      qc.invalidateQueries({ queryKey: ["sync-notifications-summary"] });
     },
   });
 
   const resolveAllMut = useMutation({
-    mutationFn: () => ax.post("/sync-issues/resolve-all"),
+    mutationFn: () => ax.post("/sync-notifications/resolve-all"),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["sync-issues"] });
-      qc.invalidateQueries({ queryKey: ["sync-issues-summary"] });
+      qc.invalidateQueries({ queryKey: ["sync-notifications"] });
+      qc.invalidateQueries({ queryKey: ["sync-notifications-summary"] });
     },
   });
 
