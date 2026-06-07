@@ -1,7 +1,7 @@
 /**
  * SyncAlertsPage.source.jsx
  *
- * Source file for the Sync Alerts page (/transport/vehicles/sync-log).
+ * Source file for the Sync Alerts page (/transport/vehicles?view=sync-log).
  * Accessible to Admin and Transport roles only.
  *
  * This file is kept in the repository for reference.
@@ -9,10 +9,10 @@
  * using the patch script: /home/ubuntu/inject_sync_alerts.py
  *
  * API endpoints used:
- *   GET  /api/vehicles/sync-log          - list with filters: type, resolved, search, page, pageSize
- *   POST /api/vehicles/sync-log/{id}/resolve  - mark as resolved (body: { notes })
- *   POST /api/vehicles/sync-log/resolve-all   - bulk resolve all open alerts
- *   GET  /api/vehicles/sync-log/summary       - { guestRemoved, regTypeChanged, carClassMismatch, totalOpen, totalResolved }
+ *   GET  /api/vehicles?view=sync-log          - list with filters: type, resolved, search, page, pageSize
+ *   POST /api/vehicles?view=sync-log/{id}/resolve  - mark as resolved (body: { notes })
+ *   POST /api/vehicles?view=sync-log/resolve-all   - bulk resolve all open alerts
+ *   GET  /api/vehicles?view=sync-log/summary       - { guestRemoved, regTypeChanged, carClassMismatch, totalOpen, totalResolved }
  */
 
 import React, { useState, useCallback } from "react";
@@ -204,30 +204,30 @@ export default function SyncAlertsPage() {
   }, [activeTab, search, page]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["vehicles/sync-log", activeTab, search, page],
-    queryFn: () => ax.get("/vehicles/sync-log", { params: params() }).then((r) => r.data),
+    queryKey: ["vehicles?view=sync-log", activeTab, search, page],
+    queryFn: () => ax.get("/vehicles?view=sync-log", { params: params() }).then((r) => r.data),
     refetchInterval: 30000,
   });
 
   const { data: summary } = useQuery({
-    queryKey: ["vehicles/sync-log-summary"],
-    queryFn: () => ax.get("/vehicles/sync-log/summary").then((r) => r.data),
+    queryKey: ["vehicles?view=sync-log-summary"],
+    queryFn: () => ax.get("/vehicles?view=sync-log/summary").then((r) => r.data),
     refetchInterval: 30000,
   });
 
   const resolveMut = useMutation({
-    mutationFn: ({ id, notes }) => ax.post(`/vehicles/sync-log/${id}/resolve`, { notes }),
+    mutationFn: ({ id, notes }) => ax.post(`/vehicles?view=sync-log/${id}/resolve`, { notes }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["vehicles/sync-log"] });
-      qc.invalidateQueries({ queryKey: ["vehicles/sync-log-summary"] });
+      qc.invalidateQueries({ queryKey: ["vehicles?view=sync-log"] });
+      qc.invalidateQueries({ queryKey: ["vehicles?view=sync-log-summary"] });
     },
   });
 
   const resolveAllMut = useMutation({
-    mutationFn: () => ax.post("/vehicles/sync-log/resolve-all"),
+    mutationFn: () => ax.post("/vehicles?view=sync-log/resolve-all"),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["vehicles/sync-log"] });
-      qc.invalidateQueries({ queryKey: ["vehicles/sync-log-summary"] });
+      qc.invalidateQueries({ queryKey: ["vehicles?view=sync-log"] });
+      qc.invalidateQueries({ queryKey: ["vehicles?view=sync-log-summary"] });
     },
   });
 
