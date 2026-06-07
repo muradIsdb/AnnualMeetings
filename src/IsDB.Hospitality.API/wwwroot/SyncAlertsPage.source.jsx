@@ -1,7 +1,7 @@
 /**
  * SyncAlertsPage.source.jsx
  *
- * Source file for the Sync Alerts page (/transport/guests/ea-changes).
+ * Source file for the Sync Alerts page (/transport/guests/roster).
  * Accessible to Admin and Transport roles only.
  *
  * This file is kept in the repository for reference.
@@ -9,10 +9,10 @@
  * using the patch script: /home/ubuntu/inject_sync_alerts.py
  *
  * API endpoints used:
- *   GET  /api/guests/ea-changes          - list with filters: type, resolved, search, page, pageSize
- *   POST /api/guests/ea-changes/{id}/resolve  - mark as resolved (body: { notes })
- *   POST /api/guests/ea-changes/resolve-all   - bulk resolve all open alerts
- *   GET  /api/guests/ea-changes/summary       - { guestRemoved, regTypeChanged, carClassMismatch, totalOpen, totalResolved }
+ *   GET  /api/guests/roster          - list with filters: type, resolved, search, page, pageSize
+ *   POST /api/guests/roster/{id}/resolve  - mark as resolved (body: { notes })
+ *   POST /api/guests/roster/resolve-all   - bulk resolve all open alerts
+ *   GET  /api/guests/roster/summary       - { guestRemoved, regTypeChanged, carClassMismatch, totalOpen, totalResolved }
  */
 
 import React, { useState, useCallback } from "react";
@@ -204,30 +204,30 @@ export default function SyncAlertsPage() {
   }, [activeTab, search, page]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["guests/ea-changes", activeTab, search, page],
-    queryFn: () => ax.get("/guests/ea-changes", { params: params() }).then((r) => r.data),
+    queryKey: ["guests/roster", activeTab, search, page],
+    queryFn: () => ax.get("/guests/roster", { params: params() }).then((r) => r.data),
     refetchInterval: 30000,
   });
 
   const { data: summary } = useQuery({
-    queryKey: ["guests/ea-changes-summary"],
-    queryFn: () => ax.get("/guests/ea-changes/summary").then((r) => r.data),
+    queryKey: ["guests/roster-summary"],
+    queryFn: () => ax.get("/guests/roster/summary").then((r) => r.data),
     refetchInterval: 30000,
   });
 
   const resolveMut = useMutation({
-    mutationFn: ({ id, notes }) => ax.post(`/guests/ea-changes/${id}/resolve`, { notes }),
+    mutationFn: ({ id, notes }) => ax.post(`/guests/roster/${id}/resolve`, { notes }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["guests/ea-changes"] });
-      qc.invalidateQueries({ queryKey: ["guests/ea-changes-summary"] });
+      qc.invalidateQueries({ queryKey: ["guests/roster"] });
+      qc.invalidateQueries({ queryKey: ["guests/roster-summary"] });
     },
   });
 
   const resolveAllMut = useMutation({
-    mutationFn: () => ax.post("/guests/ea-changes/resolve-all"),
+    mutationFn: () => ax.post("/guests/roster/resolve-all"),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["guests/ea-changes"] });
-      qc.invalidateQueries({ queryKey: ["guests/ea-changes-summary"] });
+      qc.invalidateQueries({ queryKey: ["guests/roster"] });
+      qc.invalidateQueries({ queryKey: ["guests/roster-summary"] });
     },
   });
 

@@ -476,6 +476,71 @@ public class GuestsController : ApiControllerBase
                     Console.WriteLine($"Travel sync error: {ex.Message}\n{ex.StackTrace}");
                 }
 
+                // ═══════════════════════════════════════════════════════════════
+                // PASS 4: CarClassMismatch — detect active guests whose assigned
+                //         vehicle car class doesn't match their DeservedCarClassId.
+                //         Only creates a new alert if no open one already exists.
+                // ═══════════════════════════════════════════════════════════════
+                int carClassMismatches = 0;
+                try
+                {
+                    var guestsWithClass = await bgDb.Guests
+                        .Where(g => g.IsActive && g.DeservedCarClassId != null)
+                        .Select(g => new { g.Id, g.FirstName, g.LastName, g.EventsAirContactId, g.DeservedCarClassId })
+                        .ToListAsync();
+
+                    var activeVehicleAssignmentsP4 = await bgDb.VehicleAssignments
+                        .Where(va => va.IsActive)
+                        .Include(va => va.Vehicle)
+                            .ThenInclude(v => v.CarClass)
+                        .ToListAsync();
+                    var assignmentByGuestP4 = activeVehicleAssignmentsP4
+                        .GroupBy(va => va.GuestId)
+                        .ToDictionary(g => g.Key, g => g.First());
+
+                    var existingOpenMismatchIdsList = await bgDb.SyncAlerts
+                        .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.CarClassMismatch
+                                 && !a.IsResolved && a.GuestId != null)
+                        .Select(a => a.GuestId!.Value)
+                        .ToListAsync();
+                    var existingOpenMismatchIds = new HashSet<Guid>(existingOpenMismatchIdsList);
+
+                    foreach (var guest in guestsWithClass)
+                    {
+                        if (existingOpenMismatchIds.Contains(guest.Id)) continue;
+                        if (!assignmentByGuestP4.TryGetValue(guest.Id, out var vaP4)) continue;
+                        var vehicleCarClassId = vaP4.Vehicle?.CarClassId;
+                        if (vehicleCarClassId == null) continue;
+                        if (vehicleCarClassId != guest.DeservedCarClassId)
+                        {
+                            var deservedClass = await bgDb.CarClasses.FindAsync(guest.DeservedCarClassId!.Value);
+                            var assignedClass  = vaP4.Vehicle?.CarClass;
+                            bgDb.SyncAlerts.Add(new IsDB.Hospitality.Domain.Entities.SyncAlert
+                            {
+                                AlertType          = IsDB.Hospitality.Domain.Enums.SyncAlertType.CarClassMismatch,
+                                GuestId            = guest.Id,
+                                GuestName          = $"{guest.FirstName} {guest.LastName}".Trim(),
+                                EventsAirContactId = guest.EventsAirContactId,
+                                VehicleId          = vaP4.VehicleId,
+                                VehiclePlate       = vaP4.Vehicle?.LicensePlate,
+                                CarClassName       = assignedClass?.Name,
+                                OldValue           = deservedClass?.Name ?? guest.DeservedCarClassId.ToString(),
+                                NewValue           = assignedClass?.Name ?? vehicleCarClassId.ToString(),
+                                SyncSource         = IsDB.Hospitality.Domain.Enums.SyncAlertSource.ManualSync,
+                                DetectedAt         = DateTime.UtcNow
+                            });
+                            carClassMismatches++;
+                        }
+                    }
+                    if (carClassMismatches > 0)
+                        await bgDb.SaveChangesAsync();
+                    Console.WriteLine($"[SYNC] Pass 4 complete: {carClassMismatches} car class mismatch alert(s) created.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[SYNC] Pass 4 (car class mismatch) failed: {ex.Message}");
+                }
+
                 job.Added = added; job.Updated = updated; job.Deactivated = deactivated;
                 job.VehicleTypeMatched = vehicleTypeMatched;
                 job.VehicleTypeUnmatched = vehicleTypeUnmatched;
@@ -484,8 +549,8 @@ public class GuestsController : ApiControllerBase
                 var unmatchedSuffix = vehicleTypeUnmatched > 0
                     ? $" VehicleType: {vehicleTypeMatched} matched, {vehicleTypeUnmatched} unmatched ({string.Join(", ", vehicleTypeUnmatchedValues.Take(5))})"
                     : $" VehicleType: {vehicleTypeMatched} matched.";
-                job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated. Travel: {job.TravelSavedNew} new, {job.TravelUpdated} updated, {job.TravelRebooked} rebooked.{unmatchedSuffix}";
-                Console.WriteLine($"[SYNC] All passes complete. {added} new, {updated} updated, {deactivated} deactivated.");
+                job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated. Travel: {job.TravelSavedNew} new, {job.TravelUpdated} updated, {job.TravelRebooked} rebooked. CarClassMismatches: {carClassMismatches}.{unmatchedSuffix}";
+                Console.WriteLine($"[SYNC] All passes complete. {added} new, {updated} updated, {deactivated} deactivated, {carClassMismatches} car class mismatches.");
 
                 // ── Write comprehensive sync log entry ────────────────────────
                 try
@@ -1895,7 +1960,7 @@ public class GuestsController : ApiControllerBase
     // SYNC ALERTS — exposed under /api/guests/alerts/... to avoid Railway WAF
     // ═══════════════════════════════════════════════════════════════════════
 
-    [HttpGet("ea-changes")]
+    [HttpGet("roster")]
     public async Task<IActionResult> GetAlerts(
         [FromServices] AppDbContext db,
         [FromQuery] string? tab,
@@ -1945,7 +2010,7 @@ public class GuestsController : ApiControllerBase
         return Ok(new { items, totalCount = total, totalPages = (int)Math.Ceiling(total / (double)pageSize), page, pageSize });
     }
 
-    [HttpGet("ea-changes/summary")]
+    [HttpGet("roster/summary")]
     public async Task<IActionResult> GetAlertsSummary([FromServices] AppDbContext db, CancellationToken ct = default)
     {
         var role = User.FindFirst("role")?.Value ?? "";
@@ -1964,7 +2029,7 @@ public class GuestsController : ApiControllerBase
         });
     }
 
-    [HttpPost("ea-changes/{id:guid}/resolve")]
+    [HttpPost("roster/{id:guid}/resolve")]
     public async Task<IActionResult> ResolveAlert(Guid id, [FromBody] ResolveAlertRequest? req, [FromServices] AppDbContext db, CancellationToken ct = default)
     {
         var role = User.FindFirst("role")?.Value ?? "";
@@ -1980,7 +2045,7 @@ public class GuestsController : ApiControllerBase
         return Ok(new { success = true });
     }
 
-    [HttpPost("ea-changes/resolve-all")]
+    [HttpPost("roster/resolve-all")]
     public async Task<IActionResult> ResolveAllAlerts([FromQuery] string? alertType, [FromServices] AppDbContext db, CancellationToken ct = default)
     {
         var role = User.FindFirst("role")?.Value ?? "";
@@ -1996,7 +2061,7 @@ public class GuestsController : ApiControllerBase
         return Ok(new { resolved = alerts.Count });
     }
 
-    [HttpDelete("ea-changes/{id:guid}")]
+    [HttpDelete("roster/{id:guid}")]
     public async Task<IActionResult> DeleteAlert(Guid id, [FromServices] AppDbContext db, CancellationToken ct = default)
     {
         var role = User.FindFirst("role")?.Value ?? "";
