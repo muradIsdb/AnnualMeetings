@@ -526,19 +526,6 @@ public class GuestsController : ApiControllerBase
                         .GroupBy(v => v.CurrentGuestId!.Value)
                         .ToDictionary(g => g.Key, g => g.First());
 
-                    // FALLBACK: if a vehicle's Status is not Assigned but a VehicleAssignment
-                    // record is still active (data inconsistency), include those too
-                    var activeAssignmentsP4 = await bgDb.VehicleAssignments
-                        .Where(va => va.IsActive && va.Vehicle != null && va.Vehicle.IsActive)
-                        .Include(va => va.Vehicle).ThenInclude(v => v.CarClass)
-                        .ToListAsync();
-                    foreach (var va in activeAssignmentsP4)
-                    {
-                        if (va.Vehicle == null || !va.Vehicle.IsActive) continue;
-                        if (!vehicleByGuestP4.ContainsKey(va.GuestId))
-                            vehicleByGuestP4[va.GuestId] = va.Vehicle;
-                    }
-
                     // Load all open CarClassMismatch alerts (full entity for auto-resolution)
                     var existingOpenMismatches = await bgDb.SyncAlerts
                         .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.CarClassMismatch

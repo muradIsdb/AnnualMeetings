@@ -429,19 +429,6 @@ public class EventsAirSyncService : BackgroundService
                     .GroupBy(v => v.CurrentGuestId!.Value)
                     .ToDictionary(g => g.Key, g => g.First());
 
-                // FALLBACK: if a vehicle's Status is not Assigned but a VehicleAssignment
-                // record is still active (data inconsistency), include those too
-                var activeVehicleAssignments = await db.VehicleAssignments
-                    .Where(va => va.IsActive && va.Vehicle != null && va.Vehicle.IsActive)
-                    .Include(va => va.Vehicle).ThenInclude(v => v.CarClass)
-                    .ToListAsync(cancellationToken);
-                foreach (var va in activeVehicleAssignments)
-                {
-                    if (va.Vehicle == null || !va.Vehicle.IsActive) continue;
-                    if (!vehicleByGuest.ContainsKey(va.GuestId))
-                        vehicleByGuest[va.GuestId] = va.Vehicle;
-                }
-
                 // Load all open CarClassMismatch alerts (full entity for auto-resolution)
                 var existingOpenMismatches = await db.SyncAlerts
                     .Where(a => a.AlertType == SyncAlertType.CarClassMismatch && !a.IsResolved && a.GuestId != null)
