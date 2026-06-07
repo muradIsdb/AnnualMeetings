@@ -262,6 +262,16 @@ public class VehiclesController : ApiControllerBase
             return Ok(new { resolved = alerts.Count });
         }
 
+        if (view == "discrepancies-delete-all")
+        {
+            var role = User.FindFirst("role")?.Value ?? "";
+            if (role != "Admin") return Forbid();
+            var all = await _db.SyncAlerts.ToListAsync(ct);
+            _db.SyncAlerts.RemoveRange(all);
+            await _db.SaveChangesAsync(ct);
+            return Ok(new { deleted = all.Count });
+        }
+
         // Fall through to normal vehicle creation
         if (!body.HasValue || body.Value.ValueKind == System.Text.Json.JsonValueKind.Null)
             return BadRequest(new { message = "Request body is required for vehicle creation." });
