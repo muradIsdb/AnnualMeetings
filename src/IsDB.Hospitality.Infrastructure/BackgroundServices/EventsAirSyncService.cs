@@ -458,7 +458,7 @@ public class EventsAirSyncService : BackgroundService
                     {
                         alert.IsResolved = true;
                         alert.ResolvedAt = DateTime.UtcNow;
-                        alert.ResolvedByName = "System (auto-resolved: vehicle unassigned)";
+                        alert.ResolvedByUserName = "System (auto-resolved: vehicle unassigned)";
                         autoResolved++;
                         existingOpenMismatchGuestIds.Remove(gid);
                         continue;
@@ -469,7 +469,7 @@ public class EventsAirSyncService : BackgroundService
                     {
                         alert.IsResolved = true;
                         alert.ResolvedAt = DateTime.UtcNow;
-                        alert.ResolvedByName = "System (auto-resolved: class now matches)";
+                        alert.ResolvedByUserName = "System (auto-resolved: class now matches)";
                         autoResolved++;
                         existingOpenMismatchGuestIds.Remove(gid);
                     }

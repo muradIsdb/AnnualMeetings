@@ -558,7 +558,7 @@ public class GuestsController : ApiControllerBase
                         {
                             alert.IsResolved = true;
                             alert.ResolvedAt = DateTime.UtcNow;
-                            alert.ResolvedByName = "System (auto-resolved: vehicle unassigned)";
+                            alert.ResolvedByUserName = "System (auto-resolved: vehicle unassigned)";
                             autoResolved++;
                             existingOpenMismatchIds.Remove(guestId);
                             continue;
@@ -570,7 +570,7 @@ public class GuestsController : ApiControllerBase
                         {
                             alert.IsResolved = true;
                             alert.ResolvedAt = DateTime.UtcNow;
-                            alert.ResolvedByName = "System (auto-resolved: class now matches)";
+                            alert.ResolvedByUserName = "System (auto-resolved: class now matches)";
                             autoResolved++;
                             existingOpenMismatchIds.Remove(guestId);
                         }
