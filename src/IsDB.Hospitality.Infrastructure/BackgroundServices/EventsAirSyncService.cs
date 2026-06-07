@@ -432,12 +432,12 @@ public class EventsAirSyncService : BackgroundService
                 // FALLBACK: if a vehicle's Status is not Assigned but a VehicleAssignment
                 // record is still active (data inconsistency), include those too
                 var activeVehicleAssignments = await db.VehicleAssignments
-                    .Where(va => va.IsActive)
+                    .Where(va => va.IsActive && va.Vehicle != null && va.Vehicle.IsActive)
                     .Include(va => va.Vehicle).ThenInclude(v => v.CarClass)
                     .ToListAsync(cancellationToken);
                 foreach (var va in activeVehicleAssignments)
                 {
-                    if (va.Vehicle == null) continue;
+                    if (va.Vehicle == null || !va.Vehicle.IsActive) continue;
                     if (!vehicleByGuest.ContainsKey(va.GuestId))
                         vehicleByGuest[va.GuestId] = va.Vehicle;
                 }
