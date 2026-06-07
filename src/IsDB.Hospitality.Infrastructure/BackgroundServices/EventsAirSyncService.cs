@@ -256,7 +256,26 @@ public class EventsAirSyncService : BackgroundService
                     if (existing.LastName != contact.LastName) { existing.LastName = contact.LastName; changed = true; }
                     if (existing.Designation != contact.JobTitle) { existing.Designation = contact.JobTitle; changed = true; }
                     if (existing.Organization != contact.OrganizationName) { existing.Organization = contact.OrganizationName; changed = true; }
-                    if (existing.RegistrationTypeName != contact.RegistrationTypeName) { existing.RegistrationTypeName = contact.RegistrationTypeName; changed = true; }
+                    // ── Detect registration type change → create SyncAlert ──────────────
+                    if (existing.RegistrationTypeName != contact.RegistrationTypeName)
+                    {
+                        if (!string.IsNullOrWhiteSpace(existing.RegistrationTypeName) && !string.IsNullOrWhiteSpace(contact.RegistrationTypeName))
+                        {
+                            db.SyncAlerts.Add(new SyncAlert
+                            {
+                                AlertType    = SyncAlertType.RegTypeChanged,
+                                GuestId      = existing.Id,
+                                GuestName    = $"{existing.FirstName} {existing.LastName}".Trim(),
+                                EventsAirContactId = existing.EventsAirContactId,
+                                OldValue     = existing.RegistrationTypeName,
+                                NewValue     = contact.RegistrationTypeName,
+                                SyncSource   = SyncAlertSource.AutoSync,
+                                DetectedAt   = DateTime.UtcNow
+                            });
+                        }
+                        existing.RegistrationTypeName = contact.RegistrationTypeName;
+                        changed = true;
+                    }
                     if (existing.RegistrationTypeId != contact.RegistrationTypeId) { existing.RegistrationTypeId = contact.RegistrationTypeId; changed = true; }
                     if (existing.Email != contact.PrimaryEmail) { existing.Email = contact.PrimaryEmail; changed = true; }
                     if (existing.Country != contact.Country) { existing.Country = contact.Country; changed = true; }
@@ -275,21 +294,51 @@ public class EventsAirSyncService : BackgroundService
             //         load active-vehicle set in one query — no FindAsync per guest.
             // ══════════════════════════════════════════════════════════════════
 
-            // Single query: which guest IDs have an active vehicle assignment?
-            var guestsWithActiveVehicleList = await db.VehicleAssignments
+            // Load active vehicle assignments keyed by GuestId for release on deactivation
+            var activeAssignments = await db.VehicleAssignments
                 .Where(va => va.IsActive)
-                .Select(va => va.GuestId)
+                .Include(va => va.Vehicle)
                 .ToListAsync(cancellationToken);
-            var guestsWithActiveVehicle = guestsWithActiveVehicleList.ToHashSet();
+            var assignmentsByGuest = activeAssignments
+                .GroupBy(va => va.GuestId)
+                .ToDictionary(g => g.Key, g => g.First());
 
             foreach (var kvp in existingGuestsByContactId)
             {
                 var g = kvp.Value;
                 if (!string.IsNullOrEmpty(g.EventsAirContactId) &&
                     !syncedContactIds.Contains(g.EventsAirContactId) &&
-                    g.IsActive &&
-                    !guestsWithActiveVehicle.Contains(g.Id))
+                    g.IsActive)
                 {
+                    // ── Release active vehicle assignment if present ──────────────────
+                    string? vehiclePlate = null;
+                    string? carClassName = null;
+                    Guid? vehicleId = null;
+                    if (assignmentsByGuest.TryGetValue(g.Id, out var assignment))
+                    {
+                        assignment.IsActive = false;
+                        assignment.UnassignedAt = DateTime.UtcNow;
+                        vehiclePlate = assignment.Vehicle?.LicensePlate;
+                        vehicleId = assignment.VehicleId;
+                        // Return vehicle to Available
+                        if (assignment.Vehicle != null)
+                        {
+                            assignment.Vehicle.Status = VehicleStatus.Available;
+                        }
+                    }
+                    // ── Create GuestRemoved SyncAlert ──────────────────────────────────
+                    db.SyncAlerts.Add(new SyncAlert
+                    {
+                        AlertType    = SyncAlertType.GuestRemoved,
+                        GuestId      = g.Id,
+                        GuestName    = $"{g.FirstName} {g.LastName}".Trim(),
+                        EventsAirContactId = g.EventsAirContactId,
+                        VehicleId    = vehicleId,
+                        VehiclePlate = vehiclePlate,
+                        CarClassName = carClassName,
+                        SyncSource   = SyncAlertSource.AutoSync,
+                        DetectedAt   = DateTime.UtcNow
+                    });
                     g.IsActive = false;
                     g.DedicatedCar = null;
                     g.LastSyncedAt = DateTime.UtcNow;

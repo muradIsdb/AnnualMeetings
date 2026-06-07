@@ -1002,6 +1002,47 @@ using (var scope = app.Services.CreateScope())
         logger.LogWarning(ex, "AddFlightSyncLogsTable migration failed (non-fatal).");
     }
 
+    // AddSyncAlertsTable: creates the SyncAlerts table for sync issue tracking.
+    try
+    {
+        logger.LogInformation("Running AddSyncAlertsTable migration...");
+        await context.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "SyncAlerts" (
+                "Id"                   uuid         NOT NULL DEFAULT gen_random_uuid(),
+                "AlertType"            integer      NOT NULL DEFAULT 1,
+                "GuestId"              uuid         NULL,
+                "GuestName"            text         NOT NULL DEFAULT '',
+                "EventsAirContactId"   text         NULL,
+                "VehicleId"            uuid         NULL,
+                "VehiclePlate"         text         NULL,
+                "CarClassName"         text         NULL,
+                "OldValue"             text         NULL,
+                "NewValue"             text         NULL,
+                "SyncSource"           integer      NOT NULL DEFAULT 1,
+                "DetectedAt"           timestamptz  NOT NULL DEFAULT now(),
+                "IsResolved"           boolean      NOT NULL DEFAULT false,
+                "ResolvedAt"           timestamptz  NULL,
+                "ResolvedByUserName"   text         NULL,
+                "Notes"                text         NULL,
+                "CreatedAt"            timestamptz  NOT NULL DEFAULT now(),
+                "UpdatedAt"            timestamptz  NOT NULL DEFAULT now(),
+                CONSTRAINT "PK_SyncAlerts" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_SyncAlerts_Guests_GuestId" FOREIGN KEY ("GuestId") REFERENCES "Guests" ("Id") ON DELETE SET NULL,
+                CONSTRAINT "FK_SyncAlerts_Vehicles_VehicleId" FOREIGN KEY ("VehicleId") REFERENCES "Vehicles" ("Id") ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS "IX_SyncAlerts_DetectedAt" ON "SyncAlerts" ("DetectedAt" DESC);
+            CREATE INDEX IF NOT EXISTS "IX_SyncAlerts_IsResolved_DetectedAt" ON "SyncAlerts" ("IsResolved", "DetectedAt" DESC);
+            INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+            VALUES ('20260607000001_AddSyncAlertsTable', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        """);
+        logger.LogInformation("AddSyncAlertsTable migration complete.");
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "AddSyncAlertsTable migration failed (non-fatal).");
+    }
+
     await DatabaseSeeder.SeedAsync(context, logger);
 
     // Seed notification templates (idempotent — only inserts missing keys)

@@ -40,6 +40,7 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<VehicleStatusHistory> VehicleStatusHistories => Set<VehicleStatusHistory>();
     public DbSet<FlightSyncLog> FlightSyncLogs => Set<FlightSyncLog>();
     public DbSet<SystemLog> SystemLogs => Set<SystemLog>();
+    public DbSet<SyncAlert> SyncAlerts => Set<SyncAlert>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -230,6 +231,29 @@ public class AppDbContext : DbContext, IAppDbContext
             .WithMany()
             .HasForeignKey(h => h.ChangedByStaffId)
             .OnDelete(DeleteBehavior.SetNull);
+
+        // SyncAlert → Guest (optional, no cascade to keep alerts after guest deletion)
+        modelBuilder.Entity<SyncAlert>()
+            .HasOne(a => a.Guest)
+            .WithMany()
+            .HasForeignKey(a => a.GuestId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        // SyncAlert → Vehicle (optional)
+        modelBuilder.Entity<SyncAlert>()
+            .HasOne(a => a.Vehicle)
+            .WithMany()
+            .HasForeignKey(a => a.VehicleId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        // SyncAlert indexes
+        modelBuilder.Entity<SyncAlert>()
+            .HasIndex(a => a.DetectedAt)
+            .IsDescending();
+
+        modelBuilder.Entity<SyncAlert>()
+            .HasIndex(a => new { a.IsResolved, a.DetectedAt })
+            .IsDescending(false, true);
 
         // TravelBooking -> Flight (Many-to-One)
         modelBuilder.Entity<TravelBooking>()

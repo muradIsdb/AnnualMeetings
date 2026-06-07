@@ -331,7 +331,26 @@ public class GuestsController : ApiControllerBase
                         if (existing.LastName != contact.LastName) { existing.LastName = contact.LastName; changed = true; }
                         if (existing.Designation != contact.JobTitle) { existing.Designation = contact.JobTitle; changed = true; }
                         if (existing.Organization != contact.OrganizationName) { existing.Organization = contact.OrganizationName; changed = true; }
-                        if (existing.RegistrationTypeName != contact.RegistrationTypeName) { existing.RegistrationTypeName = contact.RegistrationTypeName; changed = true; }
+                        // ── Detect registration type change → create SyncAlert ──────────────
+                        if (existing.RegistrationTypeName != contact.RegistrationTypeName)
+                        {
+                            if (!string.IsNullOrWhiteSpace(existing.RegistrationTypeName) && !string.IsNullOrWhiteSpace(contact.RegistrationTypeName))
+                            {
+                                bgDb.SyncAlerts.Add(new IsDB.Hospitality.Domain.Entities.SyncAlert
+                                {
+                                    AlertType    = IsDB.Hospitality.Domain.Enums.SyncAlertType.RegTypeChanged,
+                                    GuestId      = existing.Id,
+                                    GuestName    = $"{existing.FirstName} {existing.LastName}".Trim(),
+                                    EventsAirContactId = existing.EventsAirContactId,
+                                    OldValue     = existing.RegistrationTypeName,
+                                    NewValue     = contact.RegistrationTypeName,
+                                    SyncSource   = IsDB.Hospitality.Domain.Enums.SyncAlertSource.ManualSync,
+                                    DetectedAt   = DateTime.UtcNow
+                                });
+                            }
+                            existing.RegistrationTypeName = contact.RegistrationTypeName;
+                            changed = true;
+                        }
                         if (existing.RegistrationTypeId != contact.RegistrationTypeId) { existing.RegistrationTypeId = contact.RegistrationTypeId; changed = true; }
                         if (existing.Email != contact.PrimaryEmail) { existing.Email = contact.PrimaryEmail; changed = true; }
                         if (existing.Country != contact.Country) { existing.Country = contact.Country; changed = true; }
@@ -353,20 +372,46 @@ public class GuestsController : ApiControllerBase
                 // ═══════════════════════════════════════════════════════════════
                 // PASS 2: Deactivate guests not in the fetched set
                 // ═══════════════════════════════════════════════════════════════
-                // ── Bulk-load active-vehicle set in one query; reuse existingGuestsByContactId ──
-                var guestsWithActiveVehicle = (await bgDb.VehicleAssignments
+                // ── Load active vehicle assignments for release on deactivation ──
+                var activeAssignmentsManual = await bgDb.VehicleAssignments
                     .Where(va => va.IsActive)
-                    .Select(va => va.GuestId)
-                    .ToListAsync()).ToHashSet();
+                    .Include(va => va.Vehicle)
+                    .ToListAsync();
+                var assignmentsByGuestManual = activeAssignmentsManual
+                    .GroupBy(va => va.GuestId)
+                    .ToDictionary(g => g.Key, g => g.First());
 
                 foreach (var kvp in existingGuestsByContactId)
                 {
                     var guestToDeactivate = kvp.Value;
                     if (!string.IsNullOrEmpty(guestToDeactivate.EventsAirContactId) &&
                         !syncedContactIds.Contains(guestToDeactivate.EventsAirContactId) &&
-                        guestToDeactivate.IsActive &&
-                        !guestsWithActiveVehicle.Contains(guestToDeactivate.Id))
+                        guestToDeactivate.IsActive)
                     {
+                        // ── Release active vehicle assignment if present ──────────────
+                        string? vehiclePlateManual = null;
+                        Guid? vehicleIdManual = null;
+                        if (assignmentsByGuestManual.TryGetValue(guestToDeactivate.Id, out var assignmentManual))
+                        {
+                            assignmentManual.IsActive = false;
+                            assignmentManual.UnassignedAt = DateTime.UtcNow;
+                            vehiclePlateManual = assignmentManual.Vehicle?.LicensePlate;
+                            vehicleIdManual = assignmentManual.VehicleId;
+                            if (assignmentManual.Vehicle != null)
+                                assignmentManual.Vehicle.Status = IsDB.Hospitality.Domain.Enums.VehicleStatus.Available;
+                        }
+                        // ── Create GuestRemoved SyncAlert ──────────────────────────────
+                        bgDb.SyncAlerts.Add(new IsDB.Hospitality.Domain.Entities.SyncAlert
+                        {
+                            AlertType    = IsDB.Hospitality.Domain.Enums.SyncAlertType.GuestRemoved,
+                            GuestId      = guestToDeactivate.Id,
+                            GuestName    = $"{guestToDeactivate.FirstName} {guestToDeactivate.LastName}".Trim(),
+                            EventsAirContactId = guestToDeactivate.EventsAirContactId,
+                            VehicleId    = vehicleIdManual,
+                            VehiclePlate = vehiclePlateManual,
+                            SyncSource   = IsDB.Hospitality.Domain.Enums.SyncAlertSource.ManualSync,
+                            DetectedAt   = DateTime.UtcNow
+                        });
                         guestToDeactivate.IsActive = false;
                         guestToDeactivate.DedicatedCar = null;
                         guestToDeactivate.LastSyncedAt = DateTime.UtcNow;
