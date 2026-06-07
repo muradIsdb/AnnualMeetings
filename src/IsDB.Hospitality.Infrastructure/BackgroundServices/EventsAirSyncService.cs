@@ -477,7 +477,7 @@ public class EventsAirSyncService : BackgroundService
                 if (autoResolved > 0)
                 {
                     await db.SaveChangesAsync(cancellationToken);
-                    logger.LogInformation("[AutoSync] Pass 4: {Count} alert(s) auto-resolved.", autoResolved);
+                    _logger.LogInformation("[AutoSync] Pass 4: {Count} alert(s) auto-resolved.", autoResolved);
                 }
 
                 foreach (var guest in guestsWithClass)
