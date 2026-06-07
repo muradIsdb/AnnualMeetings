@@ -171,6 +171,21 @@ using (var scope = app.Services.CreateScope())
         ");
         logger.LogInformation("LicensePlate nullable pre-check complete.");
 
+        // ALWAYS ensure VehicleTypeValue column exists on Guests — runs for ALL database paths.
+        // This column was added in migration 20260603100000_AddVehicleTypeValueToGuest but was
+        // skipped on production databases that took the fresh-DB path before the legacy block ran.
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Guests' AND column_name = 'VehicleTypeValue'
+                ) THEN
+                    ALTER TABLE ""Guests"" ADD COLUMN ""VehicleTypeValue"" text NULL;
+                END IF;
+            END $$;
+        ");
+        logger.LogInformation("VehicleTypeValue column pre-check complete.");
+
         if (isFreshDatabase || isEfCoreCreatedDb)
         {
             // Fresh or EF Core-managed database: run MigrateAsync() directly.
