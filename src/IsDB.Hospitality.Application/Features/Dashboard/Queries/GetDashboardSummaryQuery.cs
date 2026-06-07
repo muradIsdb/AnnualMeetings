@@ -48,6 +48,8 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
             g.OutboundStatus == OutboundStatus.BoardingCompleted, cancellationToken);
         // guestsDeserving = cars still needed: guests with a car class entitlement but no dedicated car assigned yet
         var guestsDeserving   = await activeGuests.CountAsync(g => g.DeservedCarClassId.HasValue && g.DedicatedCar == null, cancellationToken);
+        // guestsWithoutCarClass = guests with no car class assigned at all
+        var guestsWithoutCarClass = await activeGuests.CountAsync(g => !g.DeservedCarClassId.HasValue, cancellationToken);
 
         // ── 2. Lightweight guest projection (only needed columns, no navigation) ───
         var guests = await activeGuests
@@ -201,6 +203,7 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
             GuestsWithoutVehicle              = guestsWithoutVehicle,
             GuestsAssignedWithoutDedicatedCar = guestsAssignedNoDedicated,
             GuestsDeservingVehicle            = guestsDeserving,
+            GuestsWithoutCarClass             = guestsWithoutCarClass,
             // Fleet by class
             FleetByClass = carClasses.Select(cc => new FleetByClassDto
             {

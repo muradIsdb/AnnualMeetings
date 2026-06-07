@@ -33,6 +33,8 @@ public class DashboardSummaryDto
     public int GuestsAssignedWithoutDedicatedCar { get; set; }
     /// <summary>Active guests who have a DeservedCarClassId set (i.e., deserve a vehicle).</summary>
     public int GuestsDeservingVehicle { get; set; }
+    /// <summary>Active guests who have NO DeservedCarClassId set (i.e., no car class assigned to them).</summary>
+    public int GuestsWithoutCarClass { get; set; }
 
     // Fleet by class
     public List<FleetByClassDto> FleetByClass { get; set; } = new();
