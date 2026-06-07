@@ -220,6 +220,10 @@ public class EventsAirSyncService : BackgroundService
             var existingGuestsByContactId = await db.Guests
                 .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
+            // ── Bulk-load CarClasses by Name for DeservedCarClassId resolution ──
+            var carClassesByName = await db.CarClasses
+                .ToDictionaryAsync(c => c.Name, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
             // ── Pre-load open alert guest IDs for deduplication (Pass 1 & 2) ──
             var openAlertsBg = await db.SyncAlerts
                 .Where(a => !a.IsResolved && a.GuestId != null)
@@ -253,6 +257,8 @@ public class EventsAirSyncService : BackgroundService
                         RegistrationTypeName = contact.RegistrationTypeName,
                         DedicatedCar = "True",
                         RankValue = contact.RankValue,
+                        VehicleTypeValue = contact.VehicleTypeValue,
+                        DeservedCarClassId = (!string.IsNullOrWhiteSpace(contact.VehicleTypeValue) && carClassesByName.TryGetValue(contact.VehicleTypeValue.Trim(), out var newGuestClass)) ? newGuestClass.Id : (Guid?)null,
                         IsActive = true,
                         Status = GuestStatus.Expected,
                         LastSyncedAt = DateTime.UtcNow
@@ -295,6 +301,10 @@ public class EventsAirSyncService : BackgroundService
                     if (existing.Country != contact.Country) { existing.Country = contact.Country; changed = true; }
                     if (existing.PhotoUrl != contact.PhotoUrl) { existing.PhotoUrl = contact.PhotoUrl; changed = true; }
                     if (existing.RankValue != contact.RankValue) { existing.RankValue = contact.RankValue; changed = true; }
+                    if (existing.VehicleTypeValue != contact.VehicleTypeValue) { existing.VehicleTypeValue = contact.VehicleTypeValue; changed = true; }
+                    // Always overwrite DeservedCarClassId from VehicleTypeValue on every sync
+                    var resolvedBgCarClassId = (!string.IsNullOrWhiteSpace(contact.VehicleTypeValue) && carClassesByName.TryGetValue(contact.VehicleTypeValue.Trim(), out var bgClass)) ? bgClass.Id : (Guid?)null;
+                    if (existing.DeservedCarClassId != resolvedBgCarClassId) { existing.DeservedCarClassId = resolvedBgCarClassId; changed = true; }
                     if (existing.DedicatedCar != "True") { existing.DedicatedCar = "True"; changed = true; }
                     if (!existing.IsActive) { existing.IsActive = true; changed = true; }
                     if (changed) { existing.LastSyncedAt = DateTime.UtcNow; updated++; }
