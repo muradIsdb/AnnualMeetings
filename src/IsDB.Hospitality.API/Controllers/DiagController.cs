@@ -199,17 +199,19 @@ public class DiagController : ControllerBase
             // Step 2: Replace CarClasses
             rows = await _db.Database.ExecuteSqlRawAsync(@"DELETE FROM ""CarClasses""", ct);
             results.Add($"CarClasses deleted: {rows}");
+            // CarClasses actual columns: Id, Name, Description, Color, SortOrder, EventCode, ShortName, CreatedAt, UpdatedAt
+            // ShortName and EventCode added via ensure-schema endpoint (ADD COLUMN IF NOT EXISTS)
             var ccSql = new[]
             {
-                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"IsActive\",\"DisplayOrder\",\"EventCode\",\"MaxPassengers\",\"VehicleType\",\"CreatedAt\",\"UpdatedAt\") VALUES ('a0946247-9df2-4aaf-96aa-11b580dcdb31','Mercedes S-Class W223','Merc-S23','Reserved for VVIP guests — heads of state, ministers, and senior dignitaries\n2021-2025',true,0,NULL,NULL,NULL,NOW(),NOW())",
-                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"IsActive\",\"DisplayOrder\",\"EventCode\",\"MaxPassengers\",\"VehicleType\",\"CreatedAt\",\"UpdatedAt\") VALUES ('20ae982b-301b-45ed-ad60-d6a2ae06c51e','Mercedes S-Class W222','Merc-S22','2018-2020',true,0,NULL,NULL,NULL,NOW(),NOW())",
-                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"IsActive\",\"DisplayOrder\",\"EventCode\",\"MaxPassengers\",\"VehicleType\",\"CreatedAt\",\"UpdatedAt\") VALUES ('16e9545c-4185-4652-b8d3-fa54ef751ede','Mercedes E-Class','Merc-E','Qualifying Alt. Governors (Ministers / Central Bank Govs), IsDB VPs, CEOs, AMOC Chairman, VIP.',true,0,NULL,NULL,NULL,NOW(),NOW())",
-                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"IsActive\",\"DisplayOrder\",\"EventCode\",\"MaxPassengers\",\"VehicleType\",\"CreatedAt\",\"UpdatedAt\") VALUES ('41e07ad5-ca44-4553-ab91-af8cb1a8ab5a','Mercedes V-Class (SUV)','SUV','Executive-class SUVs for senior officials and delegations',true,0,NULL,NULL,NULL,NOW(),NOW())",
-                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"IsActive\",\"DisplayOrder\",\"EventCode\",\"MaxPassengers\",\"VehicleType\",\"CreatedAt\",\"UpdatedAt\") VALUES ('53e5381f-25b7-4305-950f-6719cd8b4f99','Hyundai Sonata','Sonata','Board & DG Class',true,0,NULL,NULL,NULL,NOW(),NOW())",
-                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"IsActive\",\"DisplayOrder\",\"EventCode\",\"MaxPassengers\",\"VehicleType\",\"CreatedAt\",\"UpdatedAt\") VALUES ('10967aa4-917b-4ad0-ada1-f0d1ff2d992c','Kia Optima','Optimal','Board & DG Class',true,0,NULL,NULL,NULL,NOW(),NOW())",
-                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"IsActive\",\"DisplayOrder\",\"EventCode\",\"MaxPassengers\",\"VehicleType\",\"CreatedAt\",\"UpdatedAt\") VALUES ('a24f537f-246c-44a5-b9f1-ba771da2803a','Tayota Camry','Camry','Board & DG Class',true,0,NULL,NULL,NULL,NOW(),NOW())",
-                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"IsActive\",\"DisplayOrder\",\"EventCode\",\"MaxPassengers\",\"VehicleType\",\"CreatedAt\",\"UpdatedAt\") VALUES ('099efcc4-66bc-4ea4-8392-226c37bfb7e2','Hyundair Elentra','Elentra','AMOC and General Pool',true,0,NULL,NULL,NULL,NOW(),NOW())",
-                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"IsActive\",\"DisplayOrder\",\"EventCode\",\"MaxPassengers\",\"VehicleType\",\"CreatedAt\",\"UpdatedAt\") VALUES ('c0aa551f-a632-4496-acfb-7783ac883681','Toyota Corolla','Corolla','AMOC and General Pool',true,0,NULL,NULL,NULL,NOW(),NOW())"
+                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"Color\",\"SortOrder\",\"EventCode\",\"CreatedAt\",\"UpdatedAt\") VALUES ('a0946247-9df2-4aaf-96aa-11b580dcdb31','Mercedes S-Class W223','Merc-S23','Reserved for VVIP guests — heads of state, ministers, and senior dignitaries. 2021-2025',NULL,1,NULL,NOW(),NOW())",
+                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"Color\",\"SortOrder\",\"EventCode\",\"CreatedAt\",\"UpdatedAt\") VALUES ('20ae982b-301b-45ed-ad60-d6a2ae06c51e','Mercedes S-Class W222','Merc-S22','2018-2020',NULL,2,NULL,NOW(),NOW())",
+                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"Color\",\"SortOrder\",\"EventCode\",\"CreatedAt\",\"UpdatedAt\") VALUES ('16e9545c-4185-4652-b8d3-fa54ef751ede','Mercedes E-Class','Merc-E','Qualifying Alt. Governors (Ministers / Central Bank Govs), IsDB VPs, CEOs, AMOC Chairman, VIP.',NULL,3,NULL,NOW(),NOW())",
+                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"Color\",\"SortOrder\",\"EventCode\",\"CreatedAt\",\"UpdatedAt\") VALUES ('41e07ad5-ca44-4553-ab91-af8cb1a8ab5a','Mercedes V-Class (SUV)','SUV','Executive-class SUVs for senior officials and delegations',NULL,4,NULL,NOW(),NOW())",
+                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"Color\",\"SortOrder\",\"EventCode\",\"CreatedAt\",\"UpdatedAt\") VALUES ('53e5381f-25b7-4305-950f-6719cd8b4f99','Hyundai Sonata','Sonata','Board & DG Class',NULL,5,NULL,NOW(),NOW())",
+                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"Color\",\"SortOrder\",\"EventCode\",\"CreatedAt\",\"UpdatedAt\") VALUES ('10967aa4-917b-4ad0-ada1-f0d1ff2d992c','Kia Optima','Optimal','Board & DG Class',NULL,6,NULL,NOW(),NOW())",
+                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"Color\",\"SortOrder\",\"EventCode\",\"CreatedAt\",\"UpdatedAt\") VALUES ('a24f537f-246c-44a5-b9f1-ba771da2803a','Toyota Camry','Camry','Board & DG Class',NULL,7,NULL,NOW(),NOW())",
+                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"Color\",\"SortOrder\",\"EventCode\",\"CreatedAt\",\"UpdatedAt\") VALUES ('099efcc4-66bc-4ea4-8392-226c37bfb7e2','Hyundai Elantra','Elentra','AMOC and General Pool',NULL,8,NULL,NOW(),NOW())",
+                "INSERT INTO \"CarClasses\" (\"Id\",\"Name\",\"ShortName\",\"Description\",\"Color\",\"SortOrder\",\"EventCode\",\"CreatedAt\",\"UpdatedAt\") VALUES ('c0aa551f-a632-4496-acfb-7783ac883681','Toyota Corolla','Corolla','AMOC and General Pool',NULL,9,NULL,NOW(),NOW())"
             };
             foreach (var s in ccSql) await _db.Database.ExecuteSqlRawAsync(s, ct);
             results.Add($"CarClasses inserted: {ccSql.Length}");
@@ -379,7 +381,15 @@ public class DiagController : ControllerBase
             ALTER TABLE ""Guests"" ADD COLUMN IF NOT EXISTS ""VehicleTypeValue"" text NULL;
         "));
 
-        // 7. NormaliseFlightNumbers (20260604300000)
+        // 7. CarClasses extra columns (ShortName, EventCode) — added via Program.cs legacy block but ensure here too
+        results.Add(await Exec("CarClasses.ShortName", @"
+            ALTER TABLE ""CarClasses"" ADD COLUMN IF NOT EXISTS ""ShortName"" text NULL;
+        "));
+        results.Add(await Exec("CarClasses.EventCode", @"
+            ALTER TABLE ""CarClasses"" ADD COLUMN IF NOT EXISTS ""EventCode"" text NULL;
+        "));
+
+        // 8. NormaliseFlightNumbers (20260604300000)
         results.Add(await Exec("NormaliseFlightNumbers", @"
             UPDATE ""Flights""
             SET ""FlightNumber"" = UPPER(
