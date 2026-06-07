@@ -92,8 +92,91 @@ public class VehiclesController : ApiControllerBase
     // ─── Fleet CRUD ───────────────────────────────────────────────────────────
     [HttpGet]
     [Authorize(Roles = "Admin,Transport")]
-    public async Task<IActionResult> GetAll(CancellationToken ct = default)
+    public async Task<IActionResult> GetAll(
+        [FromQuery] string? view,
+        [FromQuery] string? type,
+        [FromQuery] bool? resolved,
+        [FromQuery] string? search,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken ct = default)
     {
+        // ── Sync Alerts: summary ──────────────────────────────────────────────────────────────────────────────────────
+        if (view == "discrepancies-summary")
+        {
+            var counts = await _db.SyncAlerts
+                .GroupBy(a => new { a.AlertType, a.IsResolved })
+                .Select(g => new { g.Key.AlertType, g.Key.IsResolved, Count = g.Count() })
+                .ToListAsync(ct);
+            return Ok(new
+            {
+                guestRemoved     = counts.Where(c => c.AlertType == SyncAlertType.GuestRemoved     && !c.IsResolved).Sum(c => c.Count),
+                carClassMismatch = counts.Where(c => c.AlertType == SyncAlertType.CarClassMismatch && !c.IsResolved).Sum(c => c.Count),
+                regTypeChanged   = counts.Where(c => c.AlertType == SyncAlertType.RegTypeChanged   && !c.IsResolved).Sum(c => c.Count),
+                totalResolved    = counts.Where(c => c.IsResolved).Sum(c => c.Count),
+                totalOpen        = counts.Where(c => !c.IsResolved).Sum(c => c.Count)
+            });
+        }
+
+        // ── Sync Alerts: paginated list ───────────────────────────────────────────────────────────────────────────────
+        if (view == "discrepancies")
+        {
+            var q = _db.SyncAlerts.AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(type) && Enum.TryParse<SyncAlertType>(type, true, out var at))
+                q = q.Where(a => a.AlertType == at);
+
+            if (resolved.HasValue)
+                q = q.Where(a => a.IsResolved == resolved.Value);
+            else
+                q = q.Where(a => !a.IsResolved);
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var s = search.ToLower();
+                q = q.Where(a =>
+                    a.GuestName.ToLower().Contains(s) ||
+                    (a.VehiclePlate != null && a.VehiclePlate.ToLower().Contains(s)) ||
+                    (a.CarClassName != null && a.CarClassName.ToLower().Contains(s)) ||
+                    (a.EventsAirContactId != null && a.EventsAirContactId.ToLower().Contains(s)));
+            }
+
+            var total = await q.CountAsync(ct);
+            var items = await q
+                .OrderByDescending(a => a.DetectedAt)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .Select(a => new
+                {
+                    a.Id,
+                    alertType = a.AlertType.ToString(),
+                    a.GuestId,
+                    a.GuestName,
+                    a.EventsAirContactId,
+                    a.VehicleId,
+                    a.VehiclePlate,
+                    a.CarClassName,
+                    a.OldValue,
+                    a.NewValue,
+                    syncSource = a.SyncSource.ToString(),
+                    a.DetectedAt,
+                    a.IsResolved,
+                    a.ResolvedAt,
+                    a.ResolvedByUserName,
+                    a.Notes
+                })
+                .ToListAsync(ct);
+
+            return Ok(new
+            {
+                items,
+                totalCount = total,
+                totalPages = (int)Math.Ceiling(total / (double)pageSize),
+                page,
+                pageSize
+            });
+        }
+
         // ── Normal vehicle list ───────────────────────────────────────────────────────────────────────────────────────
         var activeEventCode2 = await GetActiveEventCodeAsync();
         var vehicles = await _db.Vehicles
@@ -141,9 +224,56 @@ public class VehiclesController : ApiControllerBase
         });
     }
 
+    // ── Sync Alerts: resolve single & resolve-all (routed via ?view=) ─────────────────────────────────────────────────────────────────────────────────────
     [HttpPost]
     [Authorize(Roles = "Admin,Transport")]
-    public async Task<ActionResult> Create([FromBody] CreateVehicleRequest req)
+    public async Task<IActionResult> PostWithView(
+        [FromQuery] string? view,
+        [FromQuery] Guid? id,
+        [FromBody] System.Text.Json.JsonElement? body,
+        CancellationToken ct = default)
+    {
+        if (view == "discrepancies-resolve" && id.HasValue)
+        {
+            var alert = await _db.SyncAlerts.FindAsync(new object[] { id.Value }, ct);
+            if (alert == null) return NotFound();
+            var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
+            alert.IsResolved = true;
+            alert.ResolvedAt = DateTime.UtcNow;
+            alert.ResolvedByUserName = userName;
+            if (body.HasValue && body.Value.TryGetProperty("notes", out var notesEl) && notesEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                alert.Notes = notesEl.GetString();
+            await _db.SaveChangesAsync(ct);
+            return Ok(new { success = true });
+        }
+
+        if (view == "discrepancies-resolve-all")
+        {
+            var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
+            var alerts = await _db.SyncAlerts.Where(a => !a.IsResolved).ToListAsync(ct);
+            var now = DateTime.UtcNow;
+            foreach (var a in alerts)
+            {
+                a.IsResolved = true;
+                a.ResolvedAt = now;
+                a.ResolvedByUserName = userName;
+            }
+            await _db.SaveChangesAsync(ct);
+            return Ok(new { resolved = alerts.Count });
+        }
+
+        // Fall through to normal vehicle creation
+        if (!body.HasValue || body.Value.ValueKind == System.Text.Json.JsonValueKind.Null)
+            return BadRequest(new { message = "Request body is required for vehicle creation." });
+
+        var req = System.Text.Json.JsonSerializer.Deserialize<CreateVehicleRequest>(
+            body.Value.GetRawText(),
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (req == null) return BadRequest(new { message = "Invalid request body." });
+        return await CreateInternal(req);
+    }
+
+    private async Task<ActionResult> CreateInternal(CreateVehicleRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Make) || string.IsNullOrWhiteSpace(req.Model) || string.IsNullOrWhiteSpace(req.LicensePlate))
             return BadRequest(new { message = "Make, model, and license plate are required." });
@@ -705,6 +835,7 @@ public class VehiclesController : ApiControllerBase
 }
 
 public record ResolveSyncAlertRequest(string? Notes);
+public record ResolveAlertRequest(string? Notes);
 public record CreateVehicleRequest(string Make, string Model, string LicensePlate, string? Color, Guid? DriverId = null, Guid? CarClassId = null);
 public record AssignDriverToVehicleRequest(Guid? DriverId);
 public record SetCarNumberRequest(string? CarNumber);
