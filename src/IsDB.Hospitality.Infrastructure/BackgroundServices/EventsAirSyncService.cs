@@ -422,7 +422,7 @@ public class EventsAirSyncService : BackgroundService
                 // This is the authoritative source — always kept in sync by all
                 // assignment code paths (FleetController, AssignVehicleHelper, etc.)
                 var assignedVehiclesP4 = await db.Vehicles
-                    .Where(v => v.Status == VehicleStatus.Assigned && v.CurrentGuestId != null)
+                    .Where(v => v.Status == VehicleStatus.Assigned && v.CurrentGuestId != null && v.IsActive)
                     .Include(v => v.CarClass)
                     .ToListAsync(cancellationToken);
                 var vehicleByGuest = assignedVehiclesP4

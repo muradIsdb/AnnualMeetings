@@ -270,6 +270,42 @@ public class VehiclesController : ApiControllerBase
             return Ok(new { deleted = all.Count });
         }
 
+        // One-time cleanup: reset stale assignment state on inactive (deleted) vehicles
+        // Fixes vehicles that were deleted without proper unassignment (e.g. plate "666")
+        if (view == "cleanup-inactive-vehicles")
+        {
+            var role = User.FindFirst("role")?.Value ?? "";
+            if (role != "Admin") return Forbid();
+            var staleVehicles = await _db.Vehicles
+                .Include(v => v.Driver)
+                .Where(v => !v.IsActive && (v.Status == VehicleStatus.Assigned || v.CurrentGuestId != null))
+                .ToListAsync(ct);
+            int cleaned = 0;
+            foreach (var v in staleVehicles)
+            {
+                // Close any lingering active assignments
+                var staleAssignments = await _db.VehicleAssignments
+                    .Include(a => a.Guest)
+                    .Where(a => a.VehicleId == v.Id && a.IsActive)
+                    .ToListAsync(ct);
+                foreach (var a in staleAssignments)
+                {
+                    a.IsActive = false;
+                    a.UnassignedAt = DateTime.UtcNow;
+                    a.UnassignedByStaffId = CurrentUserId;
+                    if (a.Guest != null && a.Guest.InboundStatus == InboundStatus.VehicleAssigned)
+                        a.Guest.InboundStatus = InboundStatus.Arrived;
+                }
+                // Reset vehicle state
+                v.Status = VehicleStatus.Available;
+                v.CurrentGuestId = null;
+                v.CurrentAssignmentType = null;
+                cleaned++;
+            }
+            await _db.SaveChangesAsync(ct);
+            return Ok(new { cleaned, message = $"Cleaned up {cleaned} inactive vehicle(s) with stale assignment state." });
+        }
+
         // Fall through to normal vehicle creation
         if (!body.HasValue || body.Value.ValueKind == System.Text.Json.JsonValueKind.Null)
             return BadRequest(new { message = "Request body is required for vehicle creation." });
@@ -364,8 +400,9 @@ public class VehiclesController : ApiControllerBase
             .FirstOrDefaultAsync(v => v.Id == id);
         if (vehicle == null) return NotFound();
 
-        // Close any active assignments for this vehicle
+        // Close any active assignments for this vehicle and roll back guest status
         var activeAssignments = await _db.VehicleAssignments
+            .Include(a => a.Guest)
             .Where(a => a.VehicleId == id && a.IsActive)
             .ToListAsync();
         foreach (var a in activeAssignments)
@@ -373,6 +410,10 @@ public class VehiclesController : ApiControllerBase
             a.IsActive = false;
             a.UnassignedAt = DateTime.UtcNow;
             a.UnassignedByStaffId = CurrentUserId;
+
+            // Roll back guest inbound status: VehicleAssigned → Arrived
+            if (a.Guest != null && a.Guest.InboundStatus == InboundStatus.VehicleAssigned)
+                a.Guest.InboundStatus = InboundStatus.Arrived;
         }
 
         // Free the driver
@@ -382,6 +423,11 @@ public class VehiclesController : ApiControllerBase
             vehicle.Driver.Status = DriverStatus.Available;
         }
         vehicle.DriverId = null;
+
+        // Clear assignment state on the vehicle itself
+        vehicle.Status = VehicleStatus.Available;
+        vehicle.CurrentGuestId = null;
+        vehicle.CurrentAssignmentType = null;
 
         vehicle.IsActive = false;
         await _db.SaveChangesAsync();

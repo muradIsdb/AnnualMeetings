@@ -519,7 +519,8 @@ public class GuestsController : ApiControllerBase
                     // assignment code paths (FleetController, AssignVehicleHelper, etc.)
                     var assignedVehiclesP4 = await bgDb.Vehicles
                         .Where(v => v.Status == IsDB.Hospitality.Domain.Enums.VehicleStatus.Assigned
-                                 && v.CurrentGuestId != null)
+                                 && v.CurrentGuestId != null
+                                 && v.IsActive)
                         .Include(v => v.CarClass)
                         .ToListAsync();
                     var vehicleByGuestP4 = assignedVehiclesP4
