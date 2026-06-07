@@ -69,4 +69,53 @@ public class DiagController : ControllerBase
             appliedMigrations = migrations
         });
     }
+
+    /// <summary>
+    /// Temporary fix endpoint — stamps missing migrations and updates guest EventCodes.
+    /// Remove after fix is confirmed.
+    /// </summary>
+    [HttpPost("fix")]
+    public async Task<IActionResult> Fix(CancellationToken ct)
+    {
+        var results = new List<string>();
+
+        // 1. Get active EventCode from config
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(ct);
+        if (config == null)
+            return BadRequest(new { error = "No EventsAirConfig found in database." });
+
+        var eventCode = config.EventCode;
+
+        // 2. Stamp missing migrations as applied
+        var missingMigrations = new[]
+        {
+            "20260508210000_AddOAuthScopeToEventsAirConfig",
+            "20260508220000_AddPerformanceIndexes",
+            "20260515100000_AddVehicleStatusHistory",
+            "20260601100000_MakeVehicleLicensePlateOptional",
+            "20260603100000_AddVehicleTypeValueToGuest",
+            "20260604100000_AddEventCodeToNotificationsAndDepartureRequests",
+            "20260604300000_NormaliseFlightNumbers"
+        };
+
+        foreach (var migrationId in missingMigrations)
+        {
+            var rows = await _db.Database.ExecuteSqlRawAsync(
+                $@"INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+                   VALUES ('{migrationId}', '9.0.0')
+                   ON CONFLICT DO NOTHING", ct);
+            results.Add($"Migration {migrationId}: {(rows > 0 ? "stamped" : "already existed")}");
+        }
+
+        // 3. Update guests with null EventCode to the active EventCode
+        var updatedGuests = await _db.Database.ExecuteSqlRawAsync(
+            $@"UPDATE ""Guests"" SET ""EventCode"" = '{eventCode}' WHERE ""EventCode"" IS NULL", ct);
+        results.Add($"Guests updated with EventCode '{eventCode}': {updatedGuests} rows");
+
+        return Ok(new
+        {
+            activeEventCode = eventCode,
+            actions = results
+        });
+    }
 }
