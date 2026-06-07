@@ -15,6 +15,7 @@ import HotelGuestDirectoryPage from './pages/hotel/HotelGuestDirectoryPage'
 import HotelGuestDetailPage from './pages/hotel/HotelGuestDetailPage'
 import HotelManagementPage from './pages/hotel/HotelManagementPage'
 import ControlRoomDashboard from './pages/controlroom/ControlRoomDashboard'
+import OpsOverview from './pages/controlroom/OpsOverview'
 import DepartureFormPage from './pages/departure/DepartureFormPage'
 import DepartureManagePage from './pages/departure/DepartureManagePage'
 import DepartureStatsPage from './pages/departure/DepartureStatsPage'
@@ -177,6 +178,11 @@ export default function App() {
           <Route path="control-room" element={
             <ProtectedRoute allowedRoles={[UserRole.ControlRoom, UserRole.Admin]}>
               <ControlRoomDashboard />
+            </ProtectedRoute>
+          } />
+          <Route path="control-room/ops" element={
+            <ProtectedRoute allowedRoles={[UserRole.ControlRoom, UserRole.Admin]}>
+              <OpsOverview />
             </ProtectedRoute>
           } />
 

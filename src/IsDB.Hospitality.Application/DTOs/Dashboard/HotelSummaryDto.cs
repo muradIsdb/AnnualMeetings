@@ -39,6 +39,10 @@ public class HotelGuestCountDto
 {
     public string HotelName { get; set; } = string.Empty;
     public int GuestCount { get; set; }
+    /// <summary>Guests at this hotel who have a room number assigned</summary>
+    public int WithRoomCount { get; set; }
+    /// <summary>Guests at this hotel who have no room number yet</summary>
+    public int NoRoomCount { get; set; }
 }
 
 public class HotelRecentCheckinDto

@@ -33,6 +33,8 @@ public interface IAppDbContext
     DbSet<CarClassRule> CarClassRules { get; }
     DbSet<TravelBooking> TravelBookings { get; }
     DbSet<TravelBookingHistory> TravelBookingHistories { get; }
+    DbSet<FlightSyncLog> FlightSyncLogs { get; }
+    DbSet<SystemLog> SystemLogs { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

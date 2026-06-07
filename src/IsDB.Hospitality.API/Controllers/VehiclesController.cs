@@ -16,6 +16,9 @@ public class VehiclesController : ApiControllerBase
     private readonly AppDbContext _db;
     public VehiclesController(AppDbContext db) { _db = db; }
 
+    private async Task<string?> GetActiveEventCodeAsync() =>
+        (await _db.EventsAirConfigs.FirstOrDefaultAsync())?.EventCode;
+
     // ─── Legacy endpoints ─────────────────────────────────────────────────────
     [HttpGet("available")]
     public async Task<ActionResult<List<VehicleDto>>> GetAvailable()
@@ -54,8 +57,9 @@ public class VehiclesController : ApiControllerBase
     [HttpGet("all-with-status")]
     public async Task<IActionResult> GetAllWithStatus()
     {
+        var activeEventCode = await GetActiveEventCodeAsync();
         var vehicles = await _db.Vehicles
-            .Where(v => v.IsActive)
+            .Where(v => v.IsActive && (v.EventCode == null || v.EventCode == activeEventCode))
             .Include(v => v.Driver)
             .Include(v => v.CarClass)
             .OrderBy(v => v.Status).ThenBy(v => v.Make).ThenBy(v => v.Model)
@@ -88,10 +92,95 @@ public class VehiclesController : ApiControllerBase
     // ─── Fleet CRUD ───────────────────────────────────────────────────────────
     [HttpGet]
     [Authorize(Roles = "Admin,Transport")]
-    public async Task<ActionResult<List<object>>> GetAll()
+    public async Task<IActionResult> GetAll(
+        [FromQuery] string? view,
+        [FromQuery] string? type,
+        [FromQuery] bool? resolved,
+        [FromQuery] string? search,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken ct = default)
     {
+        // ── Sync Alerts: summary ──────────────────────────────────────────────────────────────────────────────────────
+        if (view == "discrepancies-summary")
+        {
+            var counts = await _db.SyncAlerts
+                .GroupBy(a => new { a.AlertType, a.IsResolved })
+                .Select(g => new { g.Key.AlertType, g.Key.IsResolved, Count = g.Count() })
+                .ToListAsync(ct);
+            return Ok(new
+            {
+                guestRemoved     = counts.Where(c => c.AlertType == SyncAlertType.GuestRemoved     && !c.IsResolved).Sum(c => c.Count),
+                carClassMismatch = counts.Where(c => c.AlertType == SyncAlertType.CarClassMismatch && !c.IsResolved).Sum(c => c.Count),
+                regTypeChanged   = counts.Where(c => c.AlertType == SyncAlertType.RegTypeChanged   && !c.IsResolved).Sum(c => c.Count),
+                totalResolved    = counts.Where(c => c.IsResolved).Sum(c => c.Count),
+                totalOpen        = counts.Where(c => !c.IsResolved).Sum(c => c.Count)
+            });
+        }
+
+        // ── Sync Alerts: paginated list ───────────────────────────────────────────────────────────────────────────────
+        if (view == "discrepancies")
+        {
+            var q = _db.SyncAlerts.AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(type) && Enum.TryParse<SyncAlertType>(type, true, out var at))
+                q = q.Where(a => a.AlertType == at);
+
+            if (resolved.HasValue)
+                q = q.Where(a => a.IsResolved == resolved.Value);
+            else
+                q = q.Where(a => !a.IsResolved);
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var s = search.ToLower();
+                q = q.Where(a =>
+                    a.GuestName.ToLower().Contains(s) ||
+                    (a.VehiclePlate != null && a.VehiclePlate.ToLower().Contains(s)) ||
+                    (a.CarClassName != null && a.CarClassName.ToLower().Contains(s)) ||
+                    (a.EventsAirContactId != null && a.EventsAirContactId.ToLower().Contains(s)));
+            }
+
+            var total = await q.CountAsync(ct);
+            var items = await q
+                .OrderByDescending(a => a.DetectedAt)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .Select(a => new
+                {
+                    a.Id,
+                    alertType = a.AlertType.ToString(),
+                    a.GuestId,
+                    a.GuestName,
+                    a.EventsAirContactId,
+                    a.VehicleId,
+                    a.VehiclePlate,
+                    a.CarClassName,
+                    a.OldValue,
+                    a.NewValue,
+                    syncSource = a.SyncSource.ToString(),
+                    a.DetectedAt,
+                    a.IsResolved,
+                    a.ResolvedAt,
+                    a.ResolvedByUserName,
+                    a.Notes
+                })
+                .ToListAsync(ct);
+
+            return Ok(new
+            {
+                items,
+                totalCount = total,
+                totalPages = (int)Math.Ceiling(total / (double)pageSize),
+                page,
+                pageSize
+            });
+        }
+
+        // ── Normal vehicle list ───────────────────────────────────────────────────────────────────────────────────────
+        var activeEventCode2 = await GetActiveEventCodeAsync();
         var vehicles = await _db.Vehicles
-            .Where(v => v.IsActive)
+            .Where(v => v.IsActive && (v.EventCode == null || v.EventCode == activeEventCode2))
             .Include(v => v.Driver)
             .Include(v => v.CarClass)
             .OrderBy(v => v.Make).ThenBy(v => v.Model)
@@ -135,15 +224,107 @@ public class VehiclesController : ApiControllerBase
         });
     }
 
+    // ── Sync Alerts: resolve single & resolve-all (routed via ?view=) ─────────────────────────────────────────────────────────────────────────────────────
     [HttpPost]
     [Authorize(Roles = "Admin,Transport")]
-    public async Task<ActionResult> Create([FromBody] CreateVehicleRequest req)
+    public async Task<IActionResult> PostWithView(
+        [FromQuery] string? view,
+        [FromQuery] Guid? id,
+        [FromBody] System.Text.Json.JsonElement? body,
+        CancellationToken ct = default)
+    {
+        if (view == "discrepancies-resolve" && id.HasValue)
+        {
+            var alert = await _db.SyncAlerts.FindAsync(new object[] { id.Value }, ct);
+            if (alert == null) return NotFound();
+            var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
+            alert.IsResolved = true;
+            alert.ResolvedAt = DateTime.UtcNow;
+            alert.ResolvedByUserName = userName;
+            if (body.HasValue && body.Value.TryGetProperty("notes", out var notesEl) && notesEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                alert.Notes = notesEl.GetString();
+            await _db.SaveChangesAsync(ct);
+            return Ok(new { success = true });
+        }
+
+        if (view == "discrepancies-resolve-all")
+        {
+            var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
+            var alerts = await _db.SyncAlerts.Where(a => !a.IsResolved).ToListAsync(ct);
+            var now = DateTime.UtcNow;
+            foreach (var a in alerts)
+            {
+                a.IsResolved = true;
+                a.ResolvedAt = now;
+                a.ResolvedByUserName = userName;
+            }
+            await _db.SaveChangesAsync(ct);
+            return Ok(new { resolved = alerts.Count });
+        }
+
+        if (view == "discrepancies-delete-all")
+        {
+            var all = await _db.SyncAlerts.ToListAsync(ct);
+            _db.SyncAlerts.RemoveRange(all);
+            await _db.SaveChangesAsync(ct);
+            return Ok(new { deleted = all.Count });
+        }
+
+        // One-time cleanup: reset stale assignment state on inactive (deleted) vehicles
+        // Fixes vehicles that were deleted without proper unassignment (e.g. plate "666")
+        if (view == "cleanup-inactive-vehicles")
+        {
+            var role = User.FindFirst("role")?.Value ?? "";
+            if (role != "Admin") return Forbid();
+            var staleVehicles = await _db.Vehicles
+                .Include(v => v.Driver)
+                .Where(v => !v.IsActive && (v.Status == VehicleStatus.Assigned || v.CurrentGuestId != null))
+                .ToListAsync(ct);
+            int cleaned = 0;
+            foreach (var v in staleVehicles)
+            {
+                // Close any lingering active assignments
+                var staleAssignments = await _db.VehicleAssignments
+                    .Include(a => a.Guest)
+                    .Where(a => a.VehicleId == v.Id && a.IsActive)
+                    .ToListAsync(ct);
+                foreach (var a in staleAssignments)
+                {
+                    a.IsActive = false;
+                    a.UnassignedAt = DateTime.UtcNow;
+                    a.UnassignedByStaffId = CurrentUserId;
+                    if (a.Guest != null && a.Guest.InboundStatus == InboundStatus.VehicleAssigned)
+                        a.Guest.InboundStatus = InboundStatus.Arrived;
+                }
+                // Reset vehicle state
+                v.Status = VehicleStatus.Available;
+                v.CurrentGuestId = null;
+                v.CurrentAssignmentType = null;
+                cleaned++;
+            }
+            await _db.SaveChangesAsync(ct);
+            return Ok(new { cleaned, message = $"Cleaned up {cleaned} inactive vehicle(s) with stale assignment state." });
+        }
+
+        // Fall through to normal vehicle creation
+        if (!body.HasValue || body.Value.ValueKind == System.Text.Json.JsonValueKind.Null)
+            return BadRequest(new { message = "Request body is required for vehicle creation." });
+
+        var req = System.Text.Json.JsonSerializer.Deserialize<CreateVehicleRequest>(
+            body.Value.GetRawText(),
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (req == null) return BadRequest(new { message = "Invalid request body." });
+        return await CreateInternal(req);
+    }
+
+    private async Task<ActionResult> CreateInternal(CreateVehicleRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Make) || string.IsNullOrWhiteSpace(req.Model) || string.IsNullOrWhiteSpace(req.LicensePlate))
             return BadRequest(new { message = "Make, model, and license plate are required." });
 
         var staffUser = await _db.StaffUsers.FindAsync(CurrentUserId);
 
+        var activeEventCode3 = await GetActiveEventCodeAsync();
         var vehicle = new Vehicle
         {
             Id = Guid.NewGuid(),
@@ -155,6 +336,7 @@ public class VehiclesController : ApiControllerBase
             Status = VehicleStatus.NotProvided,
             IsActive = true,
             CarClassId = req.CarClassId,
+            EventCode = activeEventCode3,
         };
         _db.Vehicles.Add(vehicle);
 
@@ -218,8 +400,9 @@ public class VehiclesController : ApiControllerBase
             .FirstOrDefaultAsync(v => v.Id == id);
         if (vehicle == null) return NotFound();
 
-        // Close any active assignments for this vehicle
+        // Close any active assignments for this vehicle and roll back guest status
         var activeAssignments = await _db.VehicleAssignments
+            .Include(a => a.Guest)
             .Where(a => a.VehicleId == id && a.IsActive)
             .ToListAsync();
         foreach (var a in activeAssignments)
@@ -227,6 +410,10 @@ public class VehiclesController : ApiControllerBase
             a.IsActive = false;
             a.UnassignedAt = DateTime.UtcNow;
             a.UnassignedByStaffId = CurrentUserId;
+
+            // Roll back guest inbound status: VehicleAssigned → Arrived
+            if (a.Guest != null && a.Guest.InboundStatus == InboundStatus.VehicleAssigned)
+                a.Guest.InboundStatus = InboundStatus.Arrived;
         }
 
         // Free the driver
@@ -236,6 +423,11 @@ public class VehiclesController : ApiControllerBase
             vehicle.Driver.Status = DriverStatus.Available;
         }
         vehicle.DriverId = null;
+
+        // Clear assignment state on the vehicle itself
+        vehicle.Status = VehicleStatus.Available;
+        vehicle.CurrentGuestId = null;
+        vehicle.CurrentAssignmentType = null;
 
         vehicle.IsActive = false;
         await _db.SaveChangesAsync();
@@ -577,8 +769,127 @@ public class VehiclesController : ApiControllerBase
 
         return Ok(history);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // SYNC ALERTS — exposed under /api/vehicles/sync-log/... (vehicles controller
+    //               is already whitelisted by Railway WAF)
+    // ═══════════════════════════════════════════════════════════════
+
+    [HttpGet("sync-log")]
+    public async Task<IActionResult> GetSyncAlerts(
+        [FromQuery] string? tab,
+        [FromQuery] string? search,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var q = _db.SyncAlerts.AsQueryable();
+        if (tab == "open")          q = q.Where(a => !a.IsResolved);
+        else if (tab == "resolved") q = q.Where(a => a.IsResolved);
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim().ToLower();
+            q = q.Where(a =>
+                (a.GuestName != null && a.GuestName.ToLower().Contains(s)) ||
+                (a.VehiclePlate != null && a.VehiclePlate.ToLower().Contains(s)) ||
+                (a.EventsAirContactId != null && a.EventsAirContactId.ToLower().Contains(s)));
+        }
+        var total = await q.CountAsync(ct);
+        var items = await q
+            .OrderByDescending(a => a.DetectedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(a => new
+            {
+                a.Id,
+                alertType = a.AlertType.ToString(),
+                a.GuestId,
+                a.GuestName,
+                a.EventsAirContactId,
+                a.VehicleId,
+                a.VehiclePlate,
+                a.CarClassName,
+                a.OldValue,
+                a.NewValue,
+                syncSource = a.SyncSource.ToString(),
+                a.DetectedAt,
+                a.IsResolved,
+                a.ResolvedAt,
+                a.ResolvedByUserName,
+                a.Notes
+            })
+            .ToListAsync(ct);
+        return Ok(new { items, totalCount = total, totalPages = (int)Math.Ceiling(total / (double)pageSize), page, pageSize });
+    }
+
+    [HttpGet("sync-log/summary")]
+    public async Task<IActionResult> GetSyncAlertsSummary(CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var counts = await _db.SyncAlerts
+            .GroupBy(a => new { a.AlertType, a.IsResolved })
+            .Select(g => new { g.Key.AlertType, g.Key.IsResolved, Count = g.Count() })
+            .ToListAsync(ct);
+        return Ok(new
+        {
+            guestRemoved     = counts.Where(c => c.AlertType == SyncAlertType.GuestRemoved     && !c.IsResolved).Sum(c => c.Count),
+            carClassMismatch = counts.Where(c => c.AlertType == SyncAlertType.CarClassMismatch && !c.IsResolved).Sum(c => c.Count),
+            regTypeChanged   = counts.Where(c => c.AlertType == SyncAlertType.RegTypeChanged   && !c.IsResolved).Sum(c => c.Count),
+            resolved         = counts.Where(c => c.IsResolved).Sum(c => c.Count),
+            totalOpen        = counts.Where(c => !c.IsResolved).Sum(c => c.Count)
+        });
+    }
+
+    [HttpPost("sync-log/{id:guid}/resolve")]
+    public async Task<IActionResult> ResolveSyncAlert(Guid id, [FromBody] ResolveSyncAlertRequest? req, CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var alert = await _db.SyncAlerts.FindAsync(new object[] { id }, ct);
+        if (alert == null) return NotFound();
+        var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
+        alert.IsResolved = true;
+        alert.ResolvedAt = DateTime.UtcNow;
+        alert.ResolvedByUserName = userName;
+        if (!string.IsNullOrWhiteSpace(req?.Notes)) alert.Notes = req.Notes;
+        await _db.SaveChangesAsync(ct);
+        return Ok(new { success = true });
+    }
+
+    [HttpPost("sync-log/resolve-all")]
+    public async Task<IActionResult> ResolveAllSyncAlerts([FromQuery] string? alertType, CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
+        var q = _db.SyncAlerts.Where(a => !a.IsResolved);
+        if (!string.IsNullOrWhiteSpace(alertType) && Enum.TryParse<SyncAlertType>(alertType, true, out var at))
+            q = q.Where(a => a.AlertType == at);
+        var alerts = await q.ToListAsync(ct);
+        var now = DateTime.UtcNow;
+        foreach (var a in alerts) { a.IsResolved = true; a.ResolvedAt = now; a.ResolvedByUserName = userName; }
+        await _db.SaveChangesAsync(ct);
+        return Ok(new { resolved = alerts.Count });
+    }
+
+    [HttpDelete("sync-log/{id:guid}")]
+    public async Task<IActionResult> DeleteSyncAlert(Guid id, CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin") return Forbid();
+        var alert = await _db.SyncAlerts.FindAsync(new object[] { id }, ct);
+        if (alert == null) return NotFound();
+        _db.SyncAlerts.Remove(alert);
+        await _db.SaveChangesAsync(ct);
+        return NoContent();
+    }
 }
 
+public record ResolveSyncAlertRequest(string? Notes);
+public record ResolveAlertRequest(string? Notes);
 public record CreateVehicleRequest(string Make, string Model, string LicensePlate, string? Color, Guid? DriverId = null, Guid? CarClassId = null);
 public record AssignDriverToVehicleRequest(Guid? DriverId);
 public record SetCarNumberRequest(string? CarNumber);

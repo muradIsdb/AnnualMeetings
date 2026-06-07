@@ -8,6 +8,8 @@ public class DashboardSummaryDto
 {
     public int TotalGuests { get; set; }
     public int ArrivingCount { get; set; }
+    /// <summary>Guests with InboundStatus==Arrived AND ReceivedByEmbassyTeam==false (currently at airport, not yet handed over).</summary>
+    public int AtAirportCount { get; set; }
     public int ReceivedByEmbassyCount { get; set; }
     public int OnTheWayToHotelCount { get; set; }
     public int AtHotelCount { get; set; }
@@ -31,6 +33,8 @@ public class DashboardSummaryDto
     public int GuestsAssignedWithoutDedicatedCar { get; set; }
     /// <summary>Active guests who have a DeservedCarClassId set (i.e., deserve a vehicle).</summary>
     public int GuestsDeservingVehicle { get; set; }
+    /// <summary>Active guests who have NO DeservedCarClassId set (i.e., no car class assigned to them).</summary>
+    public int GuestsWithoutCarClass { get; set; }
 
     // Fleet by class
     public List<FleetByClassDto> FleetByClass { get; set; } = new();
@@ -43,6 +47,7 @@ public class FleetByClassDto
 {
     public Guid ClassId { get; set; }
     public string ClassName { get; set; } = string.Empty;
+    public string? ClassShortName { get; set; }
     public string? ClassColor { get; set; }
     public int SortOrder { get; set; }
     public int TotalVehicles { get; set; }
@@ -85,6 +90,7 @@ public class GuestSummaryDto
     public string? Notes { get; set; }
     public string? RegistrationTypeName { get; set; }
     public string? RankValue { get; set; }
+    public string? VehicleTypeValue { get; set; }
     public string? DedicatedCar { get; set; }
     public DateTime? ArrivalTime { get; set; }
     public Guid? DeservedCarClassId { get; set; }

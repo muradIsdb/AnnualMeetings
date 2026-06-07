@@ -1,5 +1,7 @@
 using IsDB.Hospitality.Application.DTOs.Auth;
 using IsDB.Hospitality.Application.Features.Auth.Commands;
+using IsDB.Hospitality.Application.Common.Interfaces;
+using IsDB.Hospitality.Domain.Enums;
 using IsDB.Hospitality.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -10,10 +12,12 @@ namespace IsDB.Hospitality.API.Controllers;
 public class AuthController : ApiControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly ISystemLogService _systemLogService;
 
-    public AuthController(AppDbContext db)
+    public AuthController(AppDbContext db, ISystemLogService systemLogService)
     {
         _db = db;
+        _systemLogService = systemLogService;
     }
 
     // POST /api/auth/login
@@ -22,7 +26,11 @@ public class AuthController : ApiControllerBase
     public async Task<ActionResult<LoginResponseDto>> Login([FromBody] LoginRequestDto request)
     {
         var result = await Mediator.Send(new LoginCommand(request.Email, request.Password));
-        if (result == null) return Unauthorized(new { message = "Invalid email or password." });
+        if (result == null)
+        {
+            await _systemLogService.LogAsync(LogSeverity.Warning, "Auth", $"Failed login attempt for {request.Email}");
+            return Unauthorized(new { message = "Invalid email or password." });
+        }
         return Ok(result);
     }
 

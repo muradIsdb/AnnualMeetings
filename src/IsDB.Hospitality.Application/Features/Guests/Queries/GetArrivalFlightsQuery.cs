@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IsDB.Hospitality.Application.Features.Guests.Queries;
 
-public record GetArrivalFlightsQuery : IRequest<List<ArrivalFlightGroupDto>>;
+public record GetArrivalFlightsQuery(string? ActiveEventCode = null) : IRequest<List<ArrivalFlightGroupDto>>;
 
 public class GetArrivalFlightsQueryHandler : IRequestHandler<GetArrivalFlightsQuery, List<ArrivalFlightGroupDto>>
 {
@@ -22,7 +22,8 @@ public class GetArrivalFlightsQueryHandler : IRequestHandler<GetArrivalFlightsQu
     {
         // Load all active guests with their inbound travel booking + flight
         var guests = await _context.Guests
-            .Where(g => g.IsActive)
+            .Where(g => g.IsActive
+                && (request.ActiveEventCode == null || g.EventCode == null || g.EventCode == request.ActiveEventCode))
             .Select(g => new
             {
                 Guest = new GuestSummaryDto

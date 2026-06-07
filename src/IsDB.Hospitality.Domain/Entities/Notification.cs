@@ -20,4 +20,7 @@ public class Notification : BaseEntity
     public StaffUser? CreatedByStaff { get; set; }
 
     public ICollection<NotificationRead> Reads { get; set; } = new List<NotificationRead>();
+
+    /// <summary>EventsAir event code this notification belongs to. Null = legacy (visible in all events).</summary>
+    public string? EventCode { get; set; }
 }

@@ -38,6 +38,9 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<CarClassRule> CarClassRules => Set<CarClassRule>();
     public DbSet<TravelBookingHistory> TravelBookingHistories => Set<TravelBookingHistory>();
     public DbSet<VehicleStatusHistory> VehicleStatusHistories => Set<VehicleStatusHistory>();
+    public DbSet<FlightSyncLog> FlightSyncLogs => Set<FlightSyncLog>();
+    public DbSet<SystemLog> SystemLogs => Set<SystemLog>();
+    public DbSet<SyncAlert> SyncAlerts => Set<SyncAlert>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -184,6 +187,25 @@ public class AppDbContext : DbContext, IAppDbContext
             .HasForeignKey(r => r.CarClassId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        // SystemLogs indexes
+        modelBuilder.Entity<SystemLog>()
+            .HasIndex(l => l.OccurredAt)
+            .IsDescending();
+        
+        modelBuilder.Entity<SystemLog>()
+            .HasIndex(l => new { l.Severity, l.OccurredAt })
+            .IsDescending(false, true);
+            
+        modelBuilder.Entity<SystemLog>()
+            .HasIndex(l => new { l.Module, l.OccurredAt })
+            .IsDescending(false, true);
+
+        modelBuilder.Entity<SystemLog>()
+            .HasOne(l => l.StaffUser)
+            .WithMany()
+            .HasForeignKey(l => l.StaffUserId)
+            .OnDelete(DeleteBehavior.SetNull);
+
         // CarClassRule — unique index on RegistrationTypeName
         modelBuilder.Entity<CarClassRule>()
             .HasIndex(r => r.RegistrationTypeName)
@@ -209,6 +231,29 @@ public class AppDbContext : DbContext, IAppDbContext
             .WithMany()
             .HasForeignKey(h => h.ChangedByStaffId)
             .OnDelete(DeleteBehavior.SetNull);
+
+        // SyncAlert → Guest (optional, no cascade to keep alerts after guest deletion)
+        modelBuilder.Entity<SyncAlert>()
+            .HasOne(a => a.Guest)
+            .WithMany()
+            .HasForeignKey(a => a.GuestId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        // SyncAlert → Vehicle (optional)
+        modelBuilder.Entity<SyncAlert>()
+            .HasOne(a => a.Vehicle)
+            .WithMany()
+            .HasForeignKey(a => a.VehicleId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        // SyncAlert indexes
+        modelBuilder.Entity<SyncAlert>()
+            .HasIndex(a => a.DetectedAt)
+            .IsDescending();
+
+        modelBuilder.Entity<SyncAlert>()
+            .HasIndex(a => new { a.IsResolved, a.DetectedAt })
+            .IsDescending(false, true);
 
         // TravelBooking -> Flight (Many-to-One)
         modelBuilder.Entity<TravelBooking>()

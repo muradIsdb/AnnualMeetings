@@ -41,6 +41,7 @@ public class ReceptionAlertGuestDto
     public bool HasVehicle { get; set; }
     public string? FlightNumber { get; set; }
     public DateTime? ScheduledArrival { get; set; }
+    public DateTime? ActualArrival { get; set; }
     public string InboundStatusLabel { get; set; } = string.Empty;
 }
 
@@ -51,6 +52,7 @@ public class ReceptionFlightDto
     public string AirlineName { get; set; } = string.Empty;
     public string? AirlineIataCode { get; set; }
     public DateTime ScheduledArrival { get; set; }
+    public DateTime? ActualArrival { get; set; }
     public string? DeparturePortName { get; set; }
     public string? ArrivalPortName { get; set; }
     public string? ActualTerminal { get; set; }
@@ -73,6 +75,7 @@ public class ReceptionGuestDto
     public string? FlightNumber { get; set; }
     public string? AirlineName { get; set; }
     public DateTime? ScheduledArrival { get; set; }
+    public DateTime? ActualArrival { get; set; }
     public string InboundStatusLabel { get; set; } = string.Empty;
     public int InboundStatusValue { get; set; }
     public string? ActiveVehiclePlate { get; set; }

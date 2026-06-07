@@ -56,13 +56,18 @@ public class CarClassRulesController : ControllerBase
         List<AutoAssignPreviewItem> Preview
     );
 
+    private async Task<string?> GetActiveEventCodeAsync(CancellationToken ct = default) =>
+        (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+
     // ─── GET all rules ────────────────────────────────────────────────────────
 
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken ct)
     {
+        var activeEventCode = await GetActiveEventCodeAsync(ct);
         var rules = await _db.CarClassRules
             .Include(r => r.CarClass)
+            .Where(r => r.EventCode == null || r.EventCode == activeEventCode)
             .OrderBy(r => r.Priority)
             .ThenBy(r => r.RegistrationTypeName)
             .Select(r => new CarClassRuleDto(
@@ -86,8 +91,11 @@ public class CarClassRulesController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.RegistrationTypeName))
             return BadRequest("RegistrationTypeName is required.");
 
+        var activeEventCode = await GetActiveEventCodeAsync(ct);
         var exists = await _db.CarClassRules
-            .AnyAsync(r => r.RegistrationTypeName.ToLower() == req.RegistrationTypeName.ToLower(), ct);
+            .AnyAsync(r =>
+                (r.EventCode == null || r.EventCode == activeEventCode) &&
+                r.RegistrationTypeName.ToLower() == req.RegistrationTypeName.ToLower(), ct);
         if (exists)
             return Conflict($"A rule for '{req.RegistrationTypeName}' already exists.");
 
@@ -101,6 +109,7 @@ public class CarClassRulesController : ControllerBase
             CarClassId = req.CarClassId,
             Priority = req.Priority,
             Notes = req.Notes,
+            EventCode = activeEventCode,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
@@ -177,9 +186,11 @@ public class CarClassRulesController : ControllerBase
     [HttpPost("auto-assign")]
     public async Task<IActionResult> AutoAssign([FromBody] AutoAssignRequest req, CancellationToken ct)
     {
-        // Load all rules ordered by priority
+        // Load all rules ordered by priority (scoped to active event)
+        var activeEventCode = await GetActiveEventCodeAsync(ct);
         var rules = await _db.CarClassRules
             .Include(r => r.CarClass)
+            .Where(r => r.EventCode == null || r.EventCode == activeEventCode)
             .OrderBy(r => r.Priority)
             .ToListAsync(ct);
 

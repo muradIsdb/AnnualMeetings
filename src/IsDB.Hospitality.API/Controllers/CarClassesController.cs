@@ -12,11 +12,16 @@ public class CarClassesController : ApiControllerBase
     private readonly AppDbContext _db;
     public CarClassesController(AppDbContext db) { _db = db; }
 
+    private async Task<string?> GetActiveEventCodeAsync() =>
+        (await _db.EventsAirConfigs.FirstOrDefaultAsync())?.EventCode;
+
     // GET /api/car-classes
     [HttpGet]
     public async Task<ActionResult<List<object>>> GetAll()
     {
+        var activeEventCode = await GetActiveEventCodeAsync();
         var classes = await _db.CarClasses
+            .Where(c => c.EventCode == null || c.EventCode == activeEventCode)
             .OrderBy(c => c.SortOrder).ThenBy(c => c.Name)
             .ToListAsync();
 
@@ -30,6 +35,7 @@ public class CarClassesController : ApiControllerBase
             {
                 c.Id,
                 c.Name,
+                c.ShortName,
                 c.Description,
                 c.Color,
                 c.SortOrder,
@@ -55,6 +61,7 @@ public class CarClassesController : ApiControllerBase
         {
             c.Id,
             c.Name,
+            c.ShortName,
             c.Description,
             c.Color,
             c.SortOrder,
@@ -71,16 +78,20 @@ public class CarClassesController : ApiControllerBase
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { message = "Name is required." });
 
-        if (await _db.CarClasses.AnyAsync(c => c.Name.ToLower() == req.Name.Trim().ToLower()))
+        var activeEventCode = await GetActiveEventCodeAsync();
+        if (await _db.CarClasses.AnyAsync(c =>
+            (c.EventCode == null || c.EventCode == activeEventCode) &&
+            c.Name.ToLower() == req.Name.Trim().ToLower()))
             return BadRequest(new { message = "A car class with this name already exists." });
-
         var carClass = new CarClass
         {
             Id          = Guid.NewGuid(),
             Name        = req.Name.Trim(),
+            ShortName   = req.ShortName?.Trim(),
             Description = req.Description?.Trim(),
             Color       = req.Color?.Trim(),
             SortOrder   = req.SortOrder ?? 0,
+            EventCode   = activeEventCode,
         };
 
         _db.CarClasses.Add(carClass);
@@ -100,11 +111,16 @@ public class CarClassesController : ApiControllerBase
         var carClass = await _db.CarClasses.FindAsync(id);
         if (carClass == null) return NotFound();
 
-        // Check name uniqueness (excluding self)
-        if (await _db.CarClasses.AnyAsync(c => c.Id != id && c.Name.ToLower() == req.Name.Trim().ToLower()))
+        // Check name uniqueness (excluding self, scoped to active event)
+        var activeEventCode2 = await GetActiveEventCodeAsync();
+        if (await _db.CarClasses.AnyAsync(c =>
+            c.Id != id &&
+            (c.EventCode == null || c.EventCode == activeEventCode2) &&
+            c.Name.ToLower() == req.Name.Trim().ToLower()))
             return BadRequest(new { message = "A car class with this name already exists." });
 
         carClass.Name        = req.Name.Trim();
+        carClass.ShortName   = req.ShortName?.Trim();
         carClass.Description = req.Description?.Trim();
         carClass.Color       = req.Color?.Trim();
         carClass.SortOrder   = req.SortOrder ?? carClass.SortOrder;
@@ -207,5 +223,5 @@ public class CarClassesController : ApiControllerBase
     }
 }
 
-public record CarClassRequest(string Name, string? Description, string? Color, int? SortOrder);
+public record CarClassRequest(string Name, string? Description, string? Color, int? SortOrder, string? ShortName);
 public record ReorderItem(Guid Id, int SortOrder);

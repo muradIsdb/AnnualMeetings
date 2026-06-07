@@ -29,18 +29,24 @@ public class GuestsController : ApiControllerBase
     private const string RANK_FIELD_GUID = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
 
     [HttpGet("arrival-flights")]
-    public async Task<ActionResult<List<ArrivalFlightGroupDto>>> GetArrivalFlights()
+    public async Task<ActionResult<List<ArrivalFlightGroupDto>>> GetArrivalFlights(
+        [FromServices] AppDbContext db = null!,
+        CancellationToken ct = default)
     {
-        var result = await Mediator.Send(new GetArrivalFlightsQuery());
+        var activeEventCode = (await db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+        var result = await Mediator.Send(new GetArrivalFlightsQuery(activeEventCode));
         return Ok(result);
     }
 
     [HttpGet]
     public async Task<ActionResult<List<GuestSummaryDto>>> GetGuests(
         [FromQuery] GuestStatus? status = null,
-        [FromQuery] bool? isCritical = null)
+        [FromQuery] bool? isCritical = null,
+        [FromServices] AppDbContext db = null!,
+        CancellationToken ct = default)
     {
-        var result = await Mediator.Send(new GetGuestsQuery(status, isCritical));
+        var activeEventCode = (await db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+        var result = await Mediator.Send(new GetGuestsQuery(status, isCritical, activeEventCode));
         return Ok(result);
     }
 
@@ -172,6 +178,7 @@ public class GuestsController : ApiControllerBase
         [FromServices] IHttpClientFactory httpClientFactory,
         [FromServices] IMemoryCache cache,
         [FromServices] IServiceScopeFactory scopeFactory,
+        [FromServices] ISystemLogService systemLogService,
         CancellationToken cancellationToken)
     {
         var config = await db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
@@ -206,14 +213,25 @@ public class GuestsController : ApiControllerBase
             oAuthScope = "https://eventsairprod.onmicrosoft.com/85d8f626-4e3d-4357-89c6-327d4e6d3d93/.default";
         }
 
-        // Load custom field GUIDs from DB (fall back to hardcoded defaults if not found)
-        var fieldMappings = await db.SyncFieldMappings.ToListAsync(cancellationToken);
-        var dedicatedCarGuid = fieldMappings.FirstOrDefault(f =>
-            f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase))
+        // Load custom field GUIDs from DB filtered by active event code (prefer event-specific over global NULL)
+        var fieldMappings = await db.SyncFieldMappings
+            .Where(f => f.EventCode == null || f.EventCode == eventCode)
+            .ToListAsync(cancellationToken);
+        var dedicatedCarGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase)))
             ?.EventsAirFieldGuid ?? DEDICATED_CAR_FIELD_GUID;
-        var rankGuid = fieldMappings.FirstOrDefault(f =>
-            f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase))
+        var rankGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase)))
             ?.EventsAirFieldGuid ?? RANK_FIELD_GUID;
+        var vehicleTypeGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Vehicle Types", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Vehicle Types", StringComparison.OrdinalIgnoreCase)))
+            ?.EventsAirFieldGuid ?? VEHICLE_TYPE_FIELD_GUID;
 
         // Capture caller identity before entering the background Task (HttpContext not available inside)
         var callerStaffIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -233,7 +251,7 @@ public class GuestsController : ApiControllerBase
                 // PASS 1: Fetch contacts with DedicatedCar=True (includes Rank)
                 // ═══════════════════════════════════════════════════════════════
                 var contacts = await FetchContactsWithDedicatedCarAsync(
-                    apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None, dedicatedCarGuid, rankGuid);
+                    apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None, dedicatedCarGuid, rankGuid, vehicleTypeGuid);
 
                 job.TotalFetched = contacts.Count;
                 Console.WriteLine($"[SYNC] Pass 1 complete: {contacts.Count} contacts with DedicatedCar=True fetched.");
@@ -247,10 +265,49 @@ public class GuestsController : ApiControllerBase
                 var existingGuestsByContactId = await bgDb.Guests
                     .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase);
 
+                // ── Bulk-load CarClasses for the current event keyed by Name (case-insensitive) ──
+                var carClassesByName = (await bgDb.CarClasses
+                    .Where(cc => cc.EventCode == eventCode)
+                    .ToListAsync())
+                    .GroupBy(cc => cc.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                int vehicleTypeMatched = 0, vehicleTypeUnmatched = 0;
+                var vehicleTypeUnmatchedValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                // ── Pre-load open alert guest IDs for deduplication (Pass 1 & 2) ──
+                var openAlertGuestIds = await bgDb.SyncAlerts
+                    .Where(a => !a.IsResolved && a.GuestId != null)
+                    .Select(a => new { a.GuestId, a.AlertType })
+                    .ToListAsync();
+                var openGuestRemovedIds = new HashSet<Guid>(openAlertGuestIds
+                    .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.GuestRemoved)
+                    .Select(a => a.GuestId!.Value));
+                var openRegTypeChangedIds = new HashSet<Guid>(openAlertGuestIds
+                    .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.RegTypeChanged)
+                    .Select(a => a.GuestId!.Value));
+
                 // Upsert guests
                 foreach (var contact in contacts)
                 {
                     if (string.IsNullOrEmpty(contact.ContactId)) continue;
+
+                    // Resolve DeservedCarClassId from VehicleTypeValue
+                    Guid? resolvedCarClassId = null;
+                    if (!string.IsNullOrWhiteSpace(contact.VehicleTypeValue))
+                    {
+                        var trimmedVehicleType = contact.VehicleTypeValue.Trim();
+                        if (carClassesByName.TryGetValue(trimmedVehicleType, out var matchedCarClass))
+                        {
+                            resolvedCarClassId = matchedCarClass.Id;
+                            vehicleTypeMatched++;
+                        }
+                        else
+                        {
+                            vehicleTypeUnmatched++;
+                            vehicleTypeUnmatchedValues.Add(trimmedVehicleType);
+                        }
+                    }
+
                     if (!existingGuestsByContactId.TryGetValue(contact.ContactId, out var existing))
                     {
                         var newGuest = new Guest
@@ -268,8 +325,11 @@ public class GuestsController : ApiControllerBase
                             RegistrationTypeName = contact.RegistrationTypeName,
                             DedicatedCar = "True",
                             RankValue = contact.RankValue,
+                            VehicleTypeValue = contact.VehicleTypeValue,
+                            DeservedCarClassId = resolvedCarClassId,
                             IsActive = true,
                             Status = GuestStatus.Expected,
+                            EventCode = eventCode,
                             LastSyncedAt = DateTime.UtcNow
                         };
                         bgDb.Guests.Add(newGuest);
@@ -283,37 +343,93 @@ public class GuestsController : ApiControllerBase
                         if (existing.LastName != contact.LastName) { existing.LastName = contact.LastName; changed = true; }
                         if (existing.Designation != contact.JobTitle) { existing.Designation = contact.JobTitle; changed = true; }
                         if (existing.Organization != contact.OrganizationName) { existing.Organization = contact.OrganizationName; changed = true; }
-                        if (existing.RegistrationTypeName != contact.RegistrationTypeName) { existing.RegistrationTypeName = contact.RegistrationTypeName; changed = true; }
+                        // ── Detect registration type change → create SyncAlert (deduplicated) ──────────────
+                        if (existing.RegistrationTypeName != contact.RegistrationTypeName)
+                        {
+                            if (!string.IsNullOrWhiteSpace(existing.RegistrationTypeName) && !string.IsNullOrWhiteSpace(contact.RegistrationTypeName)
+                                && !openRegTypeChangedIds.Contains(existing.Id))
+                            {
+                                openRegTypeChangedIds.Add(existing.Id); // prevent duplicate within same sync run
+                                bgDb.SyncAlerts.Add(new IsDB.Hospitality.Domain.Entities.SyncAlert
+                                {
+                                    AlertType    = IsDB.Hospitality.Domain.Enums.SyncAlertType.RegTypeChanged,
+                                    GuestId      = existing.Id,
+                                    GuestName    = $"{existing.FirstName} {existing.LastName}".Trim(),
+                                    EventsAirContactId = existing.EventsAirContactId,
+                                    OldValue     = existing.RegistrationTypeName,
+                                    NewValue     = contact.RegistrationTypeName,
+                                    SyncSource   = IsDB.Hospitality.Domain.Enums.SyncAlertSource.ManualSync,
+                                    DetectedAt   = DateTime.UtcNow
+                                });
+                            }
+                            existing.RegistrationTypeName = contact.RegistrationTypeName;
+                            changed = true;
+                        }
                         if (existing.RegistrationTypeId != contact.RegistrationTypeId) { existing.RegistrationTypeId = contact.RegistrationTypeId; changed = true; }
                         if (existing.Email != contact.PrimaryEmail) { existing.Email = contact.PrimaryEmail; changed = true; }
                         if (existing.Country != contact.Country) { existing.Country = contact.Country; changed = true; }
                         if (existing.PhotoUrl != contact.PhotoUrl) { existing.PhotoUrl = contact.PhotoUrl; changed = true; }
                         if (existing.RankValue != contact.RankValue) { existing.RankValue = contact.RankValue; changed = true; }
+                        if (existing.VehicleTypeValue != contact.VehicleTypeValue) { existing.VehicleTypeValue = contact.VehicleTypeValue; changed = true; }
+                        // Always overwrite DeservedCarClassId from VehicleTypeValue on every sync
+                        if (existing.DeservedCarClassId != resolvedCarClassId) { existing.DeservedCarClassId = resolvedCarClassId; changed = true; }
                         if (existing.DedicatedCar != "True") { existing.DedicatedCar = "True"; changed = true; }
                         if (!existing.IsActive) { existing.IsActive = true; changed = true; }
+                        // Stamp EventCode if not already set or if it differs from the active event
+                        if (existing.EventCode != eventCode) { existing.EventCode = eventCode; changed = true; }
                         if (changed) { existing.LastSyncedAt = DateTime.UtcNow; updated++; }
                     }
                 }
                 await bgDb.SaveChangesAsync();
-                Console.WriteLine($"[SYNC] Upsert complete: {added} new, {updated} updated.");
+                Console.WriteLine($"[SYNC] Upsert complete: {added} new, {updated} updated. VehicleType: {vehicleTypeMatched} matched, {vehicleTypeUnmatched} unmatched ({string.Join(", ", vehicleTypeUnmatchedValues.Take(10))})");
 
                 // ═══════════════════════════════════════════════════════════════
                 // PASS 2: Deactivate guests not in the fetched set
                 // ═══════════════════════════════════════════════════════════════
-                // ── Bulk-load active-vehicle set in one query; reuse existingGuestsByContactId ──
-                var guestsWithActiveVehicle = (await bgDb.VehicleAssignments
+                // ── Load active vehicle assignments for release on deactivation ──
+                var activeAssignmentsManual = await bgDb.VehicleAssignments
                     .Where(va => va.IsActive)
-                    .Select(va => va.GuestId)
-                    .ToListAsync()).ToHashSet();
+                    .Include(va => va.Vehicle)
+                    .ToListAsync();
+                var assignmentsByGuestManual = activeAssignmentsManual
+                    .GroupBy(va => va.GuestId)
+                    .ToDictionary(g => g.Key, g => g.First());
 
                 foreach (var kvp in existingGuestsByContactId)
                 {
                     var guestToDeactivate = kvp.Value;
                     if (!string.IsNullOrEmpty(guestToDeactivate.EventsAirContactId) &&
                         !syncedContactIds.Contains(guestToDeactivate.EventsAirContactId) &&
-                        guestToDeactivate.IsActive &&
-                        !guestsWithActiveVehicle.Contains(guestToDeactivate.Id))
+                        guestToDeactivate.IsActive)
                     {
+                        // ── Release active vehicle assignment if present ──────────────
+                        string? vehiclePlateManual = null;
+                        Guid? vehicleIdManual = null;
+                        if (assignmentsByGuestManual.TryGetValue(guestToDeactivate.Id, out var assignmentManual))
+                        {
+                            assignmentManual.IsActive = false;
+                            assignmentManual.UnassignedAt = DateTime.UtcNow;
+                            vehiclePlateManual = assignmentManual.Vehicle?.LicensePlate;
+                            vehicleIdManual = assignmentManual.VehicleId;
+                            if (assignmentManual.Vehicle != null)
+                                assignmentManual.Vehicle.Status = IsDB.Hospitality.Domain.Enums.VehicleStatus.Available;
+                        }
+                        // ── Create GuestRemoved SyncAlert (deduplicated) ──────────────────────────────
+                        if (!openGuestRemovedIds.Contains(guestToDeactivate.Id))
+                        {
+                        openGuestRemovedIds.Add(guestToDeactivate.Id);
+                        bgDb.SyncAlerts.Add(new IsDB.Hospitality.Domain.Entities.SyncAlert
+                        {
+                            AlertType    = IsDB.Hospitality.Domain.Enums.SyncAlertType.GuestRemoved,
+                            GuestId      = guestToDeactivate.Id,
+                            GuestName    = $"{guestToDeactivate.FirstName} {guestToDeactivate.LastName}".Trim(),
+                            EventsAirContactId = guestToDeactivate.EventsAirContactId,
+                            VehicleId    = vehicleIdManual,
+                            VehiclePlate = vehiclePlateManual,
+                            SyncSource   = IsDB.Hospitality.Domain.Enums.SyncAlertSource.ManualSync,
+                            DetectedAt   = DateTime.UtcNow
+                        });
+                        } // end deduplication check
                         guestToDeactivate.IsActive = false;
                         guestToDeactivate.DedicatedCar = null;
                         guestToDeactivate.LastSyncedAt = DateTime.UtcNow;
@@ -330,161 +446,175 @@ public class GuestsController : ApiControllerBase
                 // and the booking is updated to point to the new flight.
                 // Scheduled flight fields are ALWAYS overwritten from EventsAir.
                 // ═══════════════════════════════════════════════════════════════
-                int savedNew = 0, updatedExisting = 0, rebooked = 0;
                 try
                 {
-                    var travelBookings = await FetchTravelBookingsFromEventsAirAsync(apiBaseUrl, eventCode, token, httpClientFactory, CancellationToken.None);
-                    int skippedNoFlight = 0, skippedNoContact = 0, skippedNoGuest = 0;
+                    var travelBookings = await EventsAirSyncHelpers.FetchTravelBookingsByContactsAsync(apiBaseUrl, eventCode, token, httpClientFactory, syncedContactIds, CancellationToken.None);
                     Console.WriteLine($"[TRAVEL-SYNC] Processing {travelBookings.Count} travel bookings...");
                     foreach (var sample in travelBookings.Take(5))
                         Console.WriteLine($"[TRAVEL-SYNC] Sample: ContactId={sample.ContactId}, FlightNumber={sample.FlightNumber}, TravelType={sample.TravelTypeName}, ArrivalDate={sample.ArrivalDate}");
-                    int errorCount = 0;
-                    // ── Bulk-load active guests with travel bookings + flights ──
-                    var guestsByContactId = await bgDb.Guests
-                        .Where(g => g.IsActive)
-                        .Include(g => g.TravelBookings)
-                            .ThenInclude(tb => tb.Flight)
-                        .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase);
 
-                    // ── Bulk-load all flights keyed by flight number ──────────
-                    var flightsByNumber = await bgDb.Flights
-                        .ToDictionaryAsync(f => f.FlightNumber, StringComparer.OrdinalIgnoreCase);
+                    // ── Delegate all flight+booking processing to the shared helper ────────────
+                    // This is the single source of truth for flight deduplication rules.
+                    var syncResult = await EventsAirSyncHelpers.ProcessTravelBookingsAsync(bgDb, travelBookings);
 
-                    foreach (var tbDto in travelBookings)
+                    // ── Orphan cleanup: delete flight rows with no remaining bookings ──────
+                    // When a guest's date or time changes, the old flight row may be left with
+                    // no bookings. Clean it up here to keep the Flights table tidy.
+                    var orphanFlightIds = await bgDb.Flights
+                        .Where(f => !bgDb.TravelBookings.Any(tb => tb.FlightId == f.Id))
+                        .Select(f => f.Id)
+                        .ToListAsync();
+                    if (orphanFlightIds.Count > 0)
                     {
-                      try
-                      {
-                        if (string.IsNullOrEmpty(tbDto.FlightNumber)) { skippedNoFlight++; continue; }
-                        if (string.IsNullOrEmpty(tbDto.ContactId)) { skippedNoContact++; continue; }
-                        if (!guestsByContactId.TryGetValue(tbDto.ContactId, out var guest)) { skippedNoGuest++; continue; }
-
-                        bool isArrival = tbDto.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
-
-                        // Parse scheduled times from EventsAir
-                        DateTime? scheduledArrival = null;
-                        DateTime? scheduledDeparture = null;
-                        if (isArrival && !string.IsNullOrEmpty(tbDto.ArrivalDate))
-                        {
-                            if (DateTime.TryParse(tbDto.ArrivalDate, out var arrDate))
-                            {
-                                arrDate = DateTime.SpecifyKind(arrDate, DateTimeKind.Utc);
-                                scheduledArrival = !string.IsNullOrEmpty(tbDto.Eta) && TimeSpan.TryParse(tbDto.Eta, out var etaTime)
-                                    ? arrDate.Add(etaTime) : arrDate;
-                            }
-                        }
-                        if (!isArrival && !string.IsNullOrEmpty(tbDto.DepartureDate))
-                        {
-                            if (DateTime.TryParse(tbDto.DepartureDate, out var depDate))
-                            {
-                                depDate = DateTime.SpecifyKind(depDate, DateTimeKind.Utc);
-                                scheduledDeparture = !string.IsNullOrEmpty(tbDto.Etd) && TimeSpan.TryParse(tbDto.Etd, out var etdTime)
-                                    ? depDate.Add(etdTime) : depDate;
-                            }
-                        }
-
-                        // Find or create the Flight record using the in-memory dictionary
-                        if (!flightsByNumber.TryGetValue(tbDto.FlightNumber, out var flight))
-                        {
-                            flight = new Flight
-                            {
-                                FlightNumber = tbDto.FlightNumber,
-                                AirlineName = tbDto.CarrierName ?? "Unknown",
-                                ScheduledArrival = scheduledArrival ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc),
-                                ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(new DateTime(2026, 1, 1), DateTimeKind.Utc),
-                                ArrivalPortName = tbDto.ArrivalPortName,
-                                ArrivalPortIataCode = tbDto.ArrivalPortCode,
-                                DeparturePortName = tbDto.DeparturePortName,
-                                DeparturePortIataCode = tbDto.DeparturePortCode,
-                                Status = FlightStatus.Scheduled
-                            };
-                            bgDb.Flights.Add(flight);
-                            flightsByNumber[tbDto.FlightNumber] = flight; // keep dict in sync
-                        }
-                        else
-                        {
-                            // Always overwrite scheduled (EventsAir-owned) fields
-                            if (scheduledArrival.HasValue) flight.ScheduledArrival = scheduledArrival.Value;
-                            if (scheduledDeparture.HasValue) flight.ScheduledDeparture = scheduledDeparture.Value;
-                            if (!string.IsNullOrEmpty(tbDto.ArrivalPortName)) flight.ArrivalPortName = tbDto.ArrivalPortName;
-                            if (!string.IsNullOrEmpty(tbDto.ArrivalPortCode)) flight.ArrivalPortIataCode = tbDto.ArrivalPortCode;
-                            if (!string.IsNullOrEmpty(tbDto.DeparturePortName)) flight.DeparturePortName = tbDto.DeparturePortName;
-                            if (!string.IsNullOrEmpty(tbDto.DeparturePortCode)) flight.DeparturePortIataCode = tbDto.DeparturePortCode;
-                            if (!string.IsNullOrEmpty(tbDto.CarrierName)) flight.AirlineName = tbDto.CarrierName;
-                            // NOTE: ActualTerminal, ActualGate, Status are Aviationstack-owned — never overwrite here
-                        }
-
-                        var notes = tbDto.BookingNotes ?? tbDto.Comment;
-
-                        // Find the existing booking for this guest+direction (arrival OR departure)
-                        // A guest has at most ONE arrival and ONE departure booking.
-                        var existingBooking = guest.TravelBookings.FirstOrDefault(b => b.IsArrival == isArrival);
-
-                        if (existingBooking == null)
-                        {
-                            // No booking yet for this direction — create new
-                            bgDb.TravelBookings.Add(new TravelBooking
-                            {
-                                GuestId = guest.Id,
-                                FlightId = flight.Id,
-                                IsArrival = isArrival,
-                                SeatClass = tbDto.SeatClass,
-                                BookingNotes = notes,
-                                LastSyncedAt = DateTime.UtcNow
-                            });
-                            savedNew++;
-                        }
-                        else if (existingBooking.FlightId != flight.Id)
-                        {
-                            // Flight number changed — save history, update booking, flag as changed
-                            bgDb.TravelBookingHistories.Add(new TravelBookingHistory
-                            {
-                                TravelBookingId = existingBooking.Id,
-                                GuestId = guest.Id,
-                                PreviousFlightNumber = existingBooking.Flight?.FlightNumber ?? "Unknown",
-                                PreviousAirlineName = existingBooking.Flight?.AirlineName,
-                                PreviousScheduledArrival = existingBooking.Flight?.ScheduledArrival,
-                                PreviousScheduledDeparture = existingBooking.Flight?.ScheduledDeparture,
-                                PreviousDeparturePort = existingBooking.Flight?.DeparturePortName,
-                                PreviousArrivalPort = existingBooking.Flight?.ArrivalPortName,
-                                PreviousSeatClass = existingBooking.SeatClass,
-                                ChangedAt = DateTime.UtcNow
-                            });
-                            existingBooking.PreviousFlightNumber = existingBooking.Flight?.FlightNumber;
-                            existingBooking.FlightId = flight.Id;
-                            existingBooking.SeatClass = tbDto.SeatClass;
-                            existingBooking.BookingNotes = notes;
-                            existingBooking.ChangedSinceLastView = true;
-                            existingBooking.ChangedAt = DateTime.UtcNow;
-                            existingBooking.LastSyncedAt = DateTime.UtcNow;
-                            rebooked++;
-                        }
-                        else
-                        {
-                            // Same flight — just update mutable fields
-                            existingBooking.SeatClass = tbDto.SeatClass;
-                            existingBooking.BookingNotes = notes;
-                            existingBooking.LastSyncedAt = DateTime.UtcNow;
-                            updatedExisting++;
-                        }
-                      }
-                      catch (Exception bookingEx)
-                      {
-                        errorCount++;
-                        if (errorCount <= 5) Console.WriteLine($"[TRAVEL-SYNC] Error processing booking {tbDto.Id}: {bookingEx.Message}");
-                        foreach (var entry in bgDb.ChangeTracker.Entries().Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added || e.State == Microsoft.EntityFrameworkCore.EntityState.Modified))
-                            entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
-                      }
+                        var orphans = await bgDb.Flights.Where(f => orphanFlightIds.Contains(f.Id)).ToListAsync();
+                        bgDb.Flights.RemoveRange(orphans);
+                        Console.WriteLine($"[TRAVEL-SYNC] Orphan cleanup: removed {orphans.Count} flight rows with no bookings.");
                     }
-                    // Single SaveChangesAsync for the entire Pass 3 batch
+
                     await bgDb.SaveChangesAsync();
-                    Console.WriteLine($"[TRAVEL-SYNC] Results: {savedNew} new, {updatedExisting} updated, {rebooked} rebooked (history saved), {errorCount} errors, skipped: {skippedNoFlight} no flight, {skippedNoContact} no contact, {skippedNoGuest} no guest match");
+
+                    Console.WriteLine($"[TRAVEL-SYNC] Results: {syncResult.SavedNew} new, {syncResult.UpdatedExisting} updated, {syncResult.Rebooked} rebooked, {syncResult.ErrorCount} errors, skipped: {syncResult.SkippedNoFlight} no flight, {syncResult.SkippedNoContact} no contact, {syncResult.SkippedNoGuest} no guest match");
+                    foreach (var err in syncResult.Errors)
+                        Console.WriteLine($"[TRAVEL-SYNC] Error: {err}");
+
+                    // Store diagnostics on job so sync-status endpoint can return them
+                    job.TravelFetched          = travelBookings.Count;
+                    job.TravelSavedNew         = syncResult.SavedNew;
+                    job.TravelUpdated          = syncResult.UpdatedExisting;
+                    job.TravelRebooked         = syncResult.Rebooked;
+                    job.TravelSkippedNoFlight  = syncResult.SkippedNoFlight;
+                    job.TravelSkippedNoContact = syncResult.SkippedNoContact;
+                    job.TravelSkippedNoGuest   = syncResult.SkippedNoGuest;
+                    job.TravelErrors           = syncResult.ErrorCount;
+                    job.ConflictAlertCount     = syncResult.ConflictAlertCount;
                 }
-                catch (Exception ex) { Console.WriteLine($"Travel sync error: {ex.Message}\n{ex.StackTrace}"); }
+                catch (Exception ex)
+                {
+                    job.TravelFirstError = ex.Message;
+                    Console.WriteLine($"Travel sync error: {ex.Message}\n{ex.StackTrace}");
+                }
+
+                // ═══════════════════════════════════════════════════════════════
+                // PASS 4: CarClassMismatch — detect active guests whose assigned
+                //         vehicle car class doesn't match their DeservedCarClassId.
+                //
+                //         Uses Vehicle.CurrentGuestId + Status=Assigned as the
+                //         authoritative source (denormalised field always kept in
+                //         sync by all assignment paths). Falls back to the
+                //         VehicleAssignments table for plate/class lookup.
+                //         Only creates a new alert if no open one already exists.
+                // ═══════════════════════════════════════════════════════════════
+                int carClassMismatches = 0;
+                try
+                {
+                    // Load ALL guests (active or not) that have a deserved car class set.
+                    // Inactive guests may still have an active vehicle assignment — we must check those too.
+                    var guestsWithClassP4 = await bgDb.Guests
+                        .Where(g => g.DeservedCarClassId != null)
+                        .Select(g => new { g.Id, g.FirstName, g.LastName, g.EventsAirContactId, g.DeservedCarClassId })
+                        .ToListAsync();
+
+                    // PRIMARY: vehicles currently assigned to a guest (Status=Assigned)
+                    // This is the authoritative source — always kept in sync by all
+                    // assignment code paths (FleetController, AssignVehicleHelper, etc.)
+                    var assignedVehiclesP4 = await bgDb.Vehicles
+                        .Where(v => v.Status == IsDB.Hospitality.Domain.Enums.VehicleStatus.Assigned
+                                 && v.CurrentGuestId != null
+                                 && v.IsActive)
+                        .Include(v => v.CarClass)
+                        .ToListAsync();
+                    var vehicleByGuestP4 = assignedVehiclesP4
+                        .GroupBy(v => v.CurrentGuestId!.Value)
+                        .ToDictionary(g => g.Key, g => g.First());
+
+                    // Load all open CarClassMismatch alerts (full entity for auto-resolution)
+                    var existingOpenMismatches = await bgDb.SyncAlerts
+                        .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.CarClassMismatch
+                                 && !a.IsResolved && a.GuestId != null)
+                        .ToListAsync();
+                    var existingOpenMismatchIds = new HashSet<Guid>(existingOpenMismatches.Select(a => a.GuestId!.Value));
+
+                    // AUTO-RESOLVE: close open alerts where the mismatch is no longer present
+                    // (vehicle unassigned, or vehicle class now matches DeservedCarClassId)
+                    int autoResolved = 0;
+                    var guestLookupP4 = guestsWithClassP4.ToDictionary(g => g.Id);
+                    foreach (var alert in existingOpenMismatches)
+                    {
+                        var guestId = alert.GuestId!.Value;
+                        // If guest no longer has a vehicle assigned → resolve
+                        if (!vehicleByGuestP4.TryGetValue(guestId, out var currentVehicle))
+                        {
+                            alert.IsResolved = true;
+                            alert.ResolvedAt = DateTime.UtcNow;
+                            alert.ResolvedByUserName = "System (auto-resolved: vehicle unassigned)";
+                            autoResolved++;
+                            existingOpenMismatchIds.Remove(guestId);
+                            continue;
+                        }
+                        // If vehicle class now matches DeservedCarClassId → resolve
+                        if (guestLookupP4.TryGetValue(guestId, out var guestData)
+                            && currentVehicle.CarClassId != null
+                            && currentVehicle.CarClassId == guestData.DeservedCarClassId)
+                        {
+                            alert.IsResolved = true;
+                            alert.ResolvedAt = DateTime.UtcNow;
+                            alert.ResolvedByUserName = "System (auto-resolved: class now matches)";
+                            autoResolved++;
+                            existingOpenMismatchIds.Remove(guestId);
+                        }
+                    }
+                    if (autoResolved > 0)
+                    {
+                        await bgDb.SaveChangesAsync();
+                        Console.WriteLine($"[SYNC] Pass 4: {autoResolved} alert(s) auto-resolved.");
+                    }
+
+                    foreach (var guest in guestsWithClassP4)
+                    {
+                        if (existingOpenMismatchIds.Contains(guest.Id)) continue;
+                        if (!vehicleByGuestP4.TryGetValue(guest.Id, out var assignedVehicle)) continue;
+                        var vehicleCarClassId = assignedVehicle.CarClassId;
+                        if (vehicleCarClassId == null) continue;
+                        if (vehicleCarClassId != guest.DeservedCarClassId)
+                        {
+                            var deservedClass = await bgDb.CarClasses.FindAsync(guest.DeservedCarClassId!.Value);
+                            var assignedClass  = assignedVehicle.CarClass;
+                            bgDb.SyncAlerts.Add(new IsDB.Hospitality.Domain.Entities.SyncAlert
+                            {
+                                AlertType          = IsDB.Hospitality.Domain.Enums.SyncAlertType.CarClassMismatch,
+                                GuestId            = guest.Id,
+                                GuestName          = $"{guest.FirstName} {guest.LastName}".Trim(),
+                                EventsAirContactId = guest.EventsAirContactId,
+                                VehicleId          = assignedVehicle.Id,
+                                VehiclePlate       = assignedVehicle.LicensePlate,
+                                CarClassName       = assignedClass?.Name,
+                                OldValue           = deservedClass?.Name ?? guest.DeservedCarClassId.ToString(),
+                                NewValue           = assignedClass?.Name ?? vehicleCarClassId.ToString(),
+                                SyncSource         = IsDB.Hospitality.Domain.Enums.SyncAlertSource.ManualSync,
+                                DetectedAt         = DateTime.UtcNow
+                            });
+                            carClassMismatches++;
+                        }
+                    }
+                    if (carClassMismatches > 0)
+                        await bgDb.SaveChangesAsync();
+                    Console.WriteLine($"[SYNC] Pass 4 complete: {carClassMismatches} car class mismatch alert(s) created.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[SYNC] Pass 4 (car class mismatch) failed: {ex.Message}\n{ex.StackTrace}");
+                }
 
                 job.Added = added; job.Updated = updated; job.Deactivated = deactivated;
+                job.VehicleTypeMatched = vehicleTypeMatched;
+                job.VehicleTypeUnmatched = vehicleTypeUnmatched;
+                job.VehicleTypeUnmatchedValues = vehicleTypeUnmatchedValues.ToList();
                 job.State = "done"; job.FinishedAt = DateTime.UtcNow;
-                job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated.";
-                Console.WriteLine($"[SYNC] All passes complete. {added} new, {updated} updated, {deactivated} deactivated.");
+                var unmatchedSuffix = vehicleTypeUnmatched > 0
+                    ? $" VehicleType: {vehicleTypeMatched} matched, {vehicleTypeUnmatched} unmatched ({string.Join(", ", vehicleTypeUnmatchedValues.Take(5))})"
+                    : $" VehicleType: {vehicleTypeMatched} matched.";
+                job.Message = $"Sync complete. {added} new, {updated} updated, {deactivated} deactivated. Travel: {job.TravelSavedNew} new, {job.TravelUpdated} updated, {job.TravelRebooked} rebooked. CarClassMismatches: {carClassMismatches}.{unmatchedSuffix}";
+                Console.WriteLine($"[SYNC] All passes complete. {added} new, {updated} updated, {deactivated} deactivated, {carClassMismatches} car class mismatches.");
 
                 // ── Write comprehensive sync log entry ────────────────────────
                 try
@@ -514,7 +644,7 @@ public class GuestsController : ApiControllerBase
                         RecordsAdded = added,
                         RecordsUpdated = updated,
                         RecordsDeactivated = deactivated,
-                        TravelBookingsSynced = savedNew + updatedExisting + rebooked
+                        TravelBookingsSynced = job.TravelSavedNew + job.TravelUpdated + job.TravelRebooked
                     });
                     await logDb.SaveChangesAsync();
                 }
@@ -522,12 +652,29 @@ public class GuestsController : ApiControllerBase
                 {
                     Console.WriteLine($"[SYNC] Warning: could not write sync log: {logEx.Message}");
                 }
+                // ── Write to System Logs (success) ────────────────────────────
+                await systemLogService.LogAsync(
+                    LogSeverity.Information,
+                    "EventsAir Sync",
+                    $"Manual sync completed: {added} added, {updated} updated, {deactivated} deactivated",
+                    job.Message,
+                    null,
+                    callerStaffId,
+                    callerStaffName);
             }
             catch (Exception ex)
             {
                 job.State = "error"; job.Message = ex.Message; job.FinishedAt = DateTime.UtcNow;
                 Console.WriteLine($"[SYNC] Error: {ex.Message}\n{ex.StackTrace}");
-
+                // ── Write to System Logs (failure) ────────────────────────────
+                await systemLogService.LogAsync(
+                    LogSeverity.Error,
+                    "EventsAir Sync",
+                    "Manual sync failed",
+                    ex.Message,
+                    null,
+                    callerStaffId,
+                    callerStaffName);
                 // ── Write failure log entry ───────────────────────────────────
                 try
                 {
@@ -594,12 +741,15 @@ public class GuestsController : ApiControllerBase
     // Returns contacts with their Rank value included (from customFields inline)
     // Only 2-3 API calls needed for ~200 contacts
     // ═══════════════════════════════════════════════════════════════════════════
+    private const string VEHICLE_TYPE_FIELD_GUID = "5f6b0e9e-7d1c-4f91-affc-ecbe95cef678";
+
     private static async Task<List<EventsAirContactDto>> FetchContactsWithDedicatedCarAsync(
         string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
-        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null)
+        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null, string? vehicleTypeFieldGuid = null)
     {
         dedicatedCarFieldGuid ??= DEDICATED_CAR_FIELD_GUID;
         rankFieldGuid ??= RANK_FIELD_GUID;
+        vehicleTypeFieldGuid ??= VEHICLE_TYPE_FIELD_GUID;
         var fetched = new List<EventsAirContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -655,7 +805,7 @@ public class GuestsController : ApiControllerBase
                 if (errorMsg.Contains("cost", StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine("[SYNC] Cost limit hit — retrying with lighter query (no customFields/photo)...");
-                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken, dedicatedCarFieldGuid, rankFieldGuid);
+                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken, dedicatedCarFieldGuid, rankFieldGuid, vehicleTypeFieldGuid);
                 }
                 throw new InvalidOperationException($"GraphQL error: {errorMsg}");
             }
@@ -669,8 +819,9 @@ public class GuestsController : ApiControllerBase
                 var contactId = contact.TryGetProperty("id", out var cidEl) ? cidEl.GetString() ?? "" : "";
                 if (string.IsNullOrEmpty(contactId) || !seenContactIds.Add(contactId)) continue;
 
-                // Extract Rank from customFields
+                // Extract Rank and VehicleType from customFields
                 string? rankValue = null;
+                string? vehicleTypeValue = null;
                 if (contact.TryGetProperty("customFields", out var cfArray) && cfArray.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var cf in cfArray.EnumerateArray())
@@ -679,10 +830,12 @@ public class GuestsController : ApiControllerBase
                         if (string.Equals(defId, rankFieldGuid, StringComparison.OrdinalIgnoreCase))
                         {
                             if (cf.TryGetProperty("value", out var v) && v.ValueKind != JsonValueKind.Null)
-                            {
                                 rankValue = v.ValueKind == JsonValueKind.String ? v.GetString() : v.GetRawText().Trim('"');
-                            }
-                            break;
+                        }
+                        else if (string.Equals(defId, vehicleTypeFieldGuid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (cf.TryGetProperty("value", out var vt) && vt.ValueKind != JsonValueKind.Null)
+                                vehicleTypeValue = vt.ValueKind == JsonValueKind.String ? vt.GetString() : vt.GetRawText().Trim('"');
                         }
                     }
                 }
@@ -723,7 +876,8 @@ public class GuestsController : ApiControllerBase
                     RegistrationTypeName: regTypeName,
                     Country: country,
                     PhotoUrl: photoUrl,
-                    RankValue: rankValue
+                    RankValue: rankValue,
+                    VehicleTypeValue: vehicleTypeValue
                 ));
             }
 
@@ -741,10 +895,11 @@ public class GuestsController : ApiControllerBase
     /// </summary>
     private static async Task<List<EventsAirContactDto>> FetchContactsWithDedicatedCarLightAsync(
         string baseUrl, string eventCode, string accessToken, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
-        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null)
+        string? dedicatedCarFieldGuid = null, string? rankFieldGuid = null, string? vehicleTypeFieldGuid = null)
     {
         dedicatedCarFieldGuid ??= DEDICATED_CAR_FIELD_GUID;
         rankFieldGuid ??= RANK_FIELD_GUID;
+        vehicleTypeFieldGuid ??= VEHICLE_TYPE_FIELD_GUID;
         var fetched = new List<EventsAirContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -809,7 +964,8 @@ public class GuestsController : ApiControllerBase
                     RegistrationTypeName: "",
                     Country: country,
                     PhotoUrl: null,
-                    RankValue: null // Will need separate fetch
+                    RankValue: null, // Will need separate fetch
+                    VehicleTypeValue: null
                 ));
             }
 
@@ -818,15 +974,21 @@ public class GuestsController : ApiControllerBase
             offset += pageSize;
         }
 
-        // Fetch Rank values separately for the light path
+        // Fetch Rank and VehicleType values separately for the light path
         if (fetched.Count > 0)
         {
-            Console.WriteLine($"[SYNC] Light path: fetching Rank values for {fetched.Count} contacts...");
-            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, rankFieldGuid, fetched.Select(c => c.ContactId), httpClientFactory, cancellationToken);
+            Console.WriteLine($"[SYNC] Light path: fetching Rank and VehicleType values for {fetched.Count} contacts...");
+            var contactIds = fetched.Select(c => c.ContactId).ToList();
+            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, rankFieldGuid, contactIds, httpClientFactory, cancellationToken);
+            var vehicleTypeValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, vehicleTypeFieldGuid, contactIds, httpClientFactory, cancellationToken);
             for (int i = 0; i < fetched.Count; i++)
             {
-                if (rankValues.TryGetValue(fetched[i].ContactId, out var rank))
-                    fetched[i] = fetched[i] with { RankValue = rank };
+                var id = fetched[i].ContactId;
+                fetched[i] = fetched[i] with
+                {
+                    RankValue = rankValues.TryGetValue(id, out var rank) ? rank : fetched[i].RankValue,
+                    VehicleTypeValue = vehicleTypeValues.TryGetValue(id, out var vt) ? vt : fetched[i].VehicleTypeValue
+                };
             }
         }
 
@@ -949,10 +1111,17 @@ public class GuestsController : ApiControllerBase
         string ContactId, string FirstName, string LastName, string? Title,
         string? JobTitle, string? OrganizationName, string? PrimaryEmail,
         string RegistrationTypeId, string RegistrationTypeName,
-        string? Country = null, string? PhotoUrl = null, string? RankValue = null);
+        string? Country = null, string? PhotoUrl = null, string? RankValue = null, string? VehicleTypeValue = null);
 
     private record EventsAirRegistrationRaw(string ContactId, string FirstName, string LastName, string? Title, string? JobTitle, string? OrganizationName, string? PrimaryEmail, string RegistrationTypeId, string RegistrationTypeName, string? Country = null, string? PhotoUrl = null);
-    private class SyncJobStatus { public string JobId { get; set; } = string.Empty; public string State { get; set; } = "pending"; public string Message { get; set; } = string.Empty; public int Added { get; set; } public int Updated { get; set; } public int Deactivated { get; set; } public int TotalFetched { get; set; } public DateTime StartedAt { get; set; } public DateTime? FinishedAt { get; set; } }
+    private class SyncJobStatus { public string JobId { get; set; } = string.Empty; public string State { get; set; } = "pending"; public string Message { get; set; } = string.Empty; public int Added { get; set; } public int Updated { get; set; } public int Deactivated { get; set; } public int TotalFetched { get; set; } public DateTime StartedAt { get; set; } public DateTime? FinishedAt { get; set; }
+        // Travel sync diagnostics
+        public int TravelFetched { get; set; } public int TravelSavedNew { get; set; } public int TravelUpdated { get; set; } public int TravelRebooked { get; set; }
+        public int TravelSkippedNoFlight { get; set; } public int TravelSkippedNoContact { get; set; } public int TravelSkippedNoGuest { get; set; }
+        public int TravelErrors { get; set; } public string? TravelFirstError { get; set; }
+        public int ConflictAlertCount { get; set; }
+        // Vehicle type matching diagnostics
+        public int VehicleTypeMatched { get; set; } public int VehicleTypeUnmatched { get; set; } public List<string> VehicleTypeUnmatchedValues { get; set; } = new(); }
     private class FieldFilter { public string FieldGuid { get; set; } = string.Empty; public List<string> SelectedValues { get; set; } = new(); }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1814,6 +1983,43 @@ public class GuestsController : ApiControllerBase
             return $"\"{ value.Replace("\"", "\"\"")}\"";
         return value;
     }
+
+    /// <summary>
+    /// Admin-only: directly update the scheduled arrival of a travel booking's linked flight.
+    /// Intended for testing the AviationStack sync against today's live data.
+    /// </summary>
+    [HttpPatch("{guestId:guid}/travel-bookings/{bookingId:guid}/scheduled-arrival")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> PatchTravelBookingScheduledArrival(
+        Guid guestId, Guid bookingId,
+        [FromBody] PatchScheduledArrivalRequest req,
+        [FromServices] AppDbContext db,
+        CancellationToken ct)
+    {
+        var booking = await db.TravelBookings
+            .Include(tb => tb.Flight)
+            .FirstOrDefaultAsync(tb => tb.Id == bookingId && tb.GuestId == guestId, ct);
+
+        if (booking == null)
+            return NotFound(new { message = "Travel booking not found" });
+
+        if (booking.Flight == null)
+            return BadRequest(new { message = "Booking has no linked flight" });
+
+        var oldDate = booking.Flight.ScheduledArrival;
+        booking.Flight.ScheduledArrival = req.ScheduledArrival.ToUniversalTime();
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new
+        {
+            bookingId,
+            flightId = booking.Flight.Id,
+            flightNumber = booking.Flight.FlightNumber,
+            oldScheduledArrival = oldDate,
+            newScheduledArrival = booking.Flight.ScheduledArrival
+        });
+    }
+
 }
 public record UpdateStatusRequest(GuestStatus Status, string? Notes = null);
 public record CompleteChecklistRequest(string? Notes = null);
@@ -1822,3 +2028,4 @@ public record SetStatusRequest(InboundStatus Status, string? Notes = null, strin
 public record SetOutboundStatusRequest(OutboundStatus Status, string? Notes = null);
 public record ForceStatusRequest(StatusTrack Track, int StatusValue, string? Notes = null);
 public record UpdateHotelAssignmentRequest(string? HotelName, string? RoomNumber);
+public record PatchScheduledArrivalRequest(DateTime ScheduledArrival);

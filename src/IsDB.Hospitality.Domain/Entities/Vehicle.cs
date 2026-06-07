@@ -35,4 +35,7 @@ public class Vehicle : BaseEntity
     /// <summary>The car class this vehicle belongs to (e.g., "Luxury Car").</summary>
     public Guid? CarClassId { get; set; }
     public CarClass? CarClass { get; set; }
+
+    /// <summary>The EventsAir event code this vehicle belongs to. Null = legacy (treated as current event).</summary>
+    public string? EventCode { get; set; }
 }

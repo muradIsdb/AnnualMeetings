@@ -16,6 +16,7 @@ public static class DatabaseSeeder
         await SeedCarClassesAsync(context);
         await SeedVehiclesAsync(context);
         await SeedSyncFieldMappingsAsync(context);
+        await SeedPickupOptionsAsync(context);
             await ApplyProductionSeedAsync(context, logger);
             logger.LogInformation("Database seeded successfully.");
         }
@@ -201,6 +202,7 @@ public static class DatabaseSeeder
     {
         const string rankGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
         const string dedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+        const string vehicleTypeGuid = "5f6b0e9e-7d1c-4f91-affc-ecbe95cef678";
 
         // Seed the Rank field mapping if it doesn't already exist
         var rankExists = await context.SyncFieldMappings.AnyAsync(m => m.EventsAirFieldGuid == rankGuid);
@@ -245,6 +247,82 @@ public static class DatabaseSeeder
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             });
+        }
+
+        // Seed the Vehicle Types field mapping if it doesn't already exist
+        var vehicleTypeExists = await context.SyncFieldMappings.AnyAsync(m => m.EventsAirFieldGuid == vehicleTypeGuid);
+        if (!vehicleTypeExists)
+        {
+            context.SyncFieldMappings.Add(new SyncFieldMapping
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = "Vehicle Types",
+                EventsAirFieldGuid = vehicleTypeGuid,
+                FieldRole = "VehicleType",
+                Description = "Preferred vehicle type from EventsAir (e.g. Hyundai Elantra, Toyota Land Cruiser). Stored for display only.",
+                SortOrder = 3,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            });
+        }
+
+        await context.SaveChangesAsync();
+    }
+
+    private static async Task SeedPickupOptionsAsync(AppDbContext context)
+    {
+        var isPostgres = context.Database.ProviderName?.Contains("Npgsql") == true;
+
+        // ── Pickup Days ──────────────────────────────────────────────────────────
+        var days = new[]
+        {
+            (Value: "2026-07-19", Label: "Saturday, 19 Jul",  DisplayOrder: 1),
+            (Value: "2026-07-20", Label: "Sunday, 20 Jul",    DisplayOrder: 2),
+            (Value: "2026-07-21", Label: "Monday, 21 Jul",    DisplayOrder: 3),
+        };
+
+        foreach (var day in days)
+        {
+            var exists = await context.PickupDayOptions.AnyAsync(x => x.Value == day.Value);
+            if (!exists)
+            {
+                context.PickupDayOptions.Add(new IsDB.Hospitality.Domain.Entities.PickupDayOption
+                {
+                    Id           = Guid.NewGuid(),
+                    Label        = day.Label,
+                    Value        = day.Value,
+                    IsActive     = true,
+                    DisplayOrder = day.DisplayOrder,
+                    CreatedAt    = DateTime.UtcNow,
+                    UpdatedAt    = DateTime.UtcNow
+                });
+            }
+        }
+
+        // ── Pickup Hours ─────────────────────────────────────────────────────────
+        // 24 entries: 00:00 → 23:00, labels in 12-hour AM/PM format
+        for (int h = 0; h < 24; h++)
+        {
+            var value = $"{h:D2}:00";
+            var label = h == 0  ? "12:00 AM"
+                      : h < 12 ? $"{h:D2}:00 AM"
+                      : h == 12 ? "12:00 PM"
+                      : $"{(h - 12):D2}:00 PM";
+
+            var exists = await context.PickupHourOptions.AnyAsync(x => x.Value == value);
+            if (!exists)
+            {
+                context.PickupHourOptions.Add(new IsDB.Hospitality.Domain.Entities.PickupHourOption
+                {
+                    Id           = Guid.NewGuid(),
+                    Label        = label,
+                    Value        = value,
+                    IsActive     = true,
+                    DisplayOrder = h,
+                    CreatedAt    = DateTime.UtcNow,
+                    UpdatedAt    = DateTime.UtcNow
+                });
+            }
         }
 
         await context.SaveChangesAsync();

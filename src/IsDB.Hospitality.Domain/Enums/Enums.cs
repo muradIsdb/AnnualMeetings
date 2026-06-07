@@ -113,3 +113,16 @@ public enum StatusTrack
     /// <summary>Vehicle activity events (assign, unassign, reassign, force-assign)</summary>
     Vehicle = 2
 }
+
+public enum SyncAlertType
+{
+    GuestRemoved = 1,
+    CarClassMismatch = 2,
+    RegTypeChanged = 3
+}
+
+public enum SyncAlertSource
+{
+    AutoSync = 1,
+    ManualSync = 2
+}

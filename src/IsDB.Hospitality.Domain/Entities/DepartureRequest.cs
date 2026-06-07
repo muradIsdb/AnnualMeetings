@@ -36,4 +36,7 @@ public class DepartureRequest : BaseEntity
 
     /// <summary>Timestamp of first submission.</summary>
     public DateTime SubmittedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>EventsAir event code this departure registration belongs to. Null = legacy.</summary>
+    public string? EventCode { get; set; }
 }

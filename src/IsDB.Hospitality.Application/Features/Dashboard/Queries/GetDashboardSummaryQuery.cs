@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IsDB.Hospitality.Application.Features.Dashboard.Queries;
 
-public record GetDashboardSummaryQuery : IRequest<DashboardSummaryDto>;
+public record GetDashboardSummaryQuery(string? ActiveEventCode = null) : IRequest<DashboardSummaryDto>;
 
 public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSummaryQuery, DashboardSummaryDto>
 {
@@ -21,17 +21,35 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
 
     public async Task<DashboardSummaryDto> Handle(GetDashboardSummaryQuery request, CancellationToken cancellationToken)
     {
-        var activeGuests = _context.Guests.AsNoTracking().Where(g => g.IsActive);
+        var activeGuests = _context.Guests.AsNoTracking().Where(g => g.IsActive
+            && (request.ActiveEventCode == null || g.EventCode == null || g.EventCode == request.ActiveEventCode));
 
         // ── 1. Count queries — sequential to avoid EF Core concurrent-context error ─
+        // NOTE: Counts use InboundStatus/OutboundStatus and the ReceivedByEmbassyTeam boolean flag
+        // (the fields updated by Airport/Hotel workflows) rather than the legacy GuestStatus field.
+        // ReceivedByEmbassyTeam is a separate boolean flag — it does NOT change InboundStatus.
         var totalGuests       = await activeGuests.CountAsync(cancellationToken);
-        var arrivingCount     = await activeGuests.CountAsync(g => g.Status == GuestStatus.ArrivedAtAirport, cancellationToken);
-        var receivedByEmbassy = await activeGuests.CountAsync(g => g.Status == GuestStatus.ReceivedByEmbassy, cancellationToken);
-        var onTheWayToHotel   = await activeGuests.CountAsync(g => g.Status == GuestStatus.OnTheWayToHotel, cancellationToken);
-        var atHotel           = await activeGuests.CountAsync(g => g.Status == GuestStatus.AtHotel, cancellationToken);
+        // arrivingCount = guests past airport: Arrived + ReceivedByEmbassy flag + VehicleAssigned + AtHotel
+        var arrivingCount     = await activeGuests.CountAsync(g =>
+            g.InboundStatus == InboundStatus.Arrived ||
+            g.ReceivedByEmbassyTeam ||
+            g.InboundStatus == InboundStatus.VehicleAssigned ||
+            g.InboundStatus == InboundStatus.AtHotel, cancellationToken);
+        // receivedByEmbassy = cumulative: all guests who ever had embassy flag set (boolean, not enum)
+        var receivedByEmbassy = await activeGuests.CountAsync(g => g.ReceivedByEmbassyTeam, cancellationToken);
+        // atAirport = guests currently at airport: InboundStatus==Arrived AND not yet received by embassy
+        var atAirport         = await activeGuests.CountAsync(g =>
+            g.InboundStatus == InboundStatus.Arrived && !g.ReceivedByEmbassyTeam, cancellationToken);
+        var onTheWayToHotel   = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.VehicleAssigned, cancellationToken);
+        var atHotel           = await activeGuests.CountAsync(g => g.InboundStatus == InboundStatus.AtHotel, cancellationToken);
         var departing         = await activeGuests.CountAsync(g =>
-            g.Status == GuestStatus.DepartingHotel || g.Status == GuestStatus.AtAirportDeparture, cancellationToken);
-        var guestsDeserving   = await activeGuests.CountAsync(g => g.DeservedCarClassId.HasValue, cancellationToken);
+            g.OutboundStatus == OutboundStatus.InTransferToAirport ||
+            g.OutboundStatus == OutboundStatus.AtAirport ||
+            g.OutboundStatus == OutboundStatus.BoardingCompleted, cancellationToken);
+        // guestsDeserving = cars still needed: guests with a car class entitlement but no dedicated car assigned yet
+        var guestsDeserving   = await activeGuests.CountAsync(g => g.DeservedCarClassId.HasValue && g.DedicatedCar == null, cancellationToken);
+        // guestsWithoutCarClass = guests with no car class assigned at all
+        var guestsWithoutCarClass = await activeGuests.CountAsync(g => !g.DeservedCarClassId.HasValue, cancellationToken);
 
         // ── 2. Lightweight guest projection (only needed columns, no navigation) ───
         var guests = await activeGuests
@@ -61,11 +79,13 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
 
         // ── 5. Fleet ──────────────────────────────────────────────────────────────
         var vehicles = await _context.Vehicles.AsNoTracking()
-            .Where(v => v.IsActive)
+            .Where(v => v.IsActive
+                && (request.ActiveEventCode == null || v.EventCode == null || v.EventCode == request.ActiveEventCode))
             .Include(v => v.CarClass)
             .ToListAsync(cancellationToken);
 
         var carClasses = await _context.CarClasses.AsNoTracking()
+            .Where(c => request.ActiveEventCode == null || c.EventCode == null || c.EventCode == request.ActiveEventCode)
             .OrderBy(c => c.SortOrder)
             .ToListAsync(cancellationToken);
 
@@ -151,6 +171,7 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
         {
             TotalGuests                       = totalGuests,
             ArrivingCount                     = arrivingCount,
+            AtAirportCount                    = atAirport,
             ReceivedByEmbassyCount            = receivedByEmbassy,
             OnTheWayToHotelCount              = onTheWayToHotel,
             AtHotelCount                      = atHotel,
@@ -182,11 +203,13 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
             GuestsWithoutVehicle              = guestsWithoutVehicle,
             GuestsAssignedWithoutDedicatedCar = guestsAssignedNoDedicated,
             GuestsDeservingVehicle            = guestsDeserving,
+            GuestsWithoutCarClass             = guestsWithoutCarClass,
             // Fleet by class
             FleetByClass = carClasses.Select(cc => new FleetByClassDto
             {
                 ClassId         = cc.Id,
                 ClassName       = cc.Name,
+                ClassShortName  = cc.ShortName,
                 ClassColor      = cc.Color,
                 SortOrder       = cc.SortOrder,
                 TotalVehicles   = vehicles.Count(v => v.CarClassId == cc.Id),

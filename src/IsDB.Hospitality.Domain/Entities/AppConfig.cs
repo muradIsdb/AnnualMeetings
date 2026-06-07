@@ -18,6 +18,11 @@ public class AppConfig
     public int MinimumLeadTimeHours { get; set; } = 2;
 
     /// <summary>
+    /// Number of days to keep system logs before auto-purging. Default 90.
+    /// </summary>
+    public int LogRetentionDays { get; set; } = 90;
+
+    /// <summary>
     /// IANA timezone identifier for the event location (e.g. "Asia/Riyadh").
     /// Used to convert UTC server time to local event time for pickup hour filtering.
     /// </summary>
@@ -45,4 +50,21 @@ public class AppConfig
     public string? EventLogoMimeType { get; set; }
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    // ─── AviationStack Flight Tracking ───────────────────────────────────────
+    /// <summary>AviationStack API key stored in the database (plain text).</summary>
+    public string? AviationstackApiKey { get; set; }
+
+    /// <summary>How often (in minutes) the background service polls AviationStack. Default 5.</summary>
+    public int AviationstackSyncIntervalMinutes { get; set; } = 5;
+
+    /// <summary>Only poll flights whose ScheduledArrival is within this many hours. Default 12.</summary>
+    public int AviationstackTrackingWindowHours { get; set; } = 12;
+
+    /// <summary>
+    /// Maximum allowed difference (in whole days) between the date AviationStack returns
+    /// and the date stored in the DB for the same flight. Results exceeding this tolerance
+    /// are silently discarded to prevent cross-day contamination. Default 1.
+    /// </summary>
+    public int AviationstackDateGuardDays { get; set; } = 1;
 }

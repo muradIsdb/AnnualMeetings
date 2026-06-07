@@ -22,10 +22,12 @@ public class NotificationsController : ApiControllerBase
         CancellationToken ct = default)
     {
         var (callerRole, callerId) = GetCallerInfo();
+        var activeEventCode = (await db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
 
         var notifications = await db.Notifications
             .Include(n => n.CreatedByStaff)
             .Include(n => n.Reads)
+            .Where(n => activeEventCode == null || n.EventCode == null || n.EventCode == activeEventCode)
             .OrderByDescending(n => n.CreatedAt)
             .Take(50)
             .ToListAsync(ct);
@@ -59,9 +61,11 @@ public class NotificationsController : ApiControllerBase
         CancellationToken ct = default)
     {
         var (callerRole, callerId) = GetCallerInfo();
+        var activeEventCode2 = (await db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
 
         var notifications = await db.Notifications
             .Include(n => n.Reads)
+            .Where(n => activeEventCode2 == null || n.EventCode == null || n.EventCode == activeEventCode2)
             .ToListAsync(ct);
 
         var count = notifications
@@ -92,9 +96,12 @@ public class NotificationsController : ApiControllerBase
         if (pageSize < 1) pageSize = 50;
         if (pageSize > 200) pageSize = 200;
 
+        var activeEventCodeH = (await db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+
         var query = db.Notifications
             .Include(n => n.CreatedByStaff)
             .Include(n => n.Reads)
+            .Where(n => activeEventCodeH == null || n.EventCode == null || n.EventCode == activeEventCodeH)
             .AsQueryable();
 
         // Search
@@ -179,9 +186,12 @@ public class NotificationsController : ApiControllerBase
         [FromQuery] DateTime? to = null,
         CancellationToken ct = default)
     {
+        var activeEventCodeE = (await db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+
         var query = db.Notifications
             .Include(n => n.CreatedByStaff)
             .Include(n => n.Reads)
+            .Where(n => activeEventCodeE == null || n.EventCode == null || n.EventCode == activeEventCodeE)
             .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(search))
@@ -292,12 +302,15 @@ public class NotificationsController : ApiControllerBase
             return BadRequest(new { message = "Only Admin and Control Room roles can send Critical priority notifications." });
         }
 
+        var activeEventCodeN = (await db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+
         var notification = new Notification
         {
             Message = request.Message.Trim(),
             TargetRoles = string.IsNullOrWhiteSpace(request.TargetRoles) ? "All" : request.TargetRoles.Trim(),
             Priority = request.Priority,
-            CreatedByStaffId = CurrentUserId
+            CreatedByStaffId = CurrentUserId,
+            EventCode = activeEventCodeN
         };
 
         db.Notifications.Add(notification);

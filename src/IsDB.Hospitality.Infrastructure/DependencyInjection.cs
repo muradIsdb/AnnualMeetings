@@ -50,10 +50,12 @@ public static class DependencyInjection
 
         // Services
         services.AddScoped<IJwtService, JwtService>();
+        services.AddSingleton<ISystemLogService, SystemLogService>();
 
         // Background services
         services.AddHostedService<EventsAirSyncService>();
         services.AddHostedService<FlightTrackerSyncService>();
+        services.AddHostedService<LogRetentionService>();
 
         return services;
     }

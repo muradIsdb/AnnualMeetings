@@ -2,6 +2,11 @@ using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using IsDB.Hospitality.Application.Common.Helpers;
+using IsDB.Hospitality.Application.Common.Interfaces;
+using IsDB.Hospitality.Domain.Entities;
+using IsDB.Hospitality.Domain.Enums;
+using Microsoft.EntityFrameworkCore;
 
 namespace IsDB.Hospitality.Application.Common.Models;
 
@@ -13,6 +18,7 @@ public static class EventsAirSyncHelpers
 {
     public const string DedicatedCarFieldGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
     public const string RankFieldGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+    public const string VehicleTypeFieldGuid = "5f6b0e9e-7d1c-4f91-affc-ecbe95cef678";
 
     // ─── OAuth2 Token ─────────────────────────────────────────────────────────
 
@@ -43,8 +49,12 @@ public static class EventsAirSyncHelpers
 
     public static async Task<List<EventsAirSyncContactDto>> FetchContactsWithDedicatedCarAsync(
         string baseUrl, string eventCode, string accessToken,
-        IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+        IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
+        string? dedicatedCarGuid = null, string? rankGuid = null, string? vehicleTypeGuid = null)
     {
+        dedicatedCarGuid ??= DedicatedCarFieldGuid;
+        rankGuid ??= RankFieldGuid;
+        vehicleTypeGuid ??= VehicleTypeFieldGuid;
         var fetched = new List<EventsAirSyncContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -56,7 +66,7 @@ public static class EventsAirSyncHelpers
         {
             var graphqlQuery = $@"{{
               event(id: ""{eventCode}"") {{
-                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{DedicatedCarFieldGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
+                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{dedicatedCarGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
                   id firstName lastName title jobTitle organizationName primaryEmail
                   primaryAddress {{ country }}
                   photo {{ url }}
@@ -84,7 +94,7 @@ public static class EventsAirSyncHelpers
             {
                 var errorMsg = errors[0].GetProperty("message").GetString() ?? "Unknown GraphQL error";
                 if (errorMsg.Contains("cost", StringComparison.OrdinalIgnoreCase))
-                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken);
+                    return await FetchContactsWithDedicatedCarLightAsync(baseUrl, eventCode, accessToken, httpClientFactory, cancellationToken, dedicatedCarGuid, rankGuid, vehicleTypeGuid);
                 throw new InvalidOperationException($"GraphQL error: {errorMsg}");
             }
 
@@ -98,16 +108,21 @@ public static class EventsAirSyncHelpers
                 if (string.IsNullOrEmpty(contactId) || !seenContactIds.Add(contactId)) continue;
 
                 string? rankValue = null;
+                string? vehicleTypeValue = null;
                 if (contact.TryGetProperty("customFields", out var cfArray) && cfArray.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var cf in cfArray.EnumerateArray())
                     {
                         var defId = cf.TryGetProperty("definitionId", out var did) ? did.GetString() ?? "" : "";
-                        if (string.Equals(defId, RankFieldGuid, StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(defId, rankGuid, StringComparison.OrdinalIgnoreCase))
                         {
                             if (cf.TryGetProperty("value", out var v) && v.ValueKind != JsonValueKind.Null)
                                 rankValue = v.ValueKind == JsonValueKind.String ? v.GetString() : v.GetRawText().Trim('"');
-                            break;
+                        }
+                        else if (string.Equals(defId, vehicleTypeGuid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (cf.TryGetProperty("value", out var vt) && vt.ValueKind != JsonValueKind.Null)
+                                vehicleTypeValue = vt.ValueKind == JsonValueKind.String ? vt.GetString() : vt.GetRawText().Trim('"');
                         }
                     }
                 }
@@ -146,7 +161,8 @@ public static class EventsAirSyncHelpers
                     RegistrationTypeName: regTypeName,
                     Country: country,
                     PhotoUrl: photoUrl,
-                    RankValue: rankValue
+                    RankValue: rankValue,
+                    VehicleTypeValue: vehicleTypeValue
                 ));
             }
 
@@ -159,8 +175,12 @@ public static class EventsAirSyncHelpers
 
     private static async Task<List<EventsAirSyncContactDto>> FetchContactsWithDedicatedCarLightAsync(
         string baseUrl, string eventCode, string accessToken,
-        IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+        IHttpClientFactory httpClientFactory, CancellationToken cancellationToken,
+        string? dedicatedCarGuid = null, string? rankGuid = null, string? vehicleTypeGuid = null)
     {
+        dedicatedCarGuid ??= DedicatedCarFieldGuid;
+        rankGuid ??= RankFieldGuid;
+        vehicleTypeGuid ??= VehicleTypeFieldGuid;
         var fetched = new List<EventsAirSyncContactDto>();
         var seenContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var client = httpClientFactory.CreateClient();
@@ -172,7 +192,7 @@ public static class EventsAirSyncHelpers
         {
             var graphqlQuery = $@"{{
               event(id: ""{eventCode}"") {{
-                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{DedicatedCarFieldGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
+                contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{dedicatedCarGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
                   id firstName lastName title jobTitle organizationName primaryEmail
                   primaryAddress {{ country }}
                 }}
@@ -219,7 +239,8 @@ public static class EventsAirSyncHelpers
                     RegistrationTypeName: "",
                     Country: country,
                     PhotoUrl: null,
-                    RankValue: null
+                    RankValue: null,
+                    VehicleTypeValue: null
                 ));
             }
 
@@ -227,14 +248,20 @@ public static class EventsAirSyncHelpers
             offset += pageSize;
         }
 
-        // Fetch Rank values separately
+        // Fetch Rank and VehicleType values separately
         if (fetched.Count > 0)
         {
-            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, RankFieldGuid, fetched.Select(c => c.ContactId), httpClientFactory, cancellationToken);
+            var contactIds = fetched.Select(c => c.ContactId).ToList();
+            var rankValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, rankGuid, contactIds, httpClientFactory, cancellationToken);
+            var vehicleTypeValues = await FetchCustomFieldValuesAsync(baseUrl, eventCode, accessToken, vehicleTypeGuid, contactIds, httpClientFactory, cancellationToken);
             for (int i = 0; i < fetched.Count; i++)
             {
-                if (rankValues.TryGetValue(fetched[i].ContactId, out var rank))
-                    fetched[i] = fetched[i] with { RankValue = rank };
+                var id = fetched[i].ContactId;
+                fetched[i] = fetched[i] with
+                {
+                    RankValue = rankValues.TryGetValue(id, out var rank) ? rank : fetched[i].RankValue,
+                    VehicleTypeValue = vehicleTypeValues.TryGetValue(id, out var vt) ? vt : fetched[i].VehicleTypeValue
+                };
             }
         }
 
@@ -312,9 +339,249 @@ public static class EventsAirSyncHelpers
         return result;
     }
 
-    // ─── Fetch custom field values ────────────────────────────────────────────
+    // ─── Fetch travel bookings per-contact (batched aliases) ─────────────────
+    // Used when the global travelBookings query hangs (e.g. 2026 event).
+    // Batches contactIds 10 at a time using GraphQL field aliases.
+    public static async Task<List<EventsAirTravelDto>> FetchTravelBookingsByContactsAsync(
+        string baseUrl, string eventCode, string accessToken,
+        IHttpClientFactory httpClientFactory,
+        IEnumerable<string> contactIds,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<EventsAirTravelDto>();
+        var client = httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromMinutes(5);
+        const int batchSize = 10;
+        var idList = contactIds.Where(id => !string.IsNullOrEmpty(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
-    private static async Task<Dictionary<string, string>> FetchCustomFieldValuesAsync(
+        for (int i = 0; i < idList.Count; i += batchSize)
+        {
+            var batch = idList.Skip(i).Take(batchSize).ToList();
+            // Build a single GraphQL query with one alias per contact
+            var contactFragments = string.Join(" ",
+                batch.Select((id, idx) =>
+                    $"c{idx}: contact(id: \"{id}\") {{ id travelBookings {{ id travelType {{ name }} flightNumber carrier {{ name }} arrivalDate departureDate eta etd departurePort {{ name }} arrivalPort {{ name }} class bookingNotes comment }} }}"));
+            var queryBody = JsonSerializer.Serialize(new
+            {
+                query = $"{{ event(id: \"{eventCode}\") {{ {contactFragments} }} }}"
+            });
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/graphql")
+            {
+                Headers = { Authorization = new AuthenticationHeaderValue("Bearer", accessToken) },
+                Content = new StringContent(queryBody, Encoding.UTF8, "application/json")
+            };
+            HttpResponseMessage response;
+            string json;
+            try
+            {
+                response = await client.SendAsync(req, cancellationToken);
+                json = await response.Content.ReadAsStringAsync(cancellationToken);
+            }
+            catch (Exception ex) { Console.WriteLine($"[TRAVEL-BATCH] HTTP exception for batch {i/batchSize}: {ex.Message}"); continue; }
+            if (!response.IsSuccessStatusCode) { Console.WriteLine($"[TRAVEL-BATCH] HTTP {(int)response.StatusCode} for batch {i/batchSize}: {json[..Math.Min(json.Length,300)]}"); continue; }
+            JsonElement doc;
+            try { doc = JsonSerializer.Deserialize<JsonElement>(json); }
+            catch (Exception ex) { Console.WriteLine($"[TRAVEL-BATCH] JSON parse error for batch {i/batchSize}: {ex.Message}"); continue; }
+            if (!doc.TryGetProperty("data", out var data) ||
+                !data.TryGetProperty("event", out var eventObj))
+            {
+                Console.WriteLine($"[TRAVEL-BATCH] No data.event for batch {i/batchSize}: {json[..Math.Min(json.Length,500)]}");
+                continue;
+            }
+            // Each alias is c0, c1, ... cN
+            for (int idx = 0; idx < batch.Count; idx++)
+            {
+                var aliasKey = $"c{idx}";
+                var contactId = batch[idx];
+                if (!eventObj.TryGetProperty(aliasKey, out var contactObj) ||
+                    contactObj.ValueKind != JsonValueKind.Object) continue;
+                if (!contactObj.TryGetProperty("travelBookings", out var bookings)) continue;
+                foreach (var booking in bookings.EnumerateArray())
+                {
+                    result.Add(new EventsAirTravelDto
+                    {
+                        Id = booking.TryGetProperty("id", out var bid) ? bid.GetString() ?? "" : "",
+                        ContactId = contactId,
+                        TravelTypeName = booking.TryGetProperty("travelType", out var tt) && tt.ValueKind == JsonValueKind.Object
+                            ? (tt.TryGetProperty("name", out var ttn) ? ttn.GetString() : null) : null,
+                        FlightNumber = booking.TryGetProperty("flightNumber", out var fn) && fn.ValueKind != JsonValueKind.Null ? fn.GetString() : null,
+                        CarrierName = booking.TryGetProperty("carrier", out var cr) && cr.ValueKind == JsonValueKind.Object
+                            ? (cr.TryGetProperty("name", out var crn) ? crn.GetString() : null) : null,
+                        ArrivalDate = booking.TryGetProperty("arrivalDate", out var ad) && ad.ValueKind != JsonValueKind.Null ? ad.GetString() : null,
+                        DepartureDate = booking.TryGetProperty("departureDate", out var dd) && dd.ValueKind != JsonValueKind.Null ? dd.GetString() : null,
+                        Eta = booking.TryGetProperty("eta", out var eta) && eta.ValueKind != JsonValueKind.Null ? eta.GetString() : null,
+                        Etd = booking.TryGetProperty("etd", out var etd) && etd.ValueKind != JsonValueKind.Null ? etd.GetString() : null,
+                        DeparturePortName = booking.TryGetProperty("departurePort", out var dp) && dp.ValueKind == JsonValueKind.Object
+                            ? (dp.TryGetProperty("name", out var dpn) ? dpn.GetString() : null) : null,
+                        ArrivalPortName = booking.TryGetProperty("arrivalPort", out var ap) && ap.ValueKind == JsonValueKind.Object
+                            ? (ap.TryGetProperty("name", out var apn) ? apn.GetString() : null) : null,
+                        SeatClass = booking.TryGetProperty("class", out var sc) && sc.ValueKind != JsonValueKind.Null ? sc.GetString() : null,
+                        BookingNotes = booking.TryGetProperty("bookingNotes", out var bn) && bn.ValueKind != JsonValueKind.Null ? bn.GetString() : null,
+                        Comment = booking.TryGetProperty("comment", out var cmt) && cmt.ValueKind != JsonValueKind.Null ? cmt.GetString() : null
+                    });
+                }
+            }
+        }
+        return result;
+    }
+
+    // ─── Process travel bookings into DB (shared by both sync paths) ──────────────
+
+    /// <summary>
+    /// Core flight+booking processing logic shared by both sync paths:
+    /// - GuestsController background guest sync
+    /// - EventsAirController manual travel sync
+    ///
+    /// Rules enforced here (single source of truth):
+    /// 1. Flight key = FlightNumber + raw ArrivalDate/DepartureDate (NOT computed datetime)
+    ///    → same flight on different dates = separate rows
+    /// 2. Skip booking if date is missing — never fall back to a placeholder date
+    /// 3. ScheduledArrival/ScheduledDeparture are set ONCE on row creation and never
+    ///    overwritten by subsequent guests on the same flight
+    /// 4. History is saved when a guest's flight changes (rebook)
+    /// </summary>
+    public static async Task<TravelSyncResult> ProcessTravelBookingsAsync(
+        IAppDbContext db,
+        List<EventsAirTravelDto> travelBookings,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new TravelSyncResult();
+
+        // ── Option A: Truncate-and-reload within the same transaction ──
+        // First, clear all existing flight data. Because we do this here, 
+        // it runs inside the single SaveChangesAsync transaction, so the UI
+        // never sees an empty state.
+        db.TravelBookingHistories.RemoveRange(db.TravelBookingHistories);
+        db.TravelBookings.RemoveRange(db.TravelBookings);
+        db.Flights.RemoveRange(db.Flights);
+
+        // Bulk-load active guests to link the new bookings
+        var guestsByContactId = await db.Guests
+            .Where(g => g.IsActive)
+            .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
+        // Track flights we create in this pass to avoid duplicates within the new dataset
+        var flightsByKey = new Dictionary<string, Flight>(StringComparer.OrdinalIgnoreCase);
+
+        // firstGuestNameByFlightKey is no longer needed: with a time-aware key, each unique
+        // flight+date+time gets its own row, so there are no same-row time conflicts to report.
+        var firstGuestNameByFlightKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var tb in travelBookings)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(tb.FlightNumber))   { result.SkippedNoFlight++;   continue; }
+                // Normalise to canonical IATA form: remove spaces, strip leading zeros,
+                // remove hyphens between code and number, strip trailing non-alphanumeric.
+                // e.g. "TK 0334" → "TK334", "Ek-585" → "EK585", "TK8440*" → "TK8440".
+                tb.FlightNumber = FlightNumberHelper.Normalise(tb.FlightNumber);
+                if (string.IsNullOrEmpty(tb.FlightNumber))   { result.SkippedNoFlight++;   continue; }
+                if (string.IsNullOrEmpty(tb.ContactId))      { result.SkippedNoContact++;  continue; }
+                if (!guestsByContactId.TryGetValue(tb.ContactId, out var guest)) { result.SkippedNoGuest++; continue; }
+
+                bool isArrival = tb.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
+
+                // Parse scheduled times. EventsAir provides local Jeddah time (UTC+3) but we
+                // store them as DateTimeKind.Utc WITHOUT subtracting the offset so that the
+                // stored value is numerically identical to what EventsAir shows (e.g. 13:00
+                // stored as 13:00Z). The frontend strips the Z and displays 13:00.
+                DateTime? scheduledArrival = null, scheduledDeparture = null;
+                if (isArrival && !string.IsNullOrEmpty(tb.ArrivalDate) && DateTime.TryParse(tb.ArrivalDate, out var arrDate))
+                {
+                    var local = !string.IsNullOrEmpty(tb.Eta) && TimeSpan.TryParse(tb.Eta, out var eta)
+                        ? arrDate.Add(eta) : arrDate;
+                    scheduledArrival = DateTime.SpecifyKind(local, DateTimeKind.Utc);
+                }
+                if (!isArrival && !string.IsNullOrEmpty(tb.DepartureDate) && DateTime.TryParse(tb.DepartureDate, out var depDate))
+                {
+                    var local = !string.IsNullOrEmpty(tb.Etd) && TimeSpan.TryParse(tb.Etd, out var etd)
+                        ? depDate.Add(etd) : depDate;
+                    scheduledDeparture = DateTime.SpecifyKind(local, DateTimeKind.Utc);
+                }
+
+                // Build the flight key from the RAW date string (not the computed datetime).
+                // This prevents the 2026-01-01 fallback from merging all date-less guests.
+                var rawDateStr = isArrival ? tb.ArrivalDate : tb.DepartureDate;
+                if (string.IsNullOrEmpty(rawDateStr) || !DateTime.TryParse(rawDateStr, out var parsedDate))
+                {
+                    result.SkippedNoFlight++;
+                    continue;
+                }
+                // Build the flight key from flight number, date, and scheduled time (HHmm).
+                // Including time ensures arrival time changes in EventsAir create a new row
+                // and relink the booking, rather than being silently ignored.
+                var scheduledTime = (isArrival ? scheduledArrival : scheduledDeparture)
+                    ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
+                var flightKey = $"{tb.FlightNumber}|{parsedDate.Date:yyyy-MM-dd}|{scheduledTime:HHmm}";
+
+
+                if (!flightsByKey.TryGetValue(flightKey, out var flight))
+                {
+                    // First guest on this flight+date — create the row
+                    flight = new Flight
+                    {
+                        FlightNumber       = tb.FlightNumber,
+                        AirlineName        = tb.CarrierName ?? "Unknown",
+                        ScheduledArrival   = scheduledArrival   ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc),
+                        ScheduledDeparture = scheduledDeparture ?? DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc),
+                        ArrivalPortName    = tb.ArrivalPortName,
+                        ArrivalPortIataCode   = tb.ArrivalPortCode,
+                        DeparturePortName  = tb.DeparturePortName,
+                        DeparturePortIataCode = tb.DeparturePortCode,
+                        Status             = FlightStatus.Scheduled
+                    };
+                    db.Flights.Add(flight);
+                    flightsByKey[flightKey] = flight;
+                    // Store the first guest's name for use in conflict messages
+                    if (guestsByContactId.TryGetValue(tb.ContactId, out var firstGuest))
+                        firstGuestNameByFlightKey[flightKey] = $"{firstGuest.FirstName} {firstGuest.LastName}".Trim();
+                }
+                else
+                {
+                    // Subsequent guest on same flight+date+time — update non-key fields only.
+                    // ScheduledArrival/ScheduledDeparture are part of the key and must not be overwritten.
+                    if (!string.IsNullOrEmpty(tb.ArrivalPortName))    flight.ArrivalPortName    = tb.ArrivalPortName;
+                    if (!string.IsNullOrEmpty(tb.ArrivalPortCode))    flight.ArrivalPortIataCode   = tb.ArrivalPortCode;
+                    if (!string.IsNullOrEmpty(tb.DeparturePortName))  flight.DeparturePortName  = tb.DeparturePortName;
+                    if (!string.IsNullOrEmpty(tb.DeparturePortCode))  flight.DeparturePortIataCode = tb.DeparturePortCode;
+                    if (!string.IsNullOrEmpty(tb.CarrierName))        flight.AirlineName        = tb.CarrierName;
+                    // ActualTerminal, ActualGate, Status are AviationStack-owned — never touch here
+
+                    // Note: conflict detection (same flight+date, different times) is no longer needed
+                    // because the time-aware key ensures each unique time gets its own flight row.
+                    // Two guests on TK334 at different times will be on separate rows automatically.
+
+                }
+
+                var notes = tb.BookingNotes ?? tb.Comment;
+                
+                // We just deleted everything, so we always insert fresh bookings
+                db.TravelBookings.Add(new TravelBooking
+                {
+                    GuestId      = guest.Id,
+                    Flight       = flight,   // navigation property — EF resolves FK on SaveChanges
+                    IsArrival    = isArrival,
+                    SeatClass    = tb.SeatClass,
+                    BookingNotes = notes,
+                    LastSyncedAt = DateTime.UtcNow
+                });
+                result.SavedNew++;
+            }
+            catch (Exception ex)
+            {
+                result.ErrorCount++;
+                if (result.Errors.Count < 5)
+                    result.Errors.Add($"ContactId={tb.ContactId} Flight={tb.FlightNumber}: {ex.Message}");
+            }
+        }
+
+        return result;
+    }
+
+    // ─── Fetch custom field values ──────────────────────────────────────────────────
+
+    public static async Task<Dictionary<string, string>> FetchCustomFieldValuesAsync(
         string baseUrl, string eventCode, string accessToken, string fieldDefinitionId,
         IEnumerable<string> contactIds, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
     {
@@ -373,4 +640,22 @@ public record EventsAirSyncContactDto(
     string ContactId, string FirstName, string LastName, string? Title,
     string? JobTitle, string? OrganizationName, string? PrimaryEmail,
     string RegistrationTypeId, string RegistrationTypeName,
-    string? Country = null, string? PhotoUrl = null, string? RankValue = null);
+    string? Country = null, string? PhotoUrl = null, string? RankValue = null, string? VehicleTypeValue = null);
+
+/// <summary>
+/// Result counters returned by <see cref="EventsAirSyncHelpers.ProcessTravelBookingsAsync"/>.
+/// </summary>
+public class TravelSyncResult
+{
+    public int SavedNew            { get; set; }
+    public int UpdatedExisting     { get; set; }
+    public int Rebooked            { get; set; }
+    public int SkippedNoFlight     { get; set; }
+    public int SkippedNoContact    { get; set; }
+    public int SkippedNoGuest      { get; set; }
+    public int ErrorCount          { get; set; }
+    public int ConflictAlertCount  { get; set; }
+    public List<string> Errors     { get; } = new();
+    /// <summary>Tracks which flight+date conflicts have already raised an alert this sync run.</summary>
+    public HashSet<string> RaisedConflictKeys { get; } = new(StringComparer.OrdinalIgnoreCase);
+}

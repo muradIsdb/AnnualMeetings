@@ -77,7 +77,7 @@ interface GuestStatusGroup {
   guests: GuestInTransit[]
 }
 
-interface DashboardSummary {
+interface TrdDashboardSummary {
   vehiclesAvailable: number
   vehiclesAssigned: number
   vehiclesNotProvided: number
@@ -90,7 +90,7 @@ interface DashboardSummary {
   recentActivity?: RecentActivityItem[]
 }
 
-interface VehicleWithStatus {
+interface TrdVehicleWithStatus {
   currentGuestId?: number
   carClassId?: number
   carNumber?: string
@@ -212,15 +212,15 @@ export default function TransportRoleDashboard() {
     isLoading,
     refetch,
     isFetching,
-  } = useQuery<DashboardSummary>({
+  } = useQuery({
     queryKey: ['dashboard', 'summary', 'trd'],
-    queryFn: dashboardApi.getSummary,
+    queryFn: () => dashboardApi.getSummary() as unknown as Promise<TrdDashboardSummary>,
     refetchInterval: 60_000, // auto-refresh every 60 seconds
   })
 
-  const { data: allVehicles = [] } = useQuery<VehicleWithStatus[]>({
+  const { data: allVehicles = [] } = useQuery({
     queryKey: ['vehicles', 'all-with-status', 'trd'],
-    queryFn: vehiclesApi.getAllWithStatus,
+    queryFn: () => vehiclesApi.getAllWithStatus() as unknown as Promise<TrdVehicleWithStatus[]>,
     refetchInterval: 60_000,
   })
 

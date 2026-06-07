@@ -1,4 +1,5 @@
 using IsDB.Hospitality.Application.Common.Models;
+using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Domain.Entities;
 using IsDB.Hospitality.Domain.Enums;
 using IsDB.Hospitality.Infrastructure.Persistence;
@@ -20,14 +21,16 @@ public class EventsAirSyncService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<EventsAirSyncService> _logger;
+    private readonly ISystemLogService _systemLogService;
 
     // Default interval used only before the first DB read
     private TimeSpan _syncInterval = TimeSpan.FromMinutes(15);
 
-    public EventsAirSyncService(IServiceProvider serviceProvider, ILogger<EventsAirSyncService> logger)
+    public EventsAirSyncService(IServiceProvider serviceProvider, ILogger<EventsAirSyncService> logger, ISystemLogService systemLogService)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _systemLogService = systemLogService;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -59,6 +62,7 @@ public class EventsAirSyncService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "EventsAir startup sync failed.");
+                await _systemLogService.LogAsync(LogSeverity.Error, "EventsAirSync", "Startup sync failed", ex.ToString());
             }
         }
 
@@ -67,6 +71,17 @@ public class EventsAirSyncService : BackgroundService
         {
             try
             {
+                // Read interval from DB BEFORE delaying, so it updates even if startup sync failed
+                using (var scope = _serviceProvider.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var config = await db.EventsAirConfigs.FirstOrDefaultAsync(stoppingToken);
+                    if (config != null && config.SyncIntervalMinutes > 0)
+                    {
+                        _syncInterval = TimeSpan.FromMinutes(config.SyncIntervalMinutes);
+                    }
+                }
+                
                 await Task.Delay(_syncInterval, stoppingToken);
             }
             catch (OperationCanceledException)
@@ -85,6 +100,7 @@ public class EventsAirSyncService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unhandled error in EventsAir background sync loop.");
+                await _systemLogService.LogAsync(LogSeverity.Critical, "EventsAirSync", "Unhandled error in background loop", ex.ToString());
             }
         }
 
@@ -106,9 +122,7 @@ public class EventsAirSyncService : BackgroundService
             return;
         }
 
-        // Update interval from DB config so the next sleep uses the latest value
-        if (config.SyncIntervalMinutes > 0)
-            _syncInterval = TimeSpan.FromMinutes(config.SyncIntervalMinutes);
+        // Interval is now read at the top of the recurring loop, no need to update here
 
         if (!config.IsActive || !config.AutoSyncEnabled)
         {
@@ -121,6 +135,7 @@ public class EventsAirSyncService : BackgroundService
             string.IsNullOrWhiteSpace(config.EventCode) || string.IsNullOrWhiteSpace(config.ApiBaseUrl))
         {
             _logger.LogWarning("EventsAir background sync skipped: credentials or EventCode not configured.");
+            await _systemLogService.LogAsync(LogSeverity.Warning, "EventsAirSync", "Sync skipped: credentials or EventCode not configured");
             return;
         }
 
@@ -159,6 +174,7 @@ public class EventsAirSyncService : BackgroundService
         {
             sw.Stop();
             _logger.LogError(ex, "EventsAir background sync failed: could not acquire token.");
+            await _systemLogService.LogAsync(LogSeverity.Error, "EventsAirSync", "Failed to acquire token", ex.ToString());
             config.LastSyncAt = DateTime.UtcNow;
             config.LastSyncStatus = "Failed";
             config.LastSyncMessage = $"Token acquisition failed: {ex.Message}";
@@ -175,8 +191,26 @@ public class EventsAirSyncService : BackgroundService
             // ══════════════════════════════════════════════════════════════════
             // PASS 1: Fetch contacts with DedicatedCar=True and upsert guests
             // ══════════════════════════════════════════════════════════════════
+            // Load field GUIDs from DB filtered by active event code
+            const string defaultDedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+            const string defaultRankGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+            var fieldMappings = await db.SyncFieldMappings
+                .Where(f => f.EventCode == null || f.EventCode == eventCode)
+                .ToListAsync(cancellationToken);
+            var dedicatedCarGuid = (fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+                ?? fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase)))
+                ?.EventsAirFieldGuid ?? defaultDedicatedCarGuid;
+            var rankGuid = (fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+                ?? fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase)))
+                ?.EventsAirFieldGuid ?? defaultRankGuid;
+            _logger.LogInformation("EventsAir background sync using DedicatedCar GUID={DedicatedCarGuid}, Rank GUID={RankGuid} for event {EventCode}.",
+                dedicatedCarGuid, rankGuid, eventCode);
             var contacts = await EventsAirSyncHelpers.FetchContactsWithDedicatedCarAsync(
-                apiBaseUrl, eventCode, token, httpClientFactory, cancellationToken);
+                apiBaseUrl, eventCode, token, httpClientFactory, cancellationToken, dedicatedCarGuid, rankGuid);
 
             _logger.LogInformation("EventsAir background sync Pass 1: {Count} contacts with DedicatedCar=True.", contacts.Count);
 
@@ -185,6 +219,18 @@ public class EventsAirSyncService : BackgroundService
             // ── Bulk-load ALL guests keyed by EventsAirContactId (eliminates N per-contact SELECT) ──
             var existingGuestsByContactId = await db.Guests
                 .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
+            // ── Pre-load open alert guest IDs for deduplication (Pass 1 & 2) ──
+            var openAlertsBg = await db.SyncAlerts
+                .Where(a => !a.IsResolved && a.GuestId != null)
+                .Select(a => new { a.GuestId, a.AlertType })
+                .ToListAsync(cancellationToken);
+            var openGuestRemovedIdsBg = new HashSet<Guid>(openAlertsBg
+                .Where(a => a.AlertType == SyncAlertType.GuestRemoved)
+                .Select(a => a.GuestId!.Value));
+            var openRegTypeChangedIdsBg = new HashSet<Guid>(openAlertsBg
+                .Where(a => a.AlertType == SyncAlertType.RegTypeChanged)
+                .Select(a => a.GuestId!.Value));
 
             foreach (var contact in contacts)
             {
@@ -222,7 +268,28 @@ public class EventsAirSyncService : BackgroundService
                     if (existing.LastName != contact.LastName) { existing.LastName = contact.LastName; changed = true; }
                     if (existing.Designation != contact.JobTitle) { existing.Designation = contact.JobTitle; changed = true; }
                     if (existing.Organization != contact.OrganizationName) { existing.Organization = contact.OrganizationName; changed = true; }
-                    if (existing.RegistrationTypeName != contact.RegistrationTypeName) { existing.RegistrationTypeName = contact.RegistrationTypeName; changed = true; }
+                    // ── Detect registration type change → create SyncAlert (deduplicated) ──────────────
+                    if (existing.RegistrationTypeName != contact.RegistrationTypeName)
+                    {
+                        if (!string.IsNullOrWhiteSpace(existing.RegistrationTypeName) && !string.IsNullOrWhiteSpace(contact.RegistrationTypeName)
+                            && !openRegTypeChangedIdsBg.Contains(existing.Id))
+                        {
+                            openRegTypeChangedIdsBg.Add(existing.Id);
+                            db.SyncAlerts.Add(new SyncAlert
+                            {
+                                AlertType    = SyncAlertType.RegTypeChanged,
+                                GuestId      = existing.Id,
+                                GuestName    = $"{existing.FirstName} {existing.LastName}".Trim(),
+                                EventsAirContactId = existing.EventsAirContactId,
+                                OldValue     = existing.RegistrationTypeName,
+                                NewValue     = contact.RegistrationTypeName,
+                                SyncSource   = SyncAlertSource.AutoSync,
+                                DetectedAt   = DateTime.UtcNow
+                            });
+                        }
+                        existing.RegistrationTypeName = contact.RegistrationTypeName;
+                        changed = true;
+                    }
                     if (existing.RegistrationTypeId != contact.RegistrationTypeId) { existing.RegistrationTypeId = contact.RegistrationTypeId; changed = true; }
                     if (existing.Email != contact.PrimaryEmail) { existing.Email = contact.PrimaryEmail; changed = true; }
                     if (existing.Country != contact.Country) { existing.Country = contact.Country; changed = true; }
@@ -241,21 +308,55 @@ public class EventsAirSyncService : BackgroundService
             //         load active-vehicle set in one query — no FindAsync per guest.
             // ══════════════════════════════════════════════════════════════════
 
-            // Single query: which guest IDs have an active vehicle assignment?
-            var guestsWithActiveVehicleList = await db.VehicleAssignments
+            // Load active vehicle assignments keyed by GuestId for release on deactivation
+            var activeAssignments = await db.VehicleAssignments
                 .Where(va => va.IsActive)
-                .Select(va => va.GuestId)
+                .Include(va => va.Vehicle)
                 .ToListAsync(cancellationToken);
-            var guestsWithActiveVehicle = guestsWithActiveVehicleList.ToHashSet();
+            var assignmentsByGuest = activeAssignments
+                .GroupBy(va => va.GuestId)
+                .ToDictionary(g => g.Key, g => g.First());
 
             foreach (var kvp in existingGuestsByContactId)
             {
                 var g = kvp.Value;
                 if (!string.IsNullOrEmpty(g.EventsAirContactId) &&
                     !syncedContactIds.Contains(g.EventsAirContactId) &&
-                    g.IsActive &&
-                    !guestsWithActiveVehicle.Contains(g.Id))
+                    g.IsActive)
                 {
+                    // ── Release active vehicle assignment if present ──────────────────
+                    string? vehiclePlate = null;
+                    string? carClassName = null;
+                    Guid? vehicleId = null;
+                    if (assignmentsByGuest.TryGetValue(g.Id, out var assignment))
+                    {
+                        assignment.IsActive = false;
+                        assignment.UnassignedAt = DateTime.UtcNow;
+                        vehiclePlate = assignment.Vehicle?.LicensePlate;
+                        vehicleId = assignment.VehicleId;
+                        // Return vehicle to Available
+                        if (assignment.Vehicle != null)
+                        {
+                            assignment.Vehicle.Status = VehicleStatus.Available;
+                        }
+                    }
+                    // ── Create GuestRemoved SyncAlert (deduplicated) ──────────────────────────────────
+                    if (!openGuestRemovedIdsBg.Contains(g.Id))
+                    {
+                        openGuestRemovedIdsBg.Add(g.Id);
+                        db.SyncAlerts.Add(new SyncAlert
+                        {
+                            AlertType    = SyncAlertType.GuestRemoved,
+                            GuestId      = g.Id,
+                            GuestName    = $"{g.FirstName} {g.LastName}".Trim(),
+                            EventsAirContactId = g.EventsAirContactId,
+                            VehicleId    = vehicleId,
+                            VehiclePlate = vehiclePlate,
+                            CarClassName = carClassName,
+                            SyncSource   = SyncAlertSource.AutoSync,
+                            DetectedAt   = DateTime.UtcNow
+                        });
+                    }
                     g.IsActive = false;
                     g.DedicatedCar = null;
                     g.LastSyncedAt = DateTime.UtcNow;
@@ -274,142 +375,144 @@ public class EventsAirSyncService : BackgroundService
             // ══════════════════════════════════════════════════════════════════
             try
             {
-                var travelBookings = await EventsAirSyncHelpers.FetchTravelBookingsAsync(
-                    apiBaseUrl, eventCode, token, httpClientFactory, cancellationToken);
+                // Use per-contact batched query (avoids hanging global travelBookings query)
+                var travelBookings = await EventsAirSyncHelpers.FetchTravelBookingsByContactsAsync(
+                    apiBaseUrl, eventCode, token, httpClientFactory, syncedContactIds, cancellationToken);
 
-                // ── Bulk-load active guests with their travel bookings + flights ──
-                var guestsByContactId = await db.Guests
-                    .Where(g => g.IsActive)
-                    .Include(g => g.TravelBookings)
-                        .ThenInclude(tb => tb.Flight)
-                    .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+                // ── Delegate all flight+booking processing to the shared helper ────────────
+                // Uses the time-aware key (FlightNumber|Date|HHmm) so date AND time changes
+                // in EventsAir are picked up correctly on the next sync.
+                var syncResult = await EventsAirSyncHelpers.ProcessTravelBookingsAsync(db, travelBookings, cancellationToken);
 
-                // ── Bulk-load all flights keyed by flight number ──────────────
-                var flightsByNumber = await db.Flights
-                    .ToDictionaryAsync(f => f.FlightNumber, StringComparer.OrdinalIgnoreCase, cancellationToken);
+                // Orphan cleanup is no longer needed because ProcessTravelBookingsAsync
+                // now truncates and reloads all flights from scratch.
 
-                foreach (var tbDto in travelBookings)
-                {
-                    if (string.IsNullOrEmpty(tbDto.FlightNumber) || string.IsNullOrEmpty(tbDto.ContactId))
-                        continue;
-
-                    if (!guestsByContactId.TryGetValue(tbDto.ContactId, out var guest))
-                        continue;
-
-                    bool isArrival = tbDto.TravelTypeName?.Contains("Arrival", StringComparison.OrdinalIgnoreCase) ?? true;
-
-                    // Parse scheduled times
-                    DateTime? scheduledArrival = null;
-                    DateTime? scheduledDeparture = null;
-
-                    if (isArrival && !string.IsNullOrEmpty(tbDto.ArrivalDate) &&
-                        DateTime.TryParse(tbDto.ArrivalDate, out var arrDate))
-                    {
-                        scheduledArrival = !string.IsNullOrEmpty(tbDto.Eta) &&
-                            TimeSpan.TryParse(tbDto.Eta, out var etaTime)
-                            ? arrDate.Add(etaTime) : arrDate;
-                    }
-                    if (!isArrival && !string.IsNullOrEmpty(tbDto.DepartureDate) &&
-                        DateTime.TryParse(tbDto.DepartureDate, out var depDate))
-                    {
-                        scheduledDeparture = !string.IsNullOrEmpty(tbDto.Etd) &&
-                            TimeSpan.TryParse(tbDto.Etd, out var etdTime)
-                            ? depDate.Add(etdTime) : depDate;
-                    }
-
-                    // Find or create the Flight record using the in-memory dictionary
-                    if (!flightsByNumber.TryGetValue(tbDto.FlightNumber, out var flight))
-                    {
-                        flight = new Flight
-                        {
-                            FlightNumber = tbDto.FlightNumber,
-                            AirlineName = tbDto.CarrierName ?? "Unknown",
-                            ScheduledArrival = scheduledArrival ?? DateTime.MinValue,
-                            ScheduledDeparture = scheduledDeparture ?? DateTime.MinValue,
-                            ArrivalPortName = tbDto.ArrivalPortName,
-                            DeparturePortName = tbDto.DeparturePortName,
-                            Status = FlightStatus.Scheduled
-                        };
-                        db.Flights.Add(flight);
-                        flightsByNumber[tbDto.FlightNumber] = flight; // keep dict in sync
-                    }
-                    else
-                    {
-                        // Always overwrite scheduled fields (EventsAir-owned)
-                        if (scheduledArrival.HasValue) flight.ScheduledArrival = scheduledArrival.Value;
-                        if (scheduledDeparture.HasValue) flight.ScheduledDeparture = scheduledDeparture.Value;
-                        if (!string.IsNullOrEmpty(tbDto.ArrivalPortName)) flight.ArrivalPortName = tbDto.ArrivalPortName;
-                        if (!string.IsNullOrEmpty(tbDto.DeparturePortName)) flight.DeparturePortName = tbDto.DeparturePortName;
-                        if (!string.IsNullOrEmpty(tbDto.CarrierName)) flight.AirlineName = tbDto.CarrierName;
-                    }
-
-                    // Replace-on-rebooking: find existing booking by direction (arrival/departure)
-                    var existingBooking = guest.TravelBookings.FirstOrDefault(b => b.IsArrival == isArrival);
-                    var notes = tbDto.BookingNotes ?? tbDto.Comment;
-
-                    if (existingBooking == null)
-                    {
-                        // New booking
-                        db.TravelBookings.Add(new TravelBooking
-                        {
-                            GuestId = guest.Id,
-                            FlightId = flight.Id,
-                            IsArrival = isArrival,
-                            SeatClass = tbDto.SeatClass,
-                            BookingNotes = notes,
-                            LastSyncedAt = DateTime.UtcNow
-                        });
-                    }
-                    else if (existingBooking.FlightId != flight.Id)
-                    {
-                        // Flight changed — save history and update booking
-                        db.TravelBookingHistories.Add(new TravelBookingHistory
-                        {
-                            Id = Guid.NewGuid(),
-                            TravelBookingId = existingBooking.Id,
-                            GuestId = guest.Id,
-                            PreviousFlightNumber = existingBooking.Flight?.FlightNumber ?? "",
-                            PreviousAirlineName = existingBooking.Flight?.AirlineName,
-                            PreviousScheduledArrival = existingBooking.Flight?.ScheduledArrival,
-                            PreviousScheduledDeparture = existingBooking.Flight?.ScheduledDeparture,
-                            PreviousDeparturePort = existingBooking.Flight?.DeparturePortName,
-                            PreviousArrivalPort = existingBooking.Flight?.ArrivalPortName,
-                            PreviousSeatClass = existingBooking.SeatClass,
-                            ChangedAt = DateTime.UtcNow
-                        });
-
-                        existingBooking.FlightId = flight.Id;
-                        existingBooking.SeatClass = tbDto.SeatClass;
-                        existingBooking.BookingNotes = notes;
-                        existingBooking.ChangedSinceLastView = true;
-                        existingBooking.PreviousFlightNumber = existingBooking.Flight?.FlightNumber;
-                        existingBooking.ChangedAt = DateTime.UtcNow;
-                        existingBooking.LastSyncedAt = DateTime.UtcNow;
-                    }
-                    else
-                    {
-                        // Same flight — update mutable fields only
-                        existingBooking.SeatClass = tbDto.SeatClass;
-                        existingBooking.BookingNotes = notes;
-                        existingBooking.LastSyncedAt = DateTime.UtcNow;
-                    }
-
-                    travelSynced++;
-                }
-
-                // Single SaveChangesAsync for the entire Pass 3 batch
                 await db.SaveChangesAsync(cancellationToken);
-                _logger.LogInformation("EventsAir background sync Pass 3: {Count} travel bookings processed.", travelSynced);
+                travelSynced = syncResult.SavedNew + syncResult.UpdatedExisting + syncResult.Rebooked;
+                _logger.LogInformation("EventsAir background sync Pass 3: {New} new, {Updated} updated, {Rebooked} rebooked, {Errors} errors.",
+                    syncResult.SavedNew, syncResult.UpdatedExisting, syncResult.Rebooked, syncResult.ErrorCount);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "EventsAir background sync Pass 3 (travel) failed — guest sync still succeeded.");
             }
 
+            // ══════════════════════════════════════════════════════════════════
+            // PASS 4: CarClassMismatch — detect active guests whose assigned vehicle
+            //         car class no longer matches their DeservedCarClassId.
+            //         Runs after every sync so it reflects the current state.
+            //
+            //         Uses Vehicle.CurrentGuestId + Status=Assigned as the
+            //         authoritative source (denormalised field always kept in
+            //         sync by all assignment paths). Falls back to the
+            //         VehicleAssignments table for data-inconsistency cases.
+            //         Skips guests who already have an open CarClassMismatch alert.
+            // ══════════════════════════════════════════════════════════════════
+            int carClassMismatches = 0;
+            try
+            {
+                // Load ALL guests (active or not) that have a DeservedCarClassId set.
+                // Inactive guests may still have an active vehicle assignment — we must check those too.
+                var guestsWithClass = await db.Guests
+                    .Where(g => g.DeservedCarClassId != null)
+                    .Select(g => new { g.Id, g.FirstName, g.LastName, g.EventsAirContactId, g.DeservedCarClassId })
+                    .ToListAsync(cancellationToken);
+
+                // PRIMARY: vehicles currently assigned to a guest (Status=Assigned)
+                // This is the authoritative source — always kept in sync by all
+                // assignment code paths (FleetController, AssignVehicleHelper, etc.)
+                var assignedVehiclesP4 = await db.Vehicles
+                    .Where(v => v.Status == VehicleStatus.Assigned && v.CurrentGuestId != null && v.IsActive)
+                    .Include(v => v.CarClass)
+                    .ToListAsync(cancellationToken);
+                var vehicleByGuest = assignedVehiclesP4
+                    .GroupBy(v => v.CurrentGuestId!.Value)
+                    .ToDictionary(g => g.Key, g => g.First());
+
+                // Load all open CarClassMismatch alerts (full entity for auto-resolution)
+                var existingOpenMismatches = await db.SyncAlerts
+                    .Where(a => a.AlertType == SyncAlertType.CarClassMismatch && !a.IsResolved && a.GuestId != null)
+                    .ToListAsync(cancellationToken);
+                var existingOpenMismatchGuestIds = new HashSet<Guid>(existingOpenMismatches.Select(a => a.GuestId!.Value));
+
+                // AUTO-RESOLVE: close open alerts where the mismatch is no longer present
+                var guestLookup = guestsWithClass.ToDictionary(g => g.Id);
+                int autoResolved = 0;
+                foreach (var alert in existingOpenMismatches)
+                {
+                    var gid = alert.GuestId!.Value;
+                    if (!vehicleByGuest.TryGetValue(gid, out var curVehicle))
+                    {
+                        alert.IsResolved = true;
+                        alert.ResolvedAt = DateTime.UtcNow;
+                        alert.ResolvedByUserName = "System (auto-resolved: vehicle unassigned)";
+                        autoResolved++;
+                        existingOpenMismatchGuestIds.Remove(gid);
+                        continue;
+                    }
+                    if (guestLookup.TryGetValue(gid, out var gd)
+                        && curVehicle.CarClassId != null
+                        && curVehicle.CarClassId == gd.DeservedCarClassId)
+                    {
+                        alert.IsResolved = true;
+                        alert.ResolvedAt = DateTime.UtcNow;
+                        alert.ResolvedByUserName = "System (auto-resolved: class now matches)";
+                        autoResolved++;
+                        existingOpenMismatchGuestIds.Remove(gid);
+                    }
+                }
+                if (autoResolved > 0)
+                {
+                    await db.SaveChangesAsync(cancellationToken);
+                    _logger.LogInformation("[AutoSync] Pass 4: {Count} alert(s) auto-resolved.", autoResolved);
+                }
+
+                foreach (var guest in guestsWithClass)
+                {
+                    // Skip if already has an open mismatch alert
+                    if (existingOpenMismatchGuestIds.Contains(guest.Id)) continue;
+
+                    // Skip if no assigned vehicle found via either source
+                    if (!vehicleByGuest.TryGetValue(guest.Id, out var assignedVehicle)) continue;
+
+                    var vehicleCarClassId = assignedVehicle.CarClassId;
+                    if (vehicleCarClassId == null) continue;
+
+                    // Mismatch: assigned vehicle's class ≠ guest's deserved class
+                    if (vehicleCarClassId != guest.DeservedCarClassId)
+                    {
+                        var deservedClass = await db.CarClasses.FindAsync(new object[] { guest.DeservedCarClassId!.Value }, cancellationToken);
+                        var assignedClass  = assignedVehicle.CarClass;
+                        db.SyncAlerts.Add(new SyncAlert
+                        {
+                            AlertType          = SyncAlertType.CarClassMismatch,
+                            GuestId            = guest.Id,
+                            GuestName          = $"{guest.FirstName} {guest.LastName}".Trim(),
+                            EventsAirContactId = guest.EventsAirContactId,
+                            VehicleId          = assignedVehicle.Id,
+                            VehiclePlate       = assignedVehicle.LicensePlate,
+                            CarClassName       = assignedClass?.Name,
+                            OldValue           = deservedClass?.Name ?? guest.DeservedCarClassId.ToString(),
+                            NewValue           = assignedClass?.Name ?? vehicleCarClassId.ToString(),
+                            SyncSource         = SyncAlertSource.AutoSync,
+                            DetectedAt         = DateTime.UtcNow
+                        });
+                        carClassMismatches++;
+                    }
+                }
+                if (carClassMismatches > 0)
+                    await db.SaveChangesAsync(cancellationToken);
+                _logger.LogInformation("EventsAir background sync Pass 4: {Mismatches} car class mismatch alert(s) created.", carClassMismatches);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "EventsAir background sync Pass 4 (car class mismatch) failed — sync still succeeded: {Msg}\n{Stack}", ex.Message, ex.StackTrace);
+            }
+
             sw.Stop();
 
             // ── Update last sync status ───────────────────────────────────────
-            var message = $"Added: {added}, Updated: {updated}, Deactivated: {deactivated}, Travel: {travelSynced}";
+            var message = $"Added: {added}, Updated: {updated}, Deactivated: {deactivated}, Travel: {travelSynced}, CarClassMismatches: {carClassMismatches}";
             config.LastSyncAt = DateTime.UtcNow;
             config.LastSyncStatus = "Success";
             config.LastSyncMessage = message;
@@ -421,7 +524,9 @@ public class EventsAirSyncService : BackgroundService
             await WriteSyncLogAsync(db, "Success", message, added + updated, deactivated, (int)sw.ElapsedMilliseconds,
                 added: added, updated: updated, travelSynced: travelSynced,
                 triggerSource: isStartupSync ? "Startup" : "System Auto-Sync", syncType: "Scheduled");
-
+            await _systemLogService.LogAsync(LogSeverity.Information, "EventsAir Sync",
+                $"Sync completed successfully in {sw.ElapsedMilliseconds}ms",
+                $"Added: {added}, Updated: {updated}, Deactivated: {deactivated}, Travel bookings: {travelSynced}");
             _logger.LogInformation(
                 "EventsAir background sync completed. Added={Added}, Updated={Updated}, Deactivated={Deactivated}, Travel={Travel}.",
                 added, updated, deactivated, travelSynced);
@@ -436,6 +541,8 @@ public class EventsAirSyncService : BackgroundService
             await db.SaveChangesAsync(CancellationToken.None);
             await WriteSyncLogAsync(db, "Failed", ex.Message, 0, 0, (int)sw.ElapsedMilliseconds,
                 triggerSource: isStartupSync ? "Startup" : "System Auto-Sync", syncType: "Scheduled");
+            await _systemLogService.LogAsync(LogSeverity.Error, "EventsAir Sync",
+                "Sync failed", ex.ToString());
         }
     }
 

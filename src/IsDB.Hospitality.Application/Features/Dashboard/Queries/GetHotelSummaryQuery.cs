@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IsDB.Hospitality.Application.Features.Dashboard.Queries;
 
-public record GetHotelSummaryQuery : IRequest<HotelSummaryDto>;
+public record GetHotelSummaryQuery(string? ActiveEventCode = null) : IRequest<HotelSummaryDto>;
 
 public class GetHotelSummaryQueryHandler : IRequestHandler<GetHotelSummaryQuery, HotelSummaryDto>
 {
@@ -23,7 +23,8 @@ public class GetHotelSummaryQueryHandler : IRequestHandler<GetHotelSummaryQuery,
         var guests = await _context.Guests
             .AsNoTracking()
             .Include(g => g.StatusHistory)
-            .Where(g => g.IsActive)
+            .Where(g => g.IsActive
+                && (request.ActiveEventCode == null || g.EventCode == null || g.EventCode == request.ActiveEventCode))
             .ToListAsync(cancellationToken);
 
         // ── 2. KPI counts ────────────────────────────────────────────────────────
@@ -50,8 +51,10 @@ public class GetHotelSummaryQueryHandler : IRequestHandler<GetHotelSummaryQuery,
             .GroupBy(g => g.HotelName!)
             .Select(grp => new HotelGuestCountDto
             {
-                HotelName  = grp.Key,
-                GuestCount = grp.Count()
+                HotelName     = grp.Key,
+                GuestCount    = grp.Count(),
+                WithRoomCount = grp.Count(g => !string.IsNullOrWhiteSpace(g.RoomNumber)),
+                NoRoomCount   = grp.Count(g => string.IsNullOrWhiteSpace(g.RoomNumber))
             })
             .OrderByDescending(h => h.GuestCount)
             .ToList();
@@ -62,8 +65,10 @@ public class GetHotelSummaryQueryHandler : IRequestHandler<GetHotelSummaryQuery,
         {
             byHotel.Add(new HotelGuestCountDto
             {
-                HotelName  = "Unassigned",
-                GuestCount = unassignedHotel
+                HotelName     = "Unassigned",
+                GuestCount    = unassignedHotel,
+                WithRoomCount = 0,
+                NoRoomCount   = unassignedHotel
             });
         }
 

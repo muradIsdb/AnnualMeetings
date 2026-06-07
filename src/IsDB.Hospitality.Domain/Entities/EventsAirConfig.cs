@@ -43,4 +43,6 @@ public class EventsAirSyncLog : BaseEntity
     public int RecordsUpdated { get; set; }
     public int RecordsDeactivated { get; set; }
     public int TravelBookingsSynced { get; set; }
+    /// <summary>The EventsAir event code that was active when this sync ran.</summary>
+    public string? EventCode { get; set; }
 }
