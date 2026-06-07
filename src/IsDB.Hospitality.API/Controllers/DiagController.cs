@@ -185,8 +185,14 @@ public class DiagController : ControllerBase
             // Step 1: Delete vehicle assignments, status history, then vehicles
             rows = await _db.Database.ExecuteSqlRawAsync(@"DELETE FROM ""VehicleAssignments""", ct);
             results.Add($"VehicleAssignments deleted: {rows}");
-            rows = await _db.Database.ExecuteSqlRawAsync(@"DELETE FROM ""VehicleStatusHistory""", ct);
-            results.Add($"VehicleStatusHistory deleted: {rows}");
+            // VehicleStatusHistory may not exist on all environments
+            rows = await _db.Database.ExecuteSqlRawAsync(@"
+                DO $$ BEGIN
+                    IF EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'VehicleStatusHistory') THEN
+                        DELETE FROM ""VehicleStatusHistory"";
+                    END IF;
+                END $$", ct);
+            results.Add("VehicleStatusHistory deleted (if existed)");
             rows = await _db.Database.ExecuteSqlRawAsync(@"DELETE FROM ""Vehicles""", ct);
             results.Add($"Vehicles deleted: {rows}");
 
