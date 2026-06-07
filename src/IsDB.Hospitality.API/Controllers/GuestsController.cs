@@ -266,8 +266,9 @@ public class GuestsController : ApiControllerBase
                     .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase);
 
                 // ── Bulk-load CarClasses for the current event keyed by Name (case-insensitive) ──
+                // Include event-specific classes (EventCode == eventCode) AND global classes (EventCode == null)
                 var carClassesByName = (await bgDb.CarClasses
-                    .Where(cc => cc.EventCode == eventCode)
+                    .Where(cc => cc.EventCode == null || cc.EventCode == eventCode)
                     .ToListAsync())
                     .GroupBy(cc => cc.Name.Trim(), StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
