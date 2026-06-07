@@ -32,22 +32,23 @@ public class DiagController : ControllerBase
         // 3. Total guests
         var totalGuests = await _db.Guests.CountAsync(ct);
 
-        // 4. Sample guests (first 5)
+        // 4. Sample guests (last 5 created)
         var sampleGuests = await _db.Guests
             .OrderByDescending(g => g.CreatedAt)
             .Take(5)
             .Select(g => new { g.Id, g.FullName, g.EventCode, g.InboundStatus, g.CreatedAt })
             .ToListAsync(ct);
 
-        // 5. Applied migrations
+        // 5. Applied migrations — alias must be "Value" for SqlQueryRaw<string>
         var migrations = await _db.Database
-            .SqlQueryRaw<string>(@"SELECT ""MigrationId"" FROM ""__EFMigrationsHistory"" ORDER BY ""MigrationId""")
+            .SqlQueryRaw<string>(@"SELECT ""MigrationId"" AS ""Value"" FROM ""__EFMigrationsHistory"" ORDER BY ""MigrationId""")
             .ToListAsync(ct);
 
-        // 6. Check VehicleTypeValue column exists
+        // 6. Check VehicleTypeValue column exists — alias must be "Value" for SqlQueryRaw<int>
         var colExists = await _db.Database
             .SqlQueryRaw<int>(@"
-                SELECT COUNT(*)::int FROM information_schema.columns
+                SELECT COUNT(*)::int AS ""Value""
+                FROM information_schema.columns
                 WHERE table_name = 'Guests' AND column_name = 'VehicleTypeValue'")
             .FirstOrDefaultAsync(ct);
 
