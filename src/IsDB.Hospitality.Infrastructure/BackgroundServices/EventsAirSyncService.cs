@@ -220,6 +220,18 @@ public class EventsAirSyncService : BackgroundService
             var existingGuestsByContactId = await db.Guests
                 .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
+            // ── Pre-load open alert guest IDs for deduplication (Pass 1 & 2) ──
+            var openAlertsBg = await db.SyncAlerts
+                .Where(a => !a.IsResolved && a.GuestId != null)
+                .Select(a => new { a.GuestId, a.AlertType })
+                .ToListAsync(cancellationToken);
+            var openGuestRemovedIdsBg = new HashSet<Guid>(openAlertsBg
+                .Where(a => a.AlertType == SyncAlertType.GuestRemoved)
+                .Select(a => a.GuestId!.Value));
+            var openRegTypeChangedIdsBg = new HashSet<Guid>(openAlertsBg
+                .Where(a => a.AlertType == SyncAlertType.RegTypeChanged)
+                .Select(a => a.GuestId!.Value));
+
             foreach (var contact in contacts)
             {
                 if (string.IsNullOrEmpty(contact.ContactId)) continue;
@@ -256,11 +268,13 @@ public class EventsAirSyncService : BackgroundService
                     if (existing.LastName != contact.LastName) { existing.LastName = contact.LastName; changed = true; }
                     if (existing.Designation != contact.JobTitle) { existing.Designation = contact.JobTitle; changed = true; }
                     if (existing.Organization != contact.OrganizationName) { existing.Organization = contact.OrganizationName; changed = true; }
-                    // ── Detect registration type change → create SyncAlert ──────────────
+                    // ── Detect registration type change → create SyncAlert (deduplicated) ──────────────
                     if (existing.RegistrationTypeName != contact.RegistrationTypeName)
                     {
-                        if (!string.IsNullOrWhiteSpace(existing.RegistrationTypeName) && !string.IsNullOrWhiteSpace(contact.RegistrationTypeName))
+                        if (!string.IsNullOrWhiteSpace(existing.RegistrationTypeName) && !string.IsNullOrWhiteSpace(contact.RegistrationTypeName)
+                            && !openRegTypeChangedIdsBg.Contains(existing.Id))
                         {
+                            openRegTypeChangedIdsBg.Add(existing.Id);
                             db.SyncAlerts.Add(new SyncAlert
                             {
                                 AlertType    = SyncAlertType.RegTypeChanged,
@@ -326,19 +340,23 @@ public class EventsAirSyncService : BackgroundService
                             assignment.Vehicle.Status = VehicleStatus.Available;
                         }
                     }
-                    // ── Create GuestRemoved SyncAlert ──────────────────────────────────
-                    db.SyncAlerts.Add(new SyncAlert
+                    // ── Create GuestRemoved SyncAlert (deduplicated) ──────────────────────────────────
+                    if (!openGuestRemovedIdsBg.Contains(g.Id))
                     {
-                        AlertType    = SyncAlertType.GuestRemoved,
-                        GuestId      = g.Id,
-                        GuestName    = $"{g.FirstName} {g.LastName}".Trim(),
-                        EventsAirContactId = g.EventsAirContactId,
-                        VehicleId    = vehicleId,
-                        VehiclePlate = vehiclePlate,
-                        CarClassName = carClassName,
-                        SyncSource   = SyncAlertSource.AutoSync,
-                        DetectedAt   = DateTime.UtcNow
-                    });
+                        openGuestRemovedIdsBg.Add(g.Id);
+                        db.SyncAlerts.Add(new SyncAlert
+                        {
+                            AlertType    = SyncAlertType.GuestRemoved,
+                            GuestId      = g.Id,
+                            GuestName    = $"{g.FirstName} {g.LastName}".Trim(),
+                            EventsAirContactId = g.EventsAirContactId,
+                            VehicleId    = vehicleId,
+                            VehiclePlate = vehiclePlate,
+                            CarClassName = carClassName,
+                            SyncSource   = SyncAlertSource.AutoSync,
+                            DetectedAt   = DateTime.UtcNow
+                        });
+                    }
                     g.IsActive = false;
                     g.DedicatedCar = null;
                     g.LastSyncedAt = DateTime.UtcNow;

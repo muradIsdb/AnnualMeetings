@@ -274,6 +274,18 @@ public class GuestsController : ApiControllerBase
                 int vehicleTypeMatched = 0, vehicleTypeUnmatched = 0;
                 var vehicleTypeUnmatchedValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+                // ── Pre-load open alert guest IDs for deduplication (Pass 1 & 2) ──
+                var openAlertGuestIds = await bgDb.SyncAlerts
+                    .Where(a => !a.IsResolved && a.GuestId != null)
+                    .Select(a => new { a.GuestId, a.AlertType })
+                    .ToListAsync();
+                var openGuestRemovedIds = new HashSet<Guid>(openAlertGuestIds
+                    .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.GuestRemoved)
+                    .Select(a => a.GuestId!.Value));
+                var openRegTypeChangedIds = new HashSet<Guid>(openAlertGuestIds
+                    .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.RegTypeChanged)
+                    .Select(a => a.GuestId!.Value));
+
                 // Upsert guests
                 foreach (var contact in contacts)
                 {
@@ -331,11 +343,13 @@ public class GuestsController : ApiControllerBase
                         if (existing.LastName != contact.LastName) { existing.LastName = contact.LastName; changed = true; }
                         if (existing.Designation != contact.JobTitle) { existing.Designation = contact.JobTitle; changed = true; }
                         if (existing.Organization != contact.OrganizationName) { existing.Organization = contact.OrganizationName; changed = true; }
-                        // ── Detect registration type change → create SyncAlert ──────────────
+                        // ── Detect registration type change → create SyncAlert (deduplicated) ──────────────
                         if (existing.RegistrationTypeName != contact.RegistrationTypeName)
                         {
-                            if (!string.IsNullOrWhiteSpace(existing.RegistrationTypeName) && !string.IsNullOrWhiteSpace(contact.RegistrationTypeName))
+                            if (!string.IsNullOrWhiteSpace(existing.RegistrationTypeName) && !string.IsNullOrWhiteSpace(contact.RegistrationTypeName)
+                                && !openRegTypeChangedIds.Contains(existing.Id))
                             {
+                                openRegTypeChangedIds.Add(existing.Id); // prevent duplicate within same sync run
                                 bgDb.SyncAlerts.Add(new IsDB.Hospitality.Domain.Entities.SyncAlert
                                 {
                                     AlertType    = IsDB.Hospitality.Domain.Enums.SyncAlertType.RegTypeChanged,
@@ -400,7 +414,10 @@ public class GuestsController : ApiControllerBase
                             if (assignmentManual.Vehicle != null)
                                 assignmentManual.Vehicle.Status = IsDB.Hospitality.Domain.Enums.VehicleStatus.Available;
                         }
-                        // ── Create GuestRemoved SyncAlert ──────────────────────────────
+                        // ── Create GuestRemoved SyncAlert (deduplicated) ──────────────────────────────
+                        if (!openGuestRemovedIds.Contains(guestToDeactivate.Id))
+                        {
+                        openGuestRemovedIds.Add(guestToDeactivate.Id);
                         bgDb.SyncAlerts.Add(new IsDB.Hospitality.Domain.Entities.SyncAlert
                         {
                             AlertType    = IsDB.Hospitality.Domain.Enums.SyncAlertType.GuestRemoved,
@@ -412,6 +429,7 @@ public class GuestsController : ApiControllerBase
                             SyncSource   = IsDB.Hospitality.Domain.Enums.SyncAlertSource.ManualSync,
                             DetectedAt   = DateTime.UtcNow
                         });
+                        } // end deduplication check
                         guestToDeactivate.IsActive = false;
                         guestToDeactivate.DedicatedCar = null;
                         guestToDeactivate.LastSyncedAt = DateTime.UtcNow;
