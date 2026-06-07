@@ -288,6 +288,132 @@ public class DiagController : ControllerBase
     }
 
     /// <summary>
+    /// Temporary endpoint — ensures production schema matches UAT by creating all missing
+    /// tables, columns, and indexes idempotently. Safe to run multiple times.
+    /// Remove after schema parity is confirmed.
+    /// </summary>
+    [HttpPost("ensure-schema")]
+    public async Task<IActionResult> EnsureSchema(CancellationToken ct)
+    {
+        var results = new List<string>();
+        var conn = _db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open) await conn.OpenAsync(ct);
+
+        async Task<string> Exec(string label, string sql)
+        {
+            try
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = sql;
+                await cmd.ExecuteNonQueryAsync(ct);
+                return $"OK: {label}";
+            }
+            catch (Exception ex) { return $"ERR: {label} — {ex.Message}"; }
+        }
+
+        // 1. VehicleStatusHistories table (20260515100000) — plural, matches EF model
+        results.Add(await Exec("VehicleStatusHistories table", @"
+            CREATE TABLE IF NOT EXISTS ""VehicleStatusHistories"" (
+                ""Id""                 uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+                ""VehicleId""          uuid        NOT NULL REFERENCES ""Vehicles""(""Id"") ON DELETE CASCADE,
+                ""OldStatus""          integer     NOT NULL,
+                ""NewStatus""          integer     NOT NULL,
+                ""ChangedByStaffId""   uuid        NULL REFERENCES ""StaffUsers""(""Id"") ON DELETE SET NULL,
+                ""ChangedByName""      text        NULL,
+                ""ChangedByRole""      integer     NULL,
+                ""Notes""              text        NULL,
+                ""CreatedAt""          timestamptz NOT NULL DEFAULT now(),
+                ""UpdatedAt""          timestamptz NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS ""IX_VehicleStatusHistories_VehicleId"" ON ""VehicleStatusHistories""(""VehicleId"");
+            CREATE INDEX IF NOT EXISTS ""IX_VehicleStatusHistories_ChangedByStaffId"" ON ""VehicleStatusHistories""(""ChangedByStaffId"");
+        "));
+
+        // 2. OAuthScope column on EventsAirConfigs (20260508210000)
+        results.Add(await Exec("OAuthScope column", @"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'EventsAirConfigs' AND column_name = 'OAuthScope'
+                ) THEN
+                    ALTER TABLE ""EventsAirConfigs"" ADD COLUMN ""OAuthScope"" text NOT NULL DEFAULT '';
+                END IF;
+            END $$;
+        "));
+
+        // 3. Performance indexes (20260508220000)
+        results.Add(await Exec("Perf indexes", @"
+            CREATE INDEX IF NOT EXISTS ""IX_Guests_IsActive"" ON ""Guests"" (""IsActive"");
+            CREATE INDEX IF NOT EXISTS ""IX_Guests_Status"" ON ""Guests"" (""Status"");
+            CREATE INDEX IF NOT EXISTS ""IX_Guests_InboundStatus"" ON ""Guests"" (""InboundStatus"");
+            CREATE INDEX IF NOT EXISTS ""IX_Guests_IsCritical_LastName"" ON ""Guests"" (""IsCritical"" DESC, ""LastName"" ASC);
+            CREATE INDEX IF NOT EXISTS ""IX_TravelBookings_IsArrival"" ON ""TravelBookings"" (""IsArrival"");
+            CREATE INDEX IF NOT EXISTS ""IX_TravelBookings_GuestId"" ON ""TravelBookings"" (""GuestId"");
+            CREATE INDEX IF NOT EXISTS ""IX_TravelBookings_FlightId"" ON ""TravelBookings"" (""FlightId"");
+            CREATE INDEX IF NOT EXISTS ""IX_Flights_Status"" ON ""Flights"" (""Status"");
+            CREATE INDEX IF NOT EXISTS ""IX_Flights_ScheduledArrival"" ON ""Flights"" (""ScheduledArrival"");
+            CREATE INDEX IF NOT EXISTS ""IX_VehicleAssignments_IsActive"" ON ""VehicleAssignments"" (""IsActive"");
+            CREATE INDEX IF NOT EXISTS ""IX_VehicleAssignments_GuestId"" ON ""VehicleAssignments"" (""GuestId"");
+            CREATE INDEX IF NOT EXISTS ""IX_VehicleAssignments_VehicleId"" ON ""VehicleAssignments"" (""VehicleId"");
+            CREATE INDEX IF NOT EXISTS ""IX_Alerts_IsResolved"" ON ""Alerts"" (""IsResolved"");
+            CREATE INDEX IF NOT EXISTS ""IX_Alerts_GuestId"" ON ""Alerts"" (""GuestId"");
+        "));
+
+        // 4. Make LicensePlate nullable (20260601100000)
+        results.Add(await Exec("LicensePlate nullable", @"
+            DO $$ BEGIN
+                ALTER TABLE ""Vehicles"" ALTER COLUMN ""LicensePlate"" DROP NOT NULL;
+            EXCEPTION WHEN others THEN NULL; END $$;
+        "));
+
+        // 5. EventCode on Notifications and DepartureRequests (20260604100000)
+        results.Add(await Exec("Notifications.EventCode", @"
+            ALTER TABLE ""Notifications"" ADD COLUMN IF NOT EXISTS ""EventCode"" text NULL;
+        "));
+        results.Add(await Exec("DepartureRequests.EventCode", @"
+            ALTER TABLE ""DepartureRequests"" ADD COLUMN IF NOT EXISTS ""EventCode"" text NULL;
+        "));
+
+        // 6. VehicleTypeValue on Guests (20260603100000)
+        results.Add(await Exec("Guests.VehicleTypeValue", @"
+            ALTER TABLE ""Guests"" ADD COLUMN IF NOT EXISTS ""VehicleTypeValue"" text NULL;
+        "));
+
+        // 7. NormaliseFlightNumbers (20260604300000)
+        results.Add(await Exec("NormaliseFlightNumbers", @"
+            UPDATE ""Flights""
+            SET ""FlightNumber"" = UPPER(
+                REGEXP_REPLACE(
+                    REPLACE(""FlightNumber"", ' ', ''),
+                    '^([A-Za-z]{1,3})0+([0-9].*)$', '\1\2'
+                )
+            )
+            WHERE ""FlightNumber"" IS NOT NULL;
+        "));
+
+        // 8. Stamp all missing migrations
+        var migrations = new[]
+        {
+            "20260508210000_AddOAuthScopeToEventsAirConfig",
+            "20260508220000_AddPerformanceIndexes",
+            "20260515100000_AddVehicleStatusHistory",
+            "20260601100000_MakeVehicleLicensePlateOptional",
+            "20260603100000_AddVehicleTypeValueToGuest",
+            "20260604100000_AddEventCodeToNotificationsAndDepartureRequests",
+            "20260604300000_NormaliseFlightNumbers"
+        };
+        foreach (var m in migrations)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ('{m}', '9.0.0') ON CONFLICT DO NOTHING";
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        results.Add($"Stamped {migrations.Length} migrations in __EFMigrationsHistory");
+
+        return Ok(new { success = true, actions = results });
+    }
+
+    /// <summary>
     /// Temporary fix endpoint — stamps missing migrations and updates guest EventCodes.
     /// Remove after fix is confirmed.
     /// </summary>
