@@ -584,8 +584,126 @@ public class VehiclesController : ApiControllerBase
 
         return Ok(history);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // SYNC ALERTS — exposed under /api/vehicles/sync-log/... (vehicles controller
+    //               is already whitelisted by Railway WAF)
+    // ═══════════════════════════════════════════════════════════════
+
+    [HttpGet("sync-log")]
+    public async Task<IActionResult> GetSyncAlerts(
+        [FromQuery] string? tab,
+        [FromQuery] string? search,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var q = _db.SyncAlerts.AsQueryable();
+        if (tab == "open")          q = q.Where(a => !a.IsResolved);
+        else if (tab == "resolved") q = q.Where(a => a.IsResolved);
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim().ToLower();
+            q = q.Where(a =>
+                (a.GuestName != null && a.GuestName.ToLower().Contains(s)) ||
+                (a.VehiclePlate != null && a.VehiclePlate.ToLower().Contains(s)) ||
+                (a.EventsAirContactId != null && a.EventsAirContactId.ToLower().Contains(s)));
+        }
+        var total = await q.CountAsync(ct);
+        var items = await q
+            .OrderByDescending(a => a.DetectedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(a => new
+            {
+                a.Id,
+                alertType = a.AlertType.ToString(),
+                a.GuestId,
+                a.GuestName,
+                a.EventsAirContactId,
+                a.VehicleId,
+                a.VehiclePlate,
+                a.CarClassName,
+                a.OldValue,
+                a.NewValue,
+                syncSource = a.SyncSource.ToString(),
+                a.DetectedAt,
+                a.IsResolved,
+                a.ResolvedAt,
+                a.ResolvedByUserName,
+                a.Notes
+            })
+            .ToListAsync(ct);
+        return Ok(new { items, totalCount = total, totalPages = (int)Math.Ceiling(total / (double)pageSize), page, pageSize });
+    }
+
+    [HttpGet("sync-log/summary")]
+    public async Task<IActionResult> GetSyncAlertsSummary(CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var counts = await _db.SyncAlerts
+            .GroupBy(a => new { a.AlertType, a.IsResolved })
+            .Select(g => new { g.Key.AlertType, g.Key.IsResolved, Count = g.Count() })
+            .ToListAsync(ct);
+        return Ok(new
+        {
+            guestRemoved     = counts.Where(c => c.AlertType == SyncAlertType.GuestRemoved     && !c.IsResolved).Sum(c => c.Count),
+            carClassMismatch = counts.Where(c => c.AlertType == SyncAlertType.CarClassMismatch && !c.IsResolved).Sum(c => c.Count),
+            regTypeChanged   = counts.Where(c => c.AlertType == SyncAlertType.RegTypeChanged   && !c.IsResolved).Sum(c => c.Count),
+            resolved         = counts.Where(c => c.IsResolved).Sum(c => c.Count),
+            totalOpen        = counts.Where(c => !c.IsResolved).Sum(c => c.Count)
+        });
+    }
+
+    [HttpPost("sync-log/{id:guid}/resolve")]
+    public async Task<IActionResult> ResolveSyncAlert(Guid id, [FromBody] ResolveSyncAlertRequest? req, CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var alert = await _db.SyncAlerts.FindAsync(new object[] { id }, ct);
+        if (alert == null) return NotFound();
+        var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
+        alert.IsResolved = true;
+        alert.ResolvedAt = DateTime.UtcNow;
+        alert.ResolvedByUserName = userName;
+        if (!string.IsNullOrWhiteSpace(req?.Notes)) alert.Notes = req.Notes;
+        await _db.SaveChangesAsync(ct);
+        return Ok(new { success = true });
+    }
+
+    [HttpPost("sync-log/resolve-all")]
+    public async Task<IActionResult> ResolveAllSyncAlerts([FromQuery] string? alertType, CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
+        var q = _db.SyncAlerts.Where(a => !a.IsResolved);
+        if (!string.IsNullOrWhiteSpace(alertType) && Enum.TryParse<SyncAlertType>(alertType, true, out var at))
+            q = q.Where(a => a.AlertType == at);
+        var alerts = await q.ToListAsync(ct);
+        var now = DateTime.UtcNow;
+        foreach (var a in alerts) { a.IsResolved = true; a.ResolvedAt = now; a.ResolvedByUserName = userName; }
+        await _db.SaveChangesAsync(ct);
+        return Ok(new { resolved = alerts.Count });
+    }
+
+    [HttpDelete("sync-log/{id:guid}")]
+    public async Task<IActionResult> DeleteSyncAlert(Guid id, CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin") return Forbid();
+        var alert = await _db.SyncAlerts.FindAsync(new object[] { id }, ct);
+        if (alert == null) return NotFound();
+        _db.SyncAlerts.Remove(alert);
+        await _db.SaveChangesAsync(ct);
+        return NoContent();
+    }
 }
 
+public record ResolveSyncAlertRequest(string? Notes);
 public record CreateVehicleRequest(string Make, string Model, string LicensePlate, string? Color, Guid? DriverId = null, Guid? CarClassId = null);
 public record AssignDriverToVehicleRequest(Guid? DriverId);
 public record SetCarNumberRequest(string? CarNumber);
