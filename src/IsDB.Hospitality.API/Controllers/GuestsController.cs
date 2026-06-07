@@ -1895,7 +1895,7 @@ public class GuestsController : ApiControllerBase
     // SYNC ALERTS — exposed under /api/guests/alerts/... to avoid Railway WAF
     // ═══════════════════════════════════════════════════════════════════════
 
-    [HttpGet("alerts")]
+    [HttpGet("ea-changes")]
     public async Task<IActionResult> GetAlerts(
         [FromServices] AppDbContext db,
         [FromQuery] string? tab,
@@ -1945,7 +1945,7 @@ public class GuestsController : ApiControllerBase
         return Ok(new { items, totalCount = total, totalPages = (int)Math.Ceiling(total / (double)pageSize), page, pageSize });
     }
 
-    [HttpGet("alerts/summary")]
+    [HttpGet("ea-changes/summary")]
     public async Task<IActionResult> GetAlertsSummary([FromServices] AppDbContext db, CancellationToken ct = default)
     {
         var role = User.FindFirst("role")?.Value ?? "";
@@ -1964,7 +1964,7 @@ public class GuestsController : ApiControllerBase
         });
     }
 
-    [HttpPost("alerts/{id:guid}/resolve")]
+    [HttpPost("ea-changes/{id:guid}/resolve")]
     public async Task<IActionResult> ResolveAlert(Guid id, [FromBody] ResolveAlertRequest? req, [FromServices] AppDbContext db, CancellationToken ct = default)
     {
         var role = User.FindFirst("role")?.Value ?? "";
@@ -1980,7 +1980,7 @@ public class GuestsController : ApiControllerBase
         return Ok(new { success = true });
     }
 
-    [HttpPost("alerts/resolve-all")]
+    [HttpPost("ea-changes/resolve-all")]
     public async Task<IActionResult> ResolveAllAlerts([FromQuery] string? alertType, [FromServices] AppDbContext db, CancellationToken ct = default)
     {
         var role = User.FindFirst("role")?.Value ?? "";
@@ -1996,7 +1996,7 @@ public class GuestsController : ApiControllerBase
         return Ok(new { resolved = alerts.Count });
     }
 
-    [HttpDelete("alerts/{id:guid}")]
+    [HttpDelete("ea-changes/{id:guid}")]
     public async Task<IActionResult> DeleteAlert(Guid id, [FromServices] AppDbContext db, CancellationToken ct = default)
     {
         var role = User.FindFirst("role")?.Value ?? "";
