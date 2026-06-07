@@ -2279,7 +2279,7 @@ function SyncAlertsPage(){
   var _syncAlertsAuth=Or();
   var _syncAlertsUser=_syncAlertsAuth.user;
   var _syncAlertsRoles=(_syncAlertsUser?.roles??(_syncAlertsUser?.role?[_syncAlertsUser.role]:[]));
-  var canResolve=_syncAlertsRoles.some(function(r){return r===U.Admin||r===U.Transport;});
+  var canResolve=_syncAlertsRoles.some(function(r){return r===U.Admin;});
   // activeTab drives the summary card highlight only (not the filter)
   var activeTabState=N.useState("open");
   var activeTab=activeTabState[0];

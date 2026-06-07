@@ -131,7 +131,7 @@ public class SyncAlertsController : ControllerBase
     public async Task<IActionResult> Resolve(Guid id, [FromBody] ResolveRequest? req)
     {
         var role = User.FindFirst("role")?.Value ?? "";
-        if (role != "Admin" && role != "Transport")
+        if (role != "Admin")
             return Forbid();
 
         var alert = await _db.SyncAlerts.FindAsync(id);
@@ -157,7 +157,7 @@ public class SyncAlertsController : ControllerBase
     public async Task<IActionResult> ResolveAll([FromQuery] string? alertType)
     {
         var role = User.FindFirst("role")?.Value ?? "";
-        if (role != "Admin" && role != "Transport")
+        if (role != "Admin")
             return Forbid();
 
         var userName = User.FindFirst("name")?.Value
