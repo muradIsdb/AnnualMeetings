@@ -264,8 +264,6 @@ public class VehiclesController : ApiControllerBase
 
         if (view == "discrepancies-delete-all")
         {
-            var role = User.FindFirst("role")?.Value ?? "";
-            if (role != "Admin") return Forbid();
             var all = await _db.SyncAlerts.ToListAsync(ct);
             _db.SyncAlerts.RemoveRange(all);
             await _db.SaveChangesAsync(ct);
