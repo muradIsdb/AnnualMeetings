@@ -1,7 +1,7 @@
 /**
  * SyncAlertsPage.source.jsx
  *
- * Source file for the Sync Alerts page (/transport/transport-actions).
+ * Source file for the Sync Alerts page (/transport/guests/alerts).
  * Accessible to Admin and Transport roles only.
  *
  * This file is kept in the repository for reference.
@@ -9,10 +9,10 @@
  * using the patch script: /home/ubuntu/inject_sync_alerts.py
  *
  * API endpoints used:
- *   GET  /api/transport-actions          - list with filters: type, resolved, search, page, pageSize
- *   POST /api/transport-actions/{id}/resolve  - mark as resolved (body: { notes })
- *   POST /api/transport-actions/resolve-all   - bulk resolve all open alerts
- *   GET  /api/transport-actions/summary       - { guestRemoved, regTypeChanged, carClassMismatch, totalOpen, totalResolved }
+ *   GET  /api/guests/alerts          - list with filters: type, resolved, search, page, pageSize
+ *   POST /api/guests/alerts/{id}/resolve  - mark as resolved (body: { notes })
+ *   POST /api/guests/alerts/resolve-all   - bulk resolve all open alerts
+ *   GET  /api/guests/alerts/summary       - { guestRemoved, regTypeChanged, carClassMismatch, totalOpen, totalResolved }
  */
 
 import React, { useState, useCallback } from "react";
@@ -204,30 +204,30 @@ export default function SyncAlertsPage() {
   }, [activeTab, search, page]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["transport-actions", activeTab, search, page],
-    queryFn: () => ax.get("/transport-actions", { params: params() }).then((r) => r.data),
+    queryKey: ["guests/alerts", activeTab, search, page],
+    queryFn: () => ax.get("/guests/alerts", { params: params() }).then((r) => r.data),
     refetchInterval: 30000,
   });
 
   const { data: summary } = useQuery({
-    queryKey: ["transport-actions-summary"],
-    queryFn: () => ax.get("/transport-actions/summary").then((r) => r.data),
+    queryKey: ["guests/alerts-summary"],
+    queryFn: () => ax.get("/guests/alerts/summary").then((r) => r.data),
     refetchInterval: 30000,
   });
 
   const resolveMut = useMutation({
-    mutationFn: ({ id, notes }) => ax.post(`/transport-actions/${id}/resolve`, { notes }),
+    mutationFn: ({ id, notes }) => ax.post(`/guests/alerts/${id}/resolve`, { notes }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["transport-actions"] });
-      qc.invalidateQueries({ queryKey: ["transport-actions-summary"] });
+      qc.invalidateQueries({ queryKey: ["guests/alerts"] });
+      qc.invalidateQueries({ queryKey: ["guests/alerts-summary"] });
     },
   });
 
   const resolveAllMut = useMutation({
-    mutationFn: () => ax.post("/transport-actions/resolve-all"),
+    mutationFn: () => ax.post("/guests/alerts/resolve-all"),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["transport-actions"] });
-      qc.invalidateQueries({ queryKey: ["transport-actions-summary"] });
+      qc.invalidateQueries({ queryKey: ["guests/alerts"] });
+      qc.invalidateQueries({ queryKey: ["guests/alerts-summary"] });
     },
   });
 

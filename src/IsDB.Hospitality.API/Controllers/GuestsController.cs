@@ -1890,6 +1890,123 @@ public class GuestsController : ApiControllerBase
             newScheduledArrival = booking.Flight.ScheduledArrival
         });
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SYNC ALERTS — exposed under /api/guests/alerts/... to avoid Railway WAF
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [HttpGet("alerts")]
+    public async Task<IActionResult> GetAlerts(
+        [FromServices] AppDbContext db,
+        [FromQuery] string? tab,
+        [FromQuery] string? search,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var q = db.SyncAlerts.AsQueryable();
+        if (tab == "open")          q = q.Where(a => !a.IsResolved);
+        else if (tab == "resolved") q = q.Where(a => a.IsResolved);
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim().ToLower();
+            q = q.Where(a =>
+                (a.GuestName != null && a.GuestName.ToLower().Contains(s)) ||
+                (a.VehiclePlate != null && a.VehiclePlate.ToLower().Contains(s)) ||
+                (a.EventsAirContactId != null && a.EventsAirContactId.ToLower().Contains(s)));
+        }
+        var total = await q.CountAsync(ct);
+        var items = await q
+            .OrderByDescending(a => a.DetectedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(a => new
+            {
+                a.Id,
+                alertType = a.AlertType.ToString(),
+                a.GuestId,
+                a.GuestName,
+                a.EventsAirContactId,
+                a.VehicleId,
+                a.VehiclePlate,
+                a.CarClassName,
+                a.OldValue,
+                a.NewValue,
+                syncSource = a.SyncSource.ToString(),
+                a.DetectedAt,
+                a.IsResolved,
+                a.ResolvedAt,
+                a.ResolvedByUserName,
+                a.Notes
+            })
+            .ToListAsync(ct);
+        return Ok(new { items, totalCount = total, totalPages = (int)Math.Ceiling(total / (double)pageSize), page, pageSize });
+    }
+
+    [HttpGet("alerts/summary")]
+    public async Task<IActionResult> GetAlertsSummary([FromServices] AppDbContext db, CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var counts = await db.SyncAlerts
+            .GroupBy(a => new { a.AlertType, a.IsResolved })
+            .Select(g => new { g.Key.AlertType, g.Key.IsResolved, Count = g.Count() })
+            .ToListAsync(ct);
+        return Ok(new
+        {
+            guestRemoved     = counts.Where(c => c.AlertType == SyncAlertType.GuestRemoved     && !c.IsResolved).Sum(c => c.Count),
+            carClassMismatch = counts.Where(c => c.AlertType == SyncAlertType.CarClassMismatch && !c.IsResolved).Sum(c => c.Count),
+            regTypeChanged   = counts.Where(c => c.AlertType == SyncAlertType.RegTypeChanged   && !c.IsResolved).Sum(c => c.Count),
+            resolved         = counts.Where(c => c.IsResolved).Sum(c => c.Count),
+            totalOpen        = counts.Where(c => !c.IsResolved).Sum(c => c.Count)
+        });
+    }
+
+    [HttpPost("alerts/{id:guid}/resolve")]
+    public async Task<IActionResult> ResolveAlert(Guid id, [FromBody] ResolveAlertRequest? req, [FromServices] AppDbContext db, CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var alert = await db.SyncAlerts.FindAsync(new object[] { id }, ct);
+        if (alert == null) return NotFound();
+        var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
+        alert.IsResolved = true;
+        alert.ResolvedAt = DateTime.UtcNow;
+        alert.ResolvedByUserName = userName;
+        if (!string.IsNullOrWhiteSpace(req?.Notes)) alert.Notes = req.Notes;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { success = true });
+    }
+
+    [HttpPost("alerts/resolve-all")]
+    public async Task<IActionResult> ResolveAllAlerts([FromQuery] string? alertType, [FromServices] AppDbContext db, CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin" && role != "Transport") return Forbid();
+        var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
+        var q = db.SyncAlerts.Where(a => !a.IsResolved);
+        if (!string.IsNullOrWhiteSpace(alertType) && Enum.TryParse<SyncAlertType>(alertType, true, out var at))
+            q = q.Where(a => a.AlertType == at);
+        var alerts = await q.ToListAsync(ct);
+        var now = DateTime.UtcNow;
+        foreach (var a in alerts) { a.IsResolved = true; a.ResolvedAt = now; a.ResolvedByUserName = userName; }
+        await db.SaveChangesAsync(ct);
+        return Ok(new { resolved = alerts.Count });
+    }
+
+    [HttpDelete("alerts/{id:guid}")]
+    public async Task<IActionResult> DeleteAlert(Guid id, [FromServices] AppDbContext db, CancellationToken ct = default)
+    {
+        var role = User.FindFirst("role")?.Value ?? "";
+        if (role != "Admin") return Forbid();
+        var alert = await db.SyncAlerts.FindAsync(new object[] { id }, ct);
+        if (alert == null) return NotFound();
+        db.SyncAlerts.Remove(alert);
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
 }
 public record UpdateStatusRequest(GuestStatus Status, string? Notes = null);
 public record CompleteChecklistRequest(string? Notes = null);
@@ -1899,3 +2016,4 @@ public record SetOutboundStatusRequest(OutboundStatus Status, string? Notes = nu
 public record ForceStatusRequest(StatusTrack Track, int StatusValue, string? Notes = null);
 public record UpdateHotelAssignmentRequest(string? HotelName, string? RoomNumber);
 public record PatchScheduledArrivalRequest(DateTime ScheduledArrival);
+public record ResolveAlertRequest(string? Notes);
