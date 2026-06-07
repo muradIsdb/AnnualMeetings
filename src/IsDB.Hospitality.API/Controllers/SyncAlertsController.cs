@@ -12,7 +12,7 @@ namespace IsDB.Hospitality.API.Controllers;
 /// that require manual review by Admin or Transport staff.
 /// </summary>
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/sync-alerts")]
 [Authorize]
 public class SyncAlertsController : ControllerBase
 {
