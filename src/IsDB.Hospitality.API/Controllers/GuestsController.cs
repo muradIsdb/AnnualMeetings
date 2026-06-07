@@ -539,12 +539,47 @@ public class GuestsController : ApiControllerBase
                             vehicleByGuestP4[va.GuestId] = va.Vehicle;
                     }
 
-                    var existingOpenMismatchIdsList = await bgDb.SyncAlerts
+                    // Load all open CarClassMismatch alerts (full entity for auto-resolution)
+                    var existingOpenMismatches = await bgDb.SyncAlerts
                         .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.CarClassMismatch
                                  && !a.IsResolved && a.GuestId != null)
-                        .Select(a => a.GuestId!.Value)
                         .ToListAsync();
-                    var existingOpenMismatchIds = new HashSet<Guid>(existingOpenMismatchIdsList);
+                    var existingOpenMismatchIds = new HashSet<Guid>(existingOpenMismatches.Select(a => a.GuestId!.Value));
+
+                    // AUTO-RESOLVE: close open alerts where the mismatch is no longer present
+                    // (vehicle unassigned, or vehicle class now matches DeservedCarClassId)
+                    int autoResolved = 0;
+                    var guestLookupP4 = guestsWithClassP4.ToDictionary(g => g.Id);
+                    foreach (var alert in existingOpenMismatches)
+                    {
+                        var guestId = alert.GuestId!.Value;
+                        // If guest no longer has a vehicle assigned → resolve
+                        if (!vehicleByGuestP4.TryGetValue(guestId, out var currentVehicle))
+                        {
+                            alert.IsResolved = true;
+                            alert.ResolvedAt = DateTime.UtcNow;
+                            alert.ResolvedByName = "System (auto-resolved: vehicle unassigned)";
+                            autoResolved++;
+                            existingOpenMismatchIds.Remove(guestId);
+                            continue;
+                        }
+                        // If vehicle class now matches DeservedCarClassId → resolve
+                        if (guestLookupP4.TryGetValue(guestId, out var guestData)
+                            && currentVehicle.CarClassId != null
+                            && currentVehicle.CarClassId == guestData.DeservedCarClassId)
+                        {
+                            alert.IsResolved = true;
+                            alert.ResolvedAt = DateTime.UtcNow;
+                            alert.ResolvedByName = "System (auto-resolved: class now matches)";
+                            autoResolved++;
+                            existingOpenMismatchIds.Remove(guestId);
+                        }
+                    }
+                    if (autoResolved > 0)
+                    {
+                        await bgDb.SaveChangesAsync();
+                        Console.WriteLine($"[SYNC] Pass 4: {autoResolved} alert(s) auto-resolved.");
+                    }
 
                     foreach (var guest in guestsWithClassP4)
                     {

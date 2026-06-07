@@ -442,12 +442,43 @@ public class EventsAirSyncService : BackgroundService
                         vehicleByGuest[va.GuestId] = va.Vehicle;
                 }
 
-                // Load existing open CarClassMismatch alerts to avoid duplicates
-                var existingOpenMismatchList = await db.SyncAlerts
+                // Load all open CarClassMismatch alerts (full entity for auto-resolution)
+                var existingOpenMismatches = await db.SyncAlerts
                     .Where(a => a.AlertType == SyncAlertType.CarClassMismatch && !a.IsResolved && a.GuestId != null)
-                    .Select(a => a.GuestId!.Value)
                     .ToListAsync(cancellationToken);
-                var existingOpenMismatchGuestIds = new HashSet<Guid>(existingOpenMismatchList);
+                var existingOpenMismatchGuestIds = new HashSet<Guid>(existingOpenMismatches.Select(a => a.GuestId!.Value));
+
+                // AUTO-RESOLVE: close open alerts where the mismatch is no longer present
+                var guestLookup = guestsWithClass.ToDictionary(g => g.Id);
+                int autoResolved = 0;
+                foreach (var alert in existingOpenMismatches)
+                {
+                    var gid = alert.GuestId!.Value;
+                    if (!vehicleByGuest.TryGetValue(gid, out var curVehicle))
+                    {
+                        alert.IsResolved = true;
+                        alert.ResolvedAt = DateTime.UtcNow;
+                        alert.ResolvedByName = "System (auto-resolved: vehicle unassigned)";
+                        autoResolved++;
+                        existingOpenMismatchGuestIds.Remove(gid);
+                        continue;
+                    }
+                    if (guestLookup.TryGetValue(gid, out var gd)
+                        && curVehicle.CarClassId != null
+                        && curVehicle.CarClassId == gd.DeservedCarClassId)
+                    {
+                        alert.IsResolved = true;
+                        alert.ResolvedAt = DateTime.UtcNow;
+                        alert.ResolvedByName = "System (auto-resolved: class now matches)";
+                        autoResolved++;
+                        existingOpenMismatchGuestIds.Remove(gid);
+                    }
+                }
+                if (autoResolved > 0)
+                {
+                    await db.SaveChangesAsync(cancellationToken);
+                    logger.LogInformation("[AutoSync] Pass 4: {Count} alert(s) auto-resolved.", autoResolved);
+                }
 
                 foreach (var guest in guestsWithClass)
                 {
