@@ -209,6 +209,7 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
             {
                 ClassId         = cc.Id,
                 ClassName       = cc.Name,
+                ClassShortName  = cc.ShortName,
                 ClassColor      = cc.Color,
                 SortOrder       = cc.SortOrder,
                 TotalVehicles   = vehicles.Count(v => v.CarClassId == cc.Id),

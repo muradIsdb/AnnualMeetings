@@ -677,6 +677,12 @@ using (var scope = app.Services.CreateScope())
                 END IF;
                 IF NOT EXISTS (
                     SELECT 1 FROM information_schema.columns
+                    WHERE table_name='CarClasses' AND column_name='ShortName'
+                ) THEN
+                    ALTER TABLE ""CarClasses"" ADD COLUMN ""ShortName"" varchar(20) NULL;
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
                     WHERE table_name='Vehicles' AND column_name='EventCode'
                 ) THEN
                     ALTER TABLE ""Vehicles"" ADD COLUMN ""EventCode"" text NULL;

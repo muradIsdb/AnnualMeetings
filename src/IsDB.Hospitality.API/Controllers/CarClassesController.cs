@@ -35,6 +35,7 @@ public class CarClassesController : ApiControllerBase
             {
                 c.Id,
                 c.Name,
+                c.ShortName,
                 c.Description,
                 c.Color,
                 c.SortOrder,
@@ -60,6 +61,7 @@ public class CarClassesController : ApiControllerBase
         {
             c.Id,
             c.Name,
+            c.ShortName,
             c.Description,
             c.Color,
             c.SortOrder,
@@ -85,6 +87,7 @@ public class CarClassesController : ApiControllerBase
         {
             Id          = Guid.NewGuid(),
             Name        = req.Name.Trim(),
+            ShortName   = req.ShortName?.Trim(),
             Description = req.Description?.Trim(),
             Color       = req.Color?.Trim(),
             SortOrder   = req.SortOrder ?? 0,
@@ -117,6 +120,7 @@ public class CarClassesController : ApiControllerBase
             return BadRequest(new { message = "A car class with this name already exists." });
 
         carClass.Name        = req.Name.Trim();
+        carClass.ShortName   = req.ShortName?.Trim();
         carClass.Description = req.Description?.Trim();
         carClass.Color       = req.Color?.Trim();
         carClass.SortOrder   = req.SortOrder ?? carClass.SortOrder;
@@ -219,5 +223,5 @@ public class CarClassesController : ApiControllerBase
     }
 }
 
-public record CarClassRequest(string Name, string? Description, string? Color, int? SortOrder);
+public record CarClassRequest(string Name, string? Description, string? Color, int? SortOrder, string? ShortName);
 public record ReorderItem(Guid Id, int SortOrder);

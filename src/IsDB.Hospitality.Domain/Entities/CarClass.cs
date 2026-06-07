@@ -21,6 +21,9 @@ public class CarClass : BaseEntity
     /// <summary>The EventsAir event code this car class belongs to. Null = legacy (treated as current event).</summary>
     public string? EventCode { get; set; }
 
+    /// <summary>Short display name for charts and compact UI (max 10 chars, e.g. "Merc-S", "Camry").</summary>
+    public string? ShortName { get; set; }
+
     // Navigation
     public ICollection<Vehicle> Vehicles { get; set; } = new List<Vehicle>();
     public ICollection<Guest> Guests { get; set; } = new List<Guest>();

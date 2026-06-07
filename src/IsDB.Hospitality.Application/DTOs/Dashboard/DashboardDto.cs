@@ -47,6 +47,7 @@ public class FleetByClassDto
 {
     public Guid ClassId { get; set; }
     public string ClassName { get; set; } = string.Empty;
+    public string? ClassShortName { get; set; }
     public string? ClassColor { get; set; }
     public int SortOrder { get; set; }
     public int TotalVehicles { get; set; }
