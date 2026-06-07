@@ -319,6 +319,13 @@ public class FleetController : ApiControllerBase
             _db.Notifications.AddRange(notifs);
         }
 
+        // Roll back InboundStatus from VehicleAssigned → Arrived when vehicle is unassigned
+        if (assignment.Guest != null
+            && assignment.Guest.InboundStatus == InboundStatus.VehicleAssigned)
+        {
+            assignment.Guest.InboundStatus = InboundStatus.Arrived;
+        }
+
         // Write vehicle unassignment history entry
         if (assignment.Guest != null)
         {
