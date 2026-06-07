@@ -393,9 +393,10 @@ public class EventsAirSyncService : BackgroundService
             int carClassMismatches = 0;
             try
             {
-                // Load all active guests that have a DeservedCarClassId set
+                // Load ALL guests (active or not) that have a DeservedCarClassId set.
+                // Inactive guests may still have an active vehicle assignment — we must check those too.
                 var guestsWithClass = await db.Guests
-                    .Where(g => g.IsActive && g.DeservedCarClassId != null)
+                    .Where(g => g.DeservedCarClassId != null)
                     .Select(g => new { g.Id, g.FirstName, g.LastName, g.EventsAirContactId, g.DeservedCarClassId })
                     .ToListAsync(cancellationToken);
 

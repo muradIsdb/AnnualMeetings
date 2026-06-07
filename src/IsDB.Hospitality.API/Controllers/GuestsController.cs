@@ -489,9 +489,10 @@ public class GuestsController : ApiControllerBase
                 int carClassMismatches = 0;
                 try
                 {
-                    // Load all active guests that have a deserved car class set
+                    // Load ALL guests (active or not) that have a deserved car class set.
+                    // Inactive guests may still have an active vehicle assignment — we must check those too.
                     var guestsWithClassP4 = await bgDb.Guests
-                        .Where(g => g.IsActive && g.DeservedCarClassId != null)
+                        .Where(g => g.DeservedCarClassId != null)
                         .Select(g => new { g.Id, g.FirstName, g.LastName, g.EventsAirContactId, g.DeservedCarClassId })
                         .ToListAsync();
 
