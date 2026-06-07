@@ -383,6 +383,11 @@ public class EventsAirSyncService : BackgroundService
             // PASS 4: CarClassMismatch — detect active guests whose assigned vehicle
             //         car class no longer matches their DeservedCarClassId.
             //         Runs after every sync so it reflects the current state.
+            //
+            //         Uses Vehicle.CurrentGuestId + Status=Assigned as the
+            //         authoritative source (denormalised field always kept in
+            //         sync by all assignment paths). Falls back to the
+            //         VehicleAssignments table for data-inconsistency cases.
             //         Skips guests who already have an open CarClassMismatch alert.
             // ══════════════════════════════════════════════════════════════════
             int carClassMismatches = 0;
@@ -394,15 +399,29 @@ public class EventsAirSyncService : BackgroundService
                     .Select(g => new { g.Id, g.FirstName, g.LastName, g.EventsAirContactId, g.DeservedCarClassId })
                     .ToListAsync(cancellationToken);
 
-                // Load active vehicle assignments with their vehicle's CarClassId
+                // PRIMARY: vehicles currently assigned to a guest (Status=Assigned)
+                // This is the authoritative source — always kept in sync by all
+                // assignment code paths (FleetController, AssignVehicleHelper, etc.)
+                var assignedVehiclesP4 = await db.Vehicles
+                    .Where(v => v.Status == VehicleStatus.Assigned && v.CurrentGuestId != null)
+                    .Include(v => v.CarClass)
+                    .ToListAsync(cancellationToken);
+                var vehicleByGuest = assignedVehiclesP4
+                    .GroupBy(v => v.CurrentGuestId!.Value)
+                    .ToDictionary(g => g.Key, g => g.First());
+
+                // FALLBACK: if a vehicle's Status is not Assigned but a VehicleAssignment
+                // record is still active (data inconsistency), include those too
                 var activeVehicleAssignments = await db.VehicleAssignments
                     .Where(va => va.IsActive)
-                    .Include(va => va.Vehicle)
-                        .ThenInclude(v => v.CarClass)
+                    .Include(va => va.Vehicle).ThenInclude(v => v.CarClass)
                     .ToListAsync(cancellationToken);
-                var assignmentByGuest = activeVehicleAssignments
-                    .GroupBy(va => va.GuestId)
-                    .ToDictionary(g => g.Key, g => g.First());
+                foreach (var va in activeVehicleAssignments)
+                {
+                    if (va.Vehicle == null) continue;
+                    if (!vehicleByGuest.ContainsKey(va.GuestId))
+                        vehicleByGuest[va.GuestId] = va.Vehicle;
+                }
 
                 // Load existing open CarClassMismatch alerts to avoid duplicates
                 var existingOpenMismatchList = await db.SyncAlerts
@@ -416,25 +435,25 @@ public class EventsAirSyncService : BackgroundService
                     // Skip if already has an open mismatch alert
                     if (existingOpenMismatchGuestIds.Contains(guest.Id)) continue;
 
-                    // Skip if no active vehicle assignment
-                    if (!assignmentByGuest.TryGetValue(guest.Id, out var va)) continue;
+                    // Skip if no assigned vehicle found via either source
+                    if (!vehicleByGuest.TryGetValue(guest.Id, out var assignedVehicle)) continue;
 
-                    var vehicleCarClassId = va.Vehicle?.CarClassId;
+                    var vehicleCarClassId = assignedVehicle.CarClassId;
                     if (vehicleCarClassId == null) continue;
 
                     // Mismatch: assigned vehicle's class ≠ guest's deserved class
                     if (vehicleCarClassId != guest.DeservedCarClassId)
                     {
                         var deservedClass = await db.CarClasses.FindAsync(new object[] { guest.DeservedCarClassId!.Value }, cancellationToken);
-                        var assignedClass  = va.Vehicle?.CarClass;
+                        var assignedClass  = assignedVehicle.CarClass;
                         db.SyncAlerts.Add(new SyncAlert
                         {
                             AlertType          = SyncAlertType.CarClassMismatch,
                             GuestId            = guest.Id,
                             GuestName          = $"{guest.FirstName} {guest.LastName}".Trim(),
                             EventsAirContactId = guest.EventsAirContactId,
-                            VehicleId          = va.VehicleId,
-                            VehiclePlate       = va.Vehicle?.LicensePlate,
+                            VehicleId          = assignedVehicle.Id,
+                            VehiclePlate       = assignedVehicle.LicensePlate,
                             CarClassName       = assignedClass?.Name,
                             OldValue           = deservedClass?.Name ?? guest.DeservedCarClassId.ToString(),
                             NewValue           = assignedClass?.Name ?? vehicleCarClassId.ToString(),
@@ -450,7 +469,7 @@ public class EventsAirSyncService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "EventsAir background sync Pass 4 (car class mismatch) failed — sync still succeeded.");
+                _logger.LogWarning(ex, "EventsAir background sync Pass 4 (car class mismatch) failed — sync still succeeded: {Msg}\n{Stack}", ex.Message, ex.StackTrace);
             }
 
             sw.Stop();

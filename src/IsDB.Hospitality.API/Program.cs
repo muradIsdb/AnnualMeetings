@@ -1043,6 +1043,26 @@ using (var scope = app.Services.CreateScope())
         logger.LogWarning(ex, "AddSyncAlertsTable migration failed (non-fatal).");
     }
 
+    // ── Data integrity cleanup: clear stale CurrentGuestId on Available vehicles ──
+    // If a vehicle's Status is Available but CurrentGuestId is still set, the
+    // denormalised field is out of sync with reality (can happen from legacy data
+    // or interrupted transactions). Clear it so Pass 4 mismatch detection is accurate.
+    try
+    {
+        var cleaned = await context.Database.ExecuteSqlRawAsync("""
+            UPDATE "Vehicles"
+            SET "CurrentGuestId" = NULL, "CurrentAssignmentType" = NULL
+            WHERE "Status" = 0
+              AND "CurrentGuestId" IS NOT NULL;
+        """);
+        if (cleaned > 0)
+            logger.LogInformation("Data cleanup: cleared stale CurrentGuestId on {Count} Available vehicle(s).", cleaned);
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Data cleanup (stale CurrentGuestId) failed (non-fatal).");
+    }
+
     await DatabaseSeeder.SeedAsync(context, logger);
 
     // Seed notification templates (idempotent — only inserts missing keys)

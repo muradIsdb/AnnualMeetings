@@ -9,10 +9,10 @@
  * using the patch script: /home/ubuntu/inject_sync_alerts.py
  *
  * API endpoints used:
- *   GET  /api/vehicles?view=sync-log          - list with filters: type, resolved, search, page, pageSize
- *   POST /api/vehicles?view=sync-log/{id}/resolve  - mark as resolved (body: { notes })
- *   POST /api/vehicles?view=sync-log/resolve-all   - bulk resolve all open alerts
- *   GET  /api/vehicles?view=sync-log/summary       - { guestRemoved, regTypeChanged, carClassMismatch, totalOpen, totalResolved }
+ *   GET  /api/vehicles/sync-log          - list with filters: type, resolved, search, page, pageSize
+ *   POST /api/vehicles/sync-log/{id}/resolve  - mark as resolved (body: { notes })
+ *   POST /api/vehicles/sync-log/resolve-all   - bulk resolve all open alerts
+ *   GET  /api/vehicles/sync-log/summary       - { guestRemoved, regTypeChanged, carClassMismatch, totalOpen, totalResolved }
  */
 
 import React, { useState, useCallback } from "react";

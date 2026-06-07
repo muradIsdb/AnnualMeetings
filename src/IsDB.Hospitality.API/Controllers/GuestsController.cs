@@ -479,24 +479,46 @@ public class GuestsController : ApiControllerBase
                 // ═══════════════════════════════════════════════════════════════
                 // PASS 4: CarClassMismatch — detect active guests whose assigned
                 //         vehicle car class doesn't match their DeservedCarClassId.
+                //
+                //         Uses Vehicle.CurrentGuestId + Status=Assigned as the
+                //         authoritative source (denormalised field always kept in
+                //         sync by all assignment paths). Falls back to the
+                //         VehicleAssignments table for plate/class lookup.
                 //         Only creates a new alert if no open one already exists.
                 // ═══════════════════════════════════════════════════════════════
                 int carClassMismatches = 0;
                 try
                 {
-                    var guestsWithClass = await bgDb.Guests
+                    // Load all active guests that have a deserved car class set
+                    var guestsWithClassP4 = await bgDb.Guests
                         .Where(g => g.IsActive && g.DeservedCarClassId != null)
                         .Select(g => new { g.Id, g.FirstName, g.LastName, g.EventsAirContactId, g.DeservedCarClassId })
                         .ToListAsync();
 
-                    var activeVehicleAssignmentsP4 = await bgDb.VehicleAssignments
-                        .Where(va => va.IsActive)
-                        .Include(va => va.Vehicle)
-                            .ThenInclude(v => v.CarClass)
+                    // PRIMARY: vehicles currently assigned to a guest (Status=Assigned)
+                    // This is the authoritative source — always kept in sync by all
+                    // assignment code paths (FleetController, AssignVehicleHelper, etc.)
+                    var assignedVehiclesP4 = await bgDb.Vehicles
+                        .Where(v => v.Status == IsDB.Hospitality.Domain.Enums.VehicleStatus.Assigned
+                                 && v.CurrentGuestId != null)
+                        .Include(v => v.CarClass)
                         .ToListAsync();
-                    var assignmentByGuestP4 = activeVehicleAssignmentsP4
-                        .GroupBy(va => va.GuestId)
+                    var vehicleByGuestP4 = assignedVehiclesP4
+                        .GroupBy(v => v.CurrentGuestId!.Value)
                         .ToDictionary(g => g.Key, g => g.First());
+
+                    // FALLBACK: if a vehicle's Status is not Assigned but a VehicleAssignment
+                    // record is still active (data inconsistency), include those too
+                    var activeAssignmentsP4 = await bgDb.VehicleAssignments
+                        .Where(va => va.IsActive)
+                        .Include(va => va.Vehicle).ThenInclude(v => v.CarClass)
+                        .ToListAsync();
+                    foreach (var va in activeAssignmentsP4)
+                    {
+                        if (va.Vehicle == null) continue;
+                        if (!vehicleByGuestP4.ContainsKey(va.GuestId))
+                            vehicleByGuestP4[va.GuestId] = va.Vehicle;
+                    }
 
                     var existingOpenMismatchIdsList = await bgDb.SyncAlerts
                         .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.CarClassMismatch
@@ -505,24 +527,24 @@ public class GuestsController : ApiControllerBase
                         .ToListAsync();
                     var existingOpenMismatchIds = new HashSet<Guid>(existingOpenMismatchIdsList);
 
-                    foreach (var guest in guestsWithClass)
+                    foreach (var guest in guestsWithClassP4)
                     {
                         if (existingOpenMismatchIds.Contains(guest.Id)) continue;
-                        if (!assignmentByGuestP4.TryGetValue(guest.Id, out var vaP4)) continue;
-                        var vehicleCarClassId = vaP4.Vehicle?.CarClassId;
+                        if (!vehicleByGuestP4.TryGetValue(guest.Id, out var assignedVehicle)) continue;
+                        var vehicleCarClassId = assignedVehicle.CarClassId;
                         if (vehicleCarClassId == null) continue;
                         if (vehicleCarClassId != guest.DeservedCarClassId)
                         {
                             var deservedClass = await bgDb.CarClasses.FindAsync(guest.DeservedCarClassId!.Value);
-                            var assignedClass  = vaP4.Vehicle?.CarClass;
+                            var assignedClass  = assignedVehicle.CarClass;
                             bgDb.SyncAlerts.Add(new IsDB.Hospitality.Domain.Entities.SyncAlert
                             {
                                 AlertType          = IsDB.Hospitality.Domain.Enums.SyncAlertType.CarClassMismatch,
                                 GuestId            = guest.Id,
                                 GuestName          = $"{guest.FirstName} {guest.LastName}".Trim(),
                                 EventsAirContactId = guest.EventsAirContactId,
-                                VehicleId          = vaP4.VehicleId,
-                                VehiclePlate       = vaP4.Vehicle?.LicensePlate,
+                                VehicleId          = assignedVehicle.Id,
+                                VehiclePlate       = assignedVehicle.LicensePlate,
                                 CarClassName       = assignedClass?.Name,
                                 OldValue           = deservedClass?.Name ?? guest.DeservedCarClassId.ToString(),
                                 NewValue           = assignedClass?.Name ?? vehicleCarClassId.ToString(),
@@ -538,7 +560,7 @@ public class GuestsController : ApiControllerBase
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[SYNC] Pass 4 (car class mismatch) failed: {ex.Message}");
+                    Console.WriteLine($"[SYNC] Pass 4 (car class mismatch) failed: {ex.Message}\n{ex.StackTrace}");
                 }
 
                 job.Added = added; job.Updated = updated; job.Deactivated = deactivated;
@@ -1956,122 +1978,6 @@ public class GuestsController : ApiControllerBase
         });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // SYNC ALERTS — exposed under /api/guests/alerts/... to avoid Railway WAF
-    // ═══════════════════════════════════════════════════════════════════════
-
-    [HttpGet("roster")]
-    public async Task<IActionResult> GetAlerts(
-        [FromServices] AppDbContext db,
-        [FromQuery] string? tab,
-        [FromQuery] string? search,
-        [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 20,
-        CancellationToken ct = default)
-    {
-        var role = User.FindFirst("role")?.Value ?? "";
-        if (role != "Admin" && role != "Transport") return Forbid();
-        var q = db.SyncAlerts.AsQueryable();
-        if (tab == "open")          q = q.Where(a => !a.IsResolved);
-        else if (tab == "resolved") q = q.Where(a => a.IsResolved);
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            var s = search.Trim().ToLower();
-            q = q.Where(a =>
-                (a.GuestName != null && a.GuestName.ToLower().Contains(s)) ||
-                (a.VehiclePlate != null && a.VehiclePlate.ToLower().Contains(s)) ||
-                (a.EventsAirContactId != null && a.EventsAirContactId.ToLower().Contains(s)));
-        }
-        var total = await q.CountAsync(ct);
-        var items = await q
-            .OrderByDescending(a => a.DetectedAt)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .Select(a => new
-            {
-                a.Id,
-                alertType = a.AlertType.ToString(),
-                a.GuestId,
-                a.GuestName,
-                a.EventsAirContactId,
-                a.VehicleId,
-                a.VehiclePlate,
-                a.CarClassName,
-                a.OldValue,
-                a.NewValue,
-                syncSource = a.SyncSource.ToString(),
-                a.DetectedAt,
-                a.IsResolved,
-                a.ResolvedAt,
-                a.ResolvedByUserName,
-                a.Notes
-            })
-            .ToListAsync(ct);
-        return Ok(new { items, totalCount = total, totalPages = (int)Math.Ceiling(total / (double)pageSize), page, pageSize });
-    }
-
-    [HttpGet("roster/summary")]
-    public async Task<IActionResult> GetAlertsSummary([FromServices] AppDbContext db, CancellationToken ct = default)
-    {
-        var role = User.FindFirst("role")?.Value ?? "";
-        if (role != "Admin" && role != "Transport") return Forbid();
-        var counts = await db.SyncAlerts
-            .GroupBy(a => new { a.AlertType, a.IsResolved })
-            .Select(g => new { g.Key.AlertType, g.Key.IsResolved, Count = g.Count() })
-            .ToListAsync(ct);
-        return Ok(new
-        {
-            guestRemoved     = counts.Where(c => c.AlertType == SyncAlertType.GuestRemoved     && !c.IsResolved).Sum(c => c.Count),
-            carClassMismatch = counts.Where(c => c.AlertType == SyncAlertType.CarClassMismatch && !c.IsResolved).Sum(c => c.Count),
-            regTypeChanged   = counts.Where(c => c.AlertType == SyncAlertType.RegTypeChanged   && !c.IsResolved).Sum(c => c.Count),
-            resolved         = counts.Where(c => c.IsResolved).Sum(c => c.Count),
-            totalOpen        = counts.Where(c => !c.IsResolved).Sum(c => c.Count)
-        });
-    }
-
-    [HttpPost("roster/{id:guid}/resolve")]
-    public async Task<IActionResult> ResolveAlert(Guid id, [FromBody] ResolveAlertRequest? req, [FromServices] AppDbContext db, CancellationToken ct = default)
-    {
-        var role = User.FindFirst("role")?.Value ?? "";
-        if (role != "Admin" && role != "Transport") return Forbid();
-        var alert = await db.SyncAlerts.FindAsync(new object[] { id }, ct);
-        if (alert == null) return NotFound();
-        var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
-        alert.IsResolved = true;
-        alert.ResolvedAt = DateTime.UtcNow;
-        alert.ResolvedByUserName = userName;
-        if (!string.IsNullOrWhiteSpace(req?.Notes)) alert.Notes = req.Notes;
-        await db.SaveChangesAsync(ct);
-        return Ok(new { success = true });
-    }
-
-    [HttpPost("roster/resolve-all")]
-    public async Task<IActionResult> ResolveAllAlerts([FromQuery] string? alertType, [FromServices] AppDbContext db, CancellationToken ct = default)
-    {
-        var role = User.FindFirst("role")?.Value ?? "";
-        if (role != "Admin" && role != "Transport") return Forbid();
-        var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
-        var q = db.SyncAlerts.Where(a => !a.IsResolved);
-        if (!string.IsNullOrWhiteSpace(alertType) && Enum.TryParse<SyncAlertType>(alertType, true, out var at))
-            q = q.Where(a => a.AlertType == at);
-        var alerts = await q.ToListAsync(ct);
-        var now = DateTime.UtcNow;
-        foreach (var a in alerts) { a.IsResolved = true; a.ResolvedAt = now; a.ResolvedByUserName = userName; }
-        await db.SaveChangesAsync(ct);
-        return Ok(new { resolved = alerts.Count });
-    }
-
-    [HttpDelete("roster/{id:guid}")]
-    public async Task<IActionResult> DeleteAlert(Guid id, [FromServices] AppDbContext db, CancellationToken ct = default)
-    {
-        var role = User.FindFirst("role")?.Value ?? "";
-        if (role != "Admin") return Forbid();
-        var alert = await db.SyncAlerts.FindAsync(new object[] { id }, ct);
-        if (alert == null) return NotFound();
-        db.SyncAlerts.Remove(alert);
-        await db.SaveChangesAsync(ct);
-        return NoContent();
-    }
 }
 public record UpdateStatusRequest(GuestStatus Status, string? Notes = null);
 public record CompleteChecklistRequest(string? Notes = null);
@@ -2081,4 +1987,3 @@ public record SetOutboundStatusRequest(OutboundStatus Status, string? Notes = nu
 public record ForceStatusRequest(StatusTrack Track, int StatusValue, string? Notes = null);
 public record UpdateHotelAssignmentRequest(string? HotelName, string? RoomNumber);
 public record PatchScheduledArrivalRequest(DateTime ScheduledArrival);
-public record ResolveAlertRequest(string? Notes);
