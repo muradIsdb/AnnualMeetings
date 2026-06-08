@@ -1549,4 +1549,127 @@ public class EventsAirController : ApiControllerBase
             message = $"Marketing tags synced. {updated} guest(s) updated out of {guests.Count} active."
         });
     }
+
+    // POST /api/eventsair/deactivate-canceled-guests
+    // One-time retroactive cleanup: deactivates all active guests whose EventsAir
+    // registrations are ALL CANCELED. Guests with no registrations or mixed statuses are NOT touched.
+    [HttpPost("deactivate-canceled-guests")]
+    public async Task<IActionResult> DeactivateCanceledGuests(CancellationToken cancellationToken)
+    {
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive || string.IsNullOrWhiteSpace(config.ClientId))
+            return BadRequest(new { message = "EventsAir integration is not configured or inactive." });
+
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+
+        // Load all active guests that have an EventsAirContactId
+        var activeGuests = await _appDb.Guests
+            .Where(g => g.IsActive && !string.IsNullOrEmpty(g.EventsAirContactId))
+            .ToListAsync(cancellationToken);
+
+        if (activeGuests.Count == 0)
+            return Ok(new { success = true, checked_ = 0, deactivated = 0, message = "No active guests with EventsAirContactId found.", guests = new List<object>() });
+
+        var deactivatedGuests = new List<object>();
+        var httpClient = _httpClientFactory.CreateClient();
+        httpClient.Timeout = TimeSpan.FromMinutes(5);
+
+        // Process in batches of 25 to avoid API cost limits
+        const int batchSize = 25;
+        var contactIds = activeGuests.Select(g => g.EventsAirContactId).Distinct().ToList();
+
+        // Build a map: contactId -> paymentStatuses
+        var canceledContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < contactIds.Count; i += batchSize)
+        {
+            var batch = contactIds.Skip(i).Take(batchSize).ToList();
+
+            // Build a GraphQL query that fetches each contact's registrations with paymentStatus
+            // We use aliases to fetch multiple contacts in one query
+            var contactQueries = string.Join("\n", batch.Select((id, idx) =>
+                $"c{idx}: contact(id: \"{id}\") {{ id registrations {{ paymentDetails {{ paymentStatus }} }} }}"));
+
+            var graphqlQuery = $@"{{
+              event(id: ""{config.EventCode}"") {{
+                {contactQueries}
+              }}
+            }}";
+
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
+            {
+                Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
+                Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { query = graphqlQuery }),
+                    System.Text.Encoding.UTF8, "application/json")
+            };
+
+            var response = await httpClient.SendAsync(req, cancellationToken);
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var doc = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
+
+            if (doc.TryGetProperty("errors", out var errs) && errs.GetArrayLength() > 0)
+            {
+                var errMsg = errs[0].GetProperty("message").GetString() ?? "Unknown error";
+                return StatusCode(500, new { message = $"EventsAir GraphQL error: {errMsg}" });
+            }
+
+            var eventEl = doc.GetProperty("data").GetProperty("event");
+
+            for (int idx = 0; idx < batch.Count; idx++)
+            {
+                var contactId = batch[idx];
+                if (!eventEl.TryGetProperty($"c{idx}", out var contactEl) ||
+                    contactEl.ValueKind == System.Text.Json.JsonValueKind.Null)
+                    continue;
+
+                if (!contactEl.TryGetProperty("registrations", out var regsEl) ||
+                    regsEl.ValueKind != System.Text.Json.JsonValueKind.Array)
+                    continue;
+
+                int totalRegs = 0, canceledRegs = 0;
+                foreach (var reg in regsEl.EnumerateArray())
+                {
+                    totalRegs++;
+                    if (reg.TryGetProperty("paymentDetails", out var pd) &&
+                        pd.TryGetProperty("paymentStatus", out var ps) &&
+                        ps.GetString()?.Equals("CANCELED", StringComparison.OrdinalIgnoreCase) == true)
+                        canceledRegs++;
+                }
+
+                // Only deactivate if there is at least one registration AND all are CANCELED
+                if (totalRegs > 0 && canceledRegs == totalRegs)
+                    canceledContactIds.Add(contactId);
+            }
+        }
+
+        // Deactivate the identified guests
+        int deactivated = 0;
+        foreach (var guest in activeGuests)
+        {
+            if (!canceledContactIds.Contains(guest.EventsAirContactId))
+                continue;
+
+            guest.IsActive = false;
+            deactivated++;
+            deactivatedGuests.Add(new
+            {
+                guestId = guest.Id,
+                fullName = $"{guest.Title} {guest.FirstName} {guest.LastName}".Trim(),
+                eventsAirContactId = guest.EventsAirContactId
+            });
+        }
+
+        if (deactivated > 0)
+            await _appDb.SaveChangesAsync(cancellationToken);
+
+        return Ok(new
+        {
+            success = true,
+            checked_ = activeGuests.Count,
+            deactivated,
+            message = $"Checked {activeGuests.Count} active guests. Deactivated {deactivated} with all-CANCELED registrations.",
+            guests = deactivatedGuests
+        });
+    }
 }
