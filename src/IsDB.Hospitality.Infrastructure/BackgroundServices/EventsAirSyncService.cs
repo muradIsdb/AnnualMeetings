@@ -236,8 +236,11 @@ public class EventsAirSyncService : BackgroundService
                 .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
             // ── Bulk-load CarClasses by Name for DeservedCarClassId resolution ──
-            var carClassesByName = await db.CarClasses
-                .ToDictionaryAsync(c => c.Name, StringComparer.OrdinalIgnoreCase, cancellationToken);
+            // Use GroupBy + First() to safely handle duplicate names in the database
+            var carClassesByName = (await db.CarClasses
+                .ToListAsync(cancellationToken))
+                .GroupBy(c => c.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
             // ── Pre-load open alert guest IDs for deduplication (Pass 1 & 2) ──
             var openAlertsBg = await db.SyncAlerts
