@@ -1353,6 +1353,104 @@ public class EventsAirController : ApiControllerBase
         });
     }
 
+    // GET /api/eventsair/debug-contact-details?contactId=...
+    // Returns a specific contact's DedicatedCar custom field value and all registrations with paymentStatus
+    [HttpGet("debug-contact-details")]
+    public async Task<IActionResult> DebugContactDetails([FromQuery] string contactId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(contactId))
+            return BadRequest(new { message = "contactId is required." });
+
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive || string.IsNullOrWhiteSpace(config.ClientId))
+            return BadRequest(new { message = "EventsAir integration is not configured or inactive." });
+
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+
+        // Load DedicatedCar GUID from DB field mappings
+        const string defaultDedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+        var fieldMappings = await _db.SyncFieldMappings
+            .Where(f => f.EventCode == null || f.EventCode == config.EventCode)
+            .ToListAsync(cancellationToken);
+        var dedicatedCarGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase) && f.EventCode == config.EventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase)))
+            ?.EventsAirFieldGuid ?? defaultDedicatedCarGuid;
+
+        var graphqlQuery = $@"{{
+          event(id: ""{config.EventCode}"") {{
+            contact(id: ""{contactId}"") {{
+              id firstName lastName
+              customFields {{ definitionId value }}
+              registrations {{
+                id
+                type {{ id name }}
+                paymentDetails {{ paymentStatus }}
+              }}
+            }}
+          }}
+        }}";
+
+        var client = _httpClientFactory.CreateClient();
+        var req = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
+        {
+            Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { query = graphqlQuery }),
+                System.Text.Encoding.UTF8, "application/json")
+        };
+        var response = await client.SendAsync(req, cancellationToken);
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        var doc = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
+
+        var contact = doc.GetProperty("data").GetProperty("event").GetProperty("contact");
+        if (contact.ValueKind == System.Text.Json.JsonValueKind.Null)
+            return NotFound(new { message = $"Contact {contactId} not found in EventsAir." });
+
+        // Extract DedicatedCar value
+        string? dedicatedCarValue = null;
+        if (contact.TryGetProperty("customFields", out var cfArr) && cfArr.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var cf in cfArr.EnumerateArray())
+            {
+                if (cf.TryGetProperty("definitionId", out var did) &&
+                    did.GetString()?.Equals(dedicatedCarGuid, StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    dedicatedCarValue = cf.TryGetProperty("value", out var v) ? v.GetString() : null;
+                    break;
+                }
+            }
+        }
+
+        // Extract registrations
+        var registrations = new List<object>();
+        if (contact.TryGetProperty("registrations", out var regsArr) && regsArr.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var reg in regsArr.EnumerateArray())
+            {
+                var regType = reg.TryGetProperty("type", out var t) ? t : default;
+                var pd = reg.TryGetProperty("paymentDetails", out var p) ? p : default;
+                registrations.Add(new
+                {
+                    id = reg.TryGetProperty("id", out var rid) ? rid.GetString() : null,
+                    typeName = regType.ValueKind != System.Text.Json.JsonValueKind.Undefined && regType.TryGetProperty("name", out var tn) ? tn.GetString() : null,
+                    paymentStatus = pd.ValueKind != System.Text.Json.JsonValueKind.Undefined && pd.TryGetProperty("paymentStatus", out var ps) ? ps.GetString() : null
+                });
+            }
+        }
+
+        return Ok(new
+        {
+            contactId,
+            firstName = contact.TryGetProperty("firstName", out var fn) ? fn.GetString() : null,
+            lastName = contact.TryGetProperty("lastName", out var ln) ? ln.GetString() : null,
+            dedicatedCarGuid,
+            dedicatedCarValue,
+            registrations
+        });
+    }
+
     // POST /api/eventsair/sync-marketing-tags
     // Fetches marketing tag values from EventsAir for all active guests and updates
     // InvitedToOpeningCeremony and OldHotel fields.
