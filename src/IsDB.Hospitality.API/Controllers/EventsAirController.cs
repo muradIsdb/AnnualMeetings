@@ -1185,4 +1185,60 @@ public class EventsAirController : ApiControllerBase
             return StatusCode(500, new { success = false, error = ex.Message });
         }
     }
+
+    // GET /api/eventsair/debug-lo-fields?contactId=xxx
+    // Phase 1 investigation: tries multiple GraphQL nodes to find where LO marketing tag fields are stored.
+    [HttpGet("debug-lo-fields")]
+    public async Task<IActionResult> DebugLoFields([FromQuery] string contactId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(contactId))
+            return BadRequest(new { message = "contactId is required" });
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive)
+            return BadRequest(new { message = "EventsAir not configured or inactive." });
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+        var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(30);
+        var gqlBase = $"{config.ApiBaseUrl.TrimEnd('/')}/graphql";
+        async Task<string> RunQuery(string query)
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, gqlBase)
+            {
+                Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
+                Content = new System.Net.Http.StringContent(
+                    System.Text.Json.JsonSerializer.Serialize(new { query }),
+                    System.Text.Encoding.UTF8, "application/json")
+            };
+            var resp = await client.SendAsync(req, cancellationToken);
+            return await resp.Content.ReadAsStringAsync(cancellationToken);
+        }
+        // Test 1: marketingTags node
+        var q1 = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName marketingTags {{ id name fields {{ id name value }} }} }} }} }}";
+        var r1 = await RunQuery(q1);
+        // Test 2: marketing node (alternative name)
+        var q2 = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName marketing {{ id name fields {{ id name value }} }} }} }} }}";
+        var r2 = await RunQuery(q2);
+        // Test 3: imports node
+        var q3 = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName imports {{ id name fields {{ id name value }} }} }} }} }}";
+        var r3 = await RunQuery(q3);
+        // Test 4: Try fetching the two specific GUIDs via FetchCustomFieldValuesAsync (same as VehicleType)
+        const string loMobileGuid = "06dbb8f8-373a-26a3-7f3d-3a1d4e2e1dcb";
+        const string loNameGuid   = "7bd3e8a2-f62e-e2a9-7e9a-3a1d4e2e1ddb";
+        var loMobileValues = await Application.Common.Models.EventsAirSyncHelpers.FetchCustomFieldValuesAsync(
+            config.ApiBaseUrl, config.EventCode, token, loMobileGuid,
+            new[] { contactId }, _httpClientFactory, cancellationToken);
+        var loNameValues = await Application.Common.Models.EventsAirSyncHelpers.FetchCustomFieldValuesAsync(
+            config.ApiBaseUrl, config.EventCode, token, loNameGuid,
+            new[] { contactId }, _httpClientFactory, cancellationToken);
+        return Ok(new
+        {
+            contactId,
+            test1_marketingTags = r1,
+            test2_marketing = r2,
+            test3_imports = r3,
+            test4_loMobileViaCustomFields = loMobileValues.TryGetValue(contactId, out var mv) ? mv : "(not found)",
+            test4_loNameViaCustomFields   = loNameValues.TryGetValue(contactId, out var nv) ? nv : "(not found)"
+        });
+    }
 }
