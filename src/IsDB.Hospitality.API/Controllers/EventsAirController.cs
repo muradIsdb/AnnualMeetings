@@ -1213,14 +1213,14 @@ public class EventsAirController : ApiControllerBase
             var resp = await client.SendAsync(req, cancellationToken);
             return await resp.Content.ReadAsStringAsync(cancellationToken);
         }
-        // Test 1: marketingRecords - probe available scalar fields on EventMarketingRecord
-        var q1 = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName marketingRecords {{ id name value }} }} }} }}";
+        // Test 1: marketingRecords with correct fields: id, tag, value
+        var q1 = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName marketingRecords {{ id tag value }} }} }} }}";
         var r1 = await RunQuery(q1);
-        // Test 2: marketingRecords with tagId and tagValue
-        var q2 = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName marketingRecords {{ id name tagId tagValue }} }} }} }}";
+        // Test 2: marketingRecords with tag sub-object (tag might be an object with id/name)
+        var q2 = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName marketingRecords {{ id tag {{ id name }} value }} }} }} }}";
         var r2 = await RunQuery(q2);
-        // Test 3: marketingRecords with definitionId and value (similar to customFields)
-        var q3 = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName marketingRecords {{ definitionId value }} }} }} }}";
+        // Test 3: raw introspection of EventMarketingRecord type
+        var q3 = "{ __type(name: \"EventMarketingRecord\") { fields { name type { name kind ofType { name kind } } } } }";
         var r3 = await RunQuery(q3);
         // Test 4: Try fetching the two specific GUIDs via FetchCustomFieldValuesAsync (same as VehicleType)
         const string loMobileGuid = "06dbb8f8-373a-26a3-7f3d-3a1d4e2e1dcb";
