@@ -1186,6 +1186,25 @@ public class EventsAirController : ApiControllerBase
         }
     }
 
+    // GET /api/eventsair/debug-marketing-tags?contactId=xxx
+    // Returns the raw marketing tag names/values from EventsAir for a single contact.
+    [HttpGet("debug-marketing-tags")]
+    public async Task<IActionResult> DebugMarketingTags([FromQuery] string contactId, CancellationToken cancellationToken)
+    {
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive || string.IsNullOrWhiteSpace(config.ClientId))
+            return BadRequest(new { message = "EventsAir integration is not configured or inactive." });
+
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+
+        var tags = await Application.Common.Models.EventsAirSyncHelpers.FetchMarketingTagsAsync(
+            config.ApiBaseUrl, config.EventCode, token,
+            new[] { contactId }, _httpClientFactory, cancellationToken);
+
+        return Ok(new { contactId, tags });
+    }
+
     // POST /api/eventsair/sync-marketing-tags
     // Fetches marketing tag values from EventsAir for all active guests and updates
     // InvitedToOpeningCeremony and OldHotel fields.
