@@ -1319,8 +1319,25 @@ public class EventsAirController : ApiControllerBase
         var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
             config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
 
+        // Load field mappings from DB (same as sync service)
+        const string defaultDedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+        const string defaultRankGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+        var fieldMappings = await _db.SyncFieldMappings
+            .Where(f => f.EventCode == null || f.EventCode == config.EventCode)
+            .ToListAsync(cancellationToken);
+        var dedicatedCarGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase) && f.EventCode == config.EventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase)))
+            ?.EventsAirFieldGuid ?? defaultDedicatedCarGuid;
+        var rankGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase) && f.EventCode == config.EventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase)))
+            ?.EventsAirFieldGuid ?? defaultRankGuid;
+
         var contacts = await Application.Common.Models.EventsAirSyncHelpers.FetchContactsWithDedicatedCarAsync(
-            config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, cancellationToken);
+            config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, cancellationToken, dedicatedCarGuid, rankGuid);
 
         var first10 = contacts.Take(10).Select(c => new { c.ContactId, c.FirstName, c.LastName, c.RegistrationTypeName }).ToList();
         bool? isIncluded = string.IsNullOrWhiteSpace(checkContactId) ? null
@@ -1329,6 +1346,7 @@ public class EventsAirController : ApiControllerBase
         return Ok(new
         {
             totalFetched = contacts.Count,
+            dedicatedCarGuid,
             first10,
             checkContactId,
             isIncluded
