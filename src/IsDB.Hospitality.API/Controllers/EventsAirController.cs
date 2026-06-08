@@ -1205,6 +1205,75 @@ public class EventsAirController : ApiControllerBase
         return Ok(new { contactId, tags });
     }
 
+    // GET /api/eventsair/debug-registration-schema
+    // Introspects the EventsAir GraphQL Registration type and probes paymentStatus on a real registration.
+    [HttpGet("debug-registration-schema")]
+    public async Task<IActionResult> DebugRegistrationSchema([FromQuery] string? registrationId, CancellationToken cancellationToken)
+    {
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive)
+            return BadRequest(new { message = "EventsAir not configured or inactive." });
+        var oAuthScope = await GetOAuthScopeAsync();
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, oAuthScope);
+        var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(30);
+        var ea_headers = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        var base_url = config.ApiBaseUrl.TrimEnd('/');
+        var event_code = config.EventCode;
+
+        // Step 1: Introspect Registration type
+        var introspectQuery = "{\"query\":\"{ __type(name: \\\"Registration\\\") { fields { name type { name kind ofType { name kind } } } } }\"}";
+        var req1 = new HttpRequestMessage(HttpMethod.Post, $"{base_url}/graphql")
+        {
+            Headers = { Authorization = ea_headers },
+            Content = new System.Net.Http.StringContent(introspectQuery, System.Text.Encoding.UTF8, "application/json")
+        };
+        var resp1 = await client.SendAsync(req1, cancellationToken);
+        var introspectJson = await resp1.Content.ReadAsStringAsync(cancellationToken);
+        var registrationFields = new List<string>();
+        try
+        {
+            var doc = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(introspectJson);
+            if (doc.TryGetProperty("data", out var d) && d.TryGetProperty("__type", out var t) && t.TryGetProperty("fields", out var fs))
+                foreach (var f in fs.EnumerateArray())
+                    if (f.TryGetProperty("name", out var fn)) registrationFields.Add(fn.GetString() ?? "");
+        }
+        catch { }
+
+        // Step 2: Fetch first 5 registrations with paymentStatus
+        var regsQuery = $"{{\"query\":\"{{ event(id: \\\"{event_code}\\\") {{ registrations(limit: 5, offset: 0) {{ id paymentStatus type {{ id name }} contact {{ id firstName lastName }} }} }} }}\"}";
+        var req2 = new HttpRequestMessage(HttpMethod.Post, $"{base_url}/graphql")
+        {
+            Headers = { Authorization = ea_headers },
+            Content = new System.Net.Http.StringContent(regsQuery, System.Text.Encoding.UTF8, "application/json")
+        };
+        var resp2 = await client.SendAsync(req2, cancellationToken);
+        var regsJson = await resp2.Content.ReadAsStringAsync(cancellationToken);
+
+        // Step 3: If a specific registrationId provided, fetch it
+        string? specificRegJson = null;
+        if (!string.IsNullOrWhiteSpace(registrationId))
+        {
+            var specificQuery = $"{{\"query\":\"{{ event(id: \\\"{event_code}\\\") {{ registration(id: \\\"{registrationId}\\\") {{ id paymentStatus type {{ id name }} contact {{ id firstName lastName }} }} }} }}\"}";
+            var req3 = new HttpRequestMessage(HttpMethod.Post, $"{base_url}/graphql")
+            {
+                Headers = { Authorization = ea_headers },
+                Content = new System.Net.Http.StringContent(specificQuery, System.Text.Encoding.UTF8, "application/json")
+            };
+            var resp3 = await client.SendAsync(req3, cancellationToken);
+            specificRegJson = await resp3.Content.ReadAsStringAsync(cancellationToken);
+        }
+
+        return Ok(new
+        {
+            registrationTypeFields = registrationFields,
+            hasPaymentStatus = registrationFields.Contains("paymentStatus"),
+            first5RegistrationsRaw = regsJson.Length > 3000 ? regsJson[..3000] + "...[truncated]" : regsJson,
+            specificRegistrationRaw = specificRegJson
+        });
+    }
+
     // POST /api/eventsair/sync-marketing-tags
     // Fetches marketing tag values from EventsAir for all active guests and updates
     // InvitedToOpeningCeremony and OldHotel fields.
