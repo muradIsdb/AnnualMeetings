@@ -66,6 +66,8 @@ public class GetGuestByIdQueryHandler : IRequestHandler<GetGuestByIdQuery, Guest
             VehicleTypeValue = guest.VehicleTypeValue,
             DedicatedCar = guest.DedicatedCar,
             LiaisonOfficer = guest.LiaisonOfficer,
+            InvitedToOpeningCeremony = guest.InvitedToOpeningCeremony,
+            OldHotel = guest.OldHotel,
             RegistrationTypeName = guest.RegistrationTypeName,
             DeservedCarClassId = guest.DeservedCarClassId,
             DeservedCarClassName = guest.DeservedCarClass?.Name,

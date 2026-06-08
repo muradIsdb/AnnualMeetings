@@ -630,6 +630,60 @@ public static class EventsAirSyncHelpers
 
         return new Dictionary<string, string>(result, StringComparer.OrdinalIgnoreCase);
     }
+
+    // ─── Fetch marketing tag values ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Fetches all marketing record values for a batch of contacts.
+    /// Returns a dictionary: ContactId -> (TagName -> Value).
+    /// </summary>
+    public static async Task<Dictionary<string, Dictionary<string, string>>> FetchMarketingTagsAsync(
+        string baseUrl, string eventCode, string accessToken,
+        IEnumerable<string> contactIds, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+    {
+        var result = new ConcurrentDictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        var allContactIds = contactIds.Where(id => !string.IsNullOrWhiteSpace(id)).ToList();
+        var client = httpClientFactory.CreateClient();
+        const int concurrency = 15;
+
+        for (int i = 0; i < allContactIds.Count; i += concurrency)
+        {
+            var batch = allContactIds.Skip(i).Take(concurrency).ToList();
+            var tasks = batch.Select(async contactId =>
+            {
+                try
+                {
+                    var queryBody = JsonSerializer.Serialize(new { query = $"{{ event(id: \"{eventCode}\") {{ contact(id: \"{contactId}\") {{ id marketingRecords {{ id name value }} }} }} }}" });
+                    var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/graphql")
+                    {
+                        Headers = { Authorization = new AuthenticationHeaderValue("Bearer", accessToken) },
+                        Content = new StringContent(queryBody, Encoding.UTF8, "application/json")
+                    };
+                    var response = await client.SendAsync(req, cancellationToken);
+                    var json = await response.Content.ReadAsStringAsync(cancellationToken);
+                    if (!response.IsSuccessStatusCode) return;
+                    var doc = JsonSerializer.Deserialize<JsonElement>(json);
+                    if (doc.TryGetProperty("errors", out _) || !doc.TryGetProperty("data", out var data)) return;
+                    var contactEl = data.GetProperty("event").GetProperty("contact");
+                    if (contactEl.ValueKind == JsonValueKind.Null) return;
+                    if (!contactEl.TryGetProperty("marketingRecords", out var records)) return;
+                    var tagDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var rec in records.EnumerateArray())
+                    {
+                        var name = rec.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                        var value = rec.TryGetProperty("value", out var v) ? v.GetString() ?? "" : "";
+                        if (!string.IsNullOrEmpty(name))
+                            tagDict[name] = value;
+                    }
+                    result[contactId] = tagDict;
+                }
+                catch { }
+            });
+            await Task.WhenAll(tasks);
+        }
+
+        return new Dictionary<string, Dictionary<string, string>>(result, StringComparer.OrdinalIgnoreCase);
+    }
 }
 
 /// <summary>

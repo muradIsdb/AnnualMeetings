@@ -669,6 +669,12 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Property<bool?>("LiaisonOfficer")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool?>("InvitedToOpeningCeremony")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("OldHotel")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid?>("DeservedCarClassId")
                         .HasColumnType("TEXT");
 

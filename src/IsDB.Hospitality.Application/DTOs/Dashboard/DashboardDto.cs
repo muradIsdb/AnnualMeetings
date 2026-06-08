@@ -93,6 +93,8 @@ public class GuestSummaryDto
     public string? VehicleTypeValue { get; set; }
     public string? DedicatedCar { get; set; }
     public bool? LiaisonOfficer { get; set; }
+    public bool? InvitedToOpeningCeremony { get; set; }
+    public string? OldHotel { get; set; }
     public DateTime? ArrivalTime { get; set; }
     public Guid? DeservedCarClassId { get; set; }
     public string? DeservedCarClassName { get; set; }

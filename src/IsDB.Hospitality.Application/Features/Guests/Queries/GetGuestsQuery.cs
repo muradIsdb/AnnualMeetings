@@ -52,6 +52,8 @@ public class GetGuestsQueryHandler : IRequestHandler<GetGuestsQuery, List<GuestS
                 VehicleTypeValue = g.VehicleTypeValue,
                 DedicatedCar = g.DedicatedCar,
                 LiaisonOfficer = g.LiaisonOfficer,
+                InvitedToOpeningCeremony = g.InvitedToOpeningCeremony,
+                OldHotel = g.OldHotel,
                 DeservedCarClassId = g.DeservedCarClassId,
                 DeservedCarClassName = g.DeservedCarClass != null ? g.DeservedCarClass.Name : null,
                 DeservedCarClassColor = g.DeservedCarClass != null ? g.DeservedCarClass.Color : null,

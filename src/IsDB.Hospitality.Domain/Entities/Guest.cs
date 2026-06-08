@@ -68,6 +68,18 @@ public class Guest : BaseEntity
     /// </summary>
     public bool? LiaisonOfficer { get; set; }
 
+    /// <summary>
+    /// Whether this guest is invited to attend the opening ceremony.
+    /// Populated from EventsAir marketing tag "Invited to attend the opening ceremony".
+    /// </summary>
+    public bool? InvitedToOpeningCeremony { get; set; }
+
+    /// <summary>
+    /// The hotel name from EventsAir marketing tag "Hotel" (displayed as "Old Hotel").
+    /// Populated during Sync Marketing Tags.
+    /// </summary>
+    public string? OldHotel { get; set; }
+
     // Navigation properties
     public ICollection<TravelBooking> TravelBookings { get; set; } = new List<TravelBooking>();
     public ICollection<ChecklistCompletion> ChecklistCompletions { get; set; } = new List<ChecklistCompletion>();

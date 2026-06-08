@@ -1186,59 +1186,78 @@ public class EventsAirController : ApiControllerBase
         }
     }
 
-    // GET /api/eventsair/debug-lo-fields?contactId=xxx
-    // Phase 1 investigation: tries multiple GraphQL nodes to find where LO marketing tag fields are stored.
-    [HttpGet("debug-lo-fields")]
-    public async Task<IActionResult> DebugLoFields([FromQuery] string contactId, CancellationToken cancellationToken)
+    // POST /api/eventsair/sync-marketing-tags
+    // Fetches marketing tag values from EventsAir for all active guests and updates
+    // InvitedToOpeningCeremony and OldHotel fields.
+    [HttpPost("sync-marketing-tags")]
+    public async Task<IActionResult> SyncMarketingTags(CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(contactId))
-            return BadRequest(new { message = "contactId is required" });
         var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
-        if (config == null || !config.IsActive)
-            return BadRequest(new { message = "EventsAir not configured or inactive." });
+        if (config == null || !config.IsActive || string.IsNullOrWhiteSpace(config.ClientId))
+            return BadRequest(new { message = "EventsAir integration is not configured or inactive." });
+
         var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
             config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
-        var client = _httpClientFactory.CreateClient();
-        client.Timeout = TimeSpan.FromSeconds(30);
-        var gqlBase = $"{config.ApiBaseUrl.TrimEnd('/')}/graphql";
-        async Task<string> RunQuery(string query)
+
+        // Load all active guests
+        var guests = await _appDb.Guests
+            .Where(g => g.IsActive && !string.IsNullOrEmpty(g.EventsAirContactId))
+            .ToListAsync(cancellationToken);
+
+        if (guests.Count == 0)
+            return Ok(new { success = true, updated = 0, message = "No active guests found." });
+
+        var contactIds = guests.Select(g => g.EventsAirContactId).Distinct().ToList();
+
+        // Fetch marketing tags for all contacts
+        var marketingTags = await Application.Common.Models.EventsAirSyncHelpers.FetchMarketingTagsAsync(
+            config.ApiBaseUrl, config.EventCode, token,
+            contactIds, _httpClientFactory, cancellationToken);
+
+        int updated = 0;
+        foreach (var guest in guests)
         {
-            var req = new HttpRequestMessage(HttpMethod.Post, gqlBase)
+            if (!marketingTags.TryGetValue(guest.EventsAirContactId, out var tags))
+                continue;
+
+            bool changed = false;
+
+            // "Invited to attend the opening ceremony" — boolean tag (value is "true"/"false" or "Yes"/"No")
+            if (tags.TryGetValue("Invited to attend the opening ceremony", out var openingVal))
             {
-                Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
-                Content = new System.Net.Http.StringContent(
-                    System.Text.Json.JsonSerializer.Serialize(new { query }),
-                    System.Text.Encoding.UTF8, "application/json")
-            };
-            var resp = await client.SendAsync(req, cancellationToken);
-            return await resp.Content.ReadAsStringAsync(cancellationToken);
+                var isInvited = openingVal.Equals("true", StringComparison.OrdinalIgnoreCase)
+                             || openingVal.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                             || openingVal == "1";
+                if (guest.InvitedToOpeningCeremony != isInvited)
+                {
+                    guest.InvitedToOpeningCeremony = isInvited;
+                    changed = true;
+                }
+            }
+
+            // "Hotel" — text tag, displayed as "Old Hotel"
+            if (tags.TryGetValue("Hotel", out var hotelVal))
+            {
+                var hotelStr = string.IsNullOrWhiteSpace(hotelVal) ? null : hotelVal.Trim();
+                if (guest.OldHotel != hotelStr)
+                {
+                    guest.OldHotel = hotelStr;
+                    changed = true;
+                }
+            }
+
+            if (changed) updated++;
         }
-        // Test 1: marketingRecords with name and value scalars only (no object sub-selections)
-        var q1 = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName marketingRecords {{ id name value type }} }} }} }}";
-        var r1 = await RunQuery(q1);
-        // Test 2: marketingRecords with group sub-object to get the group name
-        var q2 = $"{{ event(id: \"{config.EventCode}\") {{ contact(id: \"{contactId}\") {{ id firstName lastName marketingRecords {{ id name value group {{ id name }} }} }} }} }}";
-        var r2 = await RunQuery(q2);
-        // Test 3: introspect EventMarketingTag type to understand its fields
-        var q3 = "{ __type(name: \"EventMarketingTag\") { fields { name type { name kind ofType { name kind } } } } }";
-        var r3 = await RunQuery(q3);
-        // Test 4: Try fetching the two specific GUIDs via FetchCustomFieldValuesAsync (same as VehicleType)
-        const string loMobileGuid = "06dbb8f8-373a-26a3-7f3d-3a1d4e2e1dcb";
-        const string loNameGuid   = "7bd3e8a2-f62e-e2a9-7e9a-3a1d4e2e1ddb";
-        var loMobileValues = await Application.Common.Models.EventsAirSyncHelpers.FetchCustomFieldValuesAsync(
-            config.ApiBaseUrl, config.EventCode, token, loMobileGuid,
-            new[] { contactId }, _httpClientFactory, cancellationToken);
-        var loNameValues = await Application.Common.Models.EventsAirSyncHelpers.FetchCustomFieldValuesAsync(
-            config.ApiBaseUrl, config.EventCode, token, loNameGuid,
-            new[] { contactId }, _httpClientFactory, cancellationToken);
+
+        await _appDb.SaveChangesAsync(cancellationToken);
+
         return Ok(new
         {
-            contactId,
-            test1_marketingTags = r1,
-            test2_marketing = r2,
-            test3_imports = r3,
-            test4_loMobileViaCustomFields = loMobileValues.TryGetValue(contactId, out var mv) ? mv : "(not found)",
-            test4_loNameViaCustomFields   = loNameValues.TryGetValue(contactId, out var nv) ? nv : "(not found)"
+            success = true,
+            updated,
+            total = guests.Count,
+            fetched = marketingTags.Count,
+            message = $"Marketing tags synced. {updated} guest(s) updated out of {guests.Count} active."
         });
     }
 }
