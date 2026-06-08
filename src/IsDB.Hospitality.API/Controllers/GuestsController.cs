@@ -1261,7 +1261,8 @@ public class GuestsController : ApiControllerBase
         return Ok(new { message = $"Inbound status updated to '{statusLabel}'." });
     }
 
-    /// <summary>Undo the last inbound status change (if allowed by role and no subsequent changes).</summary>
+    /// <summary>Undo the last inbound status change (Admin only).</summary>
+    [Authorize(Roles = "Admin")]
     [HttpPost("{id:guid}/inbound-status/undo")]
     public async Task<IActionResult> UndoInboundStatus(
         Guid id,
@@ -1316,6 +1317,13 @@ public class GuestsController : ApiControllerBase
             guest.InboundStatus = previousEntry != null
                 ? (InboundStatus)previousEntry.StatusValue
                 : InboundStatus.ArrivalScheduled;
+        }
+
+        // Clear hotel info when cancelling a check-in
+        if (lastEntry.StatusValue == (int)InboundStatus.AtHotel)
+        {
+            guest.HotelName = null;
+            guest.RoomNumber = null;
         }
 
         await db.SaveChangesAsync(ct);
