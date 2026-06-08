@@ -71,7 +71,7 @@ public static class EventsAirSyncHelpers
                   primaryAddress {{ country }}
                   photo {{ url }}
                   customFields {{ definitionId value }}
-                  registrations {{ type {{ id name }} }}
+                  registrations {{ type {{ id name }} paymentDetails {{ paymentStatus }} }}
                 }}
               }}
             }}";
@@ -128,18 +128,32 @@ public static class EventsAirSyncHelpers
                 }
 
                 string regTypeId = "", regTypeName = "";
+                bool allCanceled = true;
                 if (contact.TryGetProperty("registrations", out var regsEl) && regsEl.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var reg in regsEl.EnumerateArray())
                     {
-                        if (reg.TryGetProperty("type", out var typeEl) && typeEl.ValueKind == JsonValueKind.Object)
+                        // Skip registrations with paymentStatus == CANCELED
+                        if (reg.TryGetProperty("paymentDetails", out var pdEl) &&
+                            pdEl.TryGetProperty("paymentStatus", out var psEl) &&
+                            psEl.GetString()?.Equals("CANCELED", StringComparison.OrdinalIgnoreCase) == true)
+                            continue;
+
+                        allCanceled = false;
+                        if (string.IsNullOrEmpty(regTypeId) && reg.TryGetProperty("type", out var typeEl) && typeEl.ValueKind == JsonValueKind.Object)
                         {
                             regTypeId = typeEl.TryGetProperty("id", out var tidEl) ? tidEl.GetString() ?? "" : "";
                             regTypeName = typeEl.TryGetProperty("name", out var tn) ? tn.GetString() ?? "" : "";
-                            break;
                         }
                     }
                 }
+                else
+                {
+                    allCanceled = false;
+                }
+
+                // If all registrations are CANCELED, exclude this contact from the sync
+                if (allCanceled) continue;
 
                 string? country = null;
                 if (contact.TryGetProperty("primaryAddress", out var addrEl) && addrEl.ValueKind == JsonValueKind.Object)
@@ -195,6 +209,7 @@ public static class EventsAirSyncHelpers
                 contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{dedicatedCarGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
                   id firstName lastName title jobTitle organizationName primaryEmail
                   primaryAddress {{ country }}
+                  registrations {{ paymentDetails {{ paymentStatus }} }}
                 }}
               }}
             }}";
@@ -222,6 +237,22 @@ public static class EventsAirSyncHelpers
                 pageCount++;
                 var contactId = contact.TryGetProperty("id", out var cidEl) ? cidEl.GetString() ?? "" : "";
                 if (string.IsNullOrEmpty(contactId) || !seenContactIds.Add(contactId)) continue;
+
+                // Exclude contacts whose registrations are all CANCELED
+                if (contact.TryGetProperty("registrations", out var regsElLight) && regsElLight.ValueKind == JsonValueKind.Array)
+                {
+                    bool allCanceledLight = true;
+                    foreach (var reg in regsElLight.EnumerateArray())
+                    {
+                        if (reg.TryGetProperty("paymentDetails", out var pdElLight) &&
+                            pdElLight.TryGetProperty("paymentStatus", out var psElLight) &&
+                            psElLight.GetString()?.Equals("CANCELED", StringComparison.OrdinalIgnoreCase) == true)
+                            continue;
+                        allCanceledLight = false;
+                        break;
+                    }
+                    if (allCanceledLight) continue;
+                }
 
                 string? country = null;
                 if (contact.TryGetProperty("primaryAddress", out var addrEl) && addrEl.ValueKind == JsonValueKind.Object)
