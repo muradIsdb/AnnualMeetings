@@ -1307,6 +1307,34 @@ public class EventsAirController : ApiControllerBase
         });
     }
 
+    // GET /api/eventsair/debug-dedicated-car-contacts
+    // Returns the first 10 contacts fetched with DedicatedCar=True and checks if a specific contactId is included
+    [HttpGet("debug-dedicated-car-contacts")]
+    public async Task<IActionResult> DebugDedicatedCarContacts([FromQuery] string? checkContactId, CancellationToken cancellationToken)
+    {
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive || string.IsNullOrWhiteSpace(config.ClientId))
+            return BadRequest(new { message = "EventsAir integration is not configured or inactive." });
+
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+
+        var contacts = await Application.Common.Models.EventsAirSyncHelpers.FetchContactsWithDedicatedCarAsync(
+            config.ApiBaseUrl, config.EventCode, token, _httpClientFactory, cancellationToken);
+
+        var first10 = contacts.Take(10).Select(c => new { c.ContactId, c.FirstName, c.LastName, c.RegistrationTypeName }).ToList();
+        bool? isIncluded = string.IsNullOrWhiteSpace(checkContactId) ? null
+            : contacts.Any(c => c.ContactId.Equals(checkContactId, StringComparison.OrdinalIgnoreCase));
+
+        return Ok(new
+        {
+            totalFetched = contacts.Count,
+            first10,
+            checkContactId,
+            isIncluded
+        });
+    }
+
     // POST /api/eventsair/sync-marketing-tags
     // Fetches marketing tag values from EventsAir for all active guests and updates
     // InvitedToOpeningCeremony and OldHotel fields.
