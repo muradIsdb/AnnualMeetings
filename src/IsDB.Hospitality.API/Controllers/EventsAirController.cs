@@ -1185,4 +1185,325 @@ public class EventsAirController : ApiControllerBase
             return StatusCode(500, new { success = false, error = ex.Message });
         }
     }
+
+
+    // GET /api/eventsair/debug-contact-details?contactId=...
+    // Returns a specific contact's DedicatedCar custom field value and all registrations with paymentStatus
+    [HttpGet("debug-contact-details")]
+    public async Task<IActionResult> DebugContactDetails([FromQuery] string contactId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(contactId))
+            return BadRequest(new { message = "contactId is required." });
+
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive || string.IsNullOrWhiteSpace(config.ClientId))
+            return BadRequest(new { message = "EventsAir integration is not configured or inactive." });
+
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+
+        // Load DedicatedCar GUID from DB field mappings
+        const string defaultDedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
+        var fieldMappings = await _db.SyncFieldMappings
+            .Where(f => f.EventCode == null || f.EventCode == config.EventCode)
+            .ToListAsync(cancellationToken);
+        var dedicatedCarGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase) && f.EventCode == config.EventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Dedicated Car", StringComparison.OrdinalIgnoreCase)))
+            ?.EventsAirFieldGuid ?? defaultDedicatedCarGuid;
+
+        var graphqlQuery = $@"{{
+          event(id: ""{config.EventCode}"") {{
+            contact(id: ""{contactId}"") {{
+              id firstName lastName
+              customFields {{ definitionId value }}
+              registrations {{
+                id
+                type {{ id name }}
+                paymentDetails {{ paymentStatus }}
+              }}
+            }}
+          }}
+        }}";
+
+        var client = _httpClientFactory.CreateClient();
+        var req = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
+        {
+            Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
+            Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { query = graphqlQuery }),
+                System.Text.Encoding.UTF8, "application/json")
+        };
+        var response = await client.SendAsync(req, cancellationToken);
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        var doc = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
+
+        var contact = doc.GetProperty("data").GetProperty("event").GetProperty("contact");
+        if (contact.ValueKind == System.Text.Json.JsonValueKind.Null)
+            return NotFound(new { message = $"Contact {contactId} not found in EventsAir." });
+
+        // Extract DedicatedCar value
+        string? dedicatedCarValue = null;
+        if (contact.TryGetProperty("customFields", out var cfArr) && cfArr.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var cf in cfArr.EnumerateArray())
+            {
+                if (cf.TryGetProperty("definitionId", out var did) &&
+                    did.GetString()?.Equals(dedicatedCarGuid, StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    dedicatedCarValue = cf.TryGetProperty("value", out var v)
+                        ? (v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : v.GetRawText())
+                        : null;
+                    break;
+                }
+            }
+        }
+
+        // Extract registrations
+        var registrations = new List<object>();
+        if (contact.TryGetProperty("registrations", out var regsArr) && regsArr.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var reg in regsArr.EnumerateArray())
+            {
+                var regType = reg.TryGetProperty("type", out var t) ? t : default;
+                var pd = reg.TryGetProperty("paymentDetails", out var p) ? p : default;
+                registrations.Add(new
+                {
+                    id = reg.TryGetProperty("id", out var rid) ? rid.GetString() : null,
+                    typeName = regType.ValueKind != System.Text.Json.JsonValueKind.Undefined && regType.TryGetProperty("name", out var tn) ? tn.GetString() : null,
+                    paymentStatus = pd.ValueKind != System.Text.Json.JsonValueKind.Undefined && pd.TryGetProperty("paymentStatus", out var ps) ? ps.GetString() : null
+                });
+            }
+        }
+
+        return Ok(new
+        {
+            contactId,
+            firstName = contact.TryGetProperty("firstName", out var fn) ? fn.GetString() : null,
+            lastName = contact.TryGetProperty("lastName", out var ln) ? ln.GetString() : null,
+            dedicatedCarGuid,
+            dedicatedCarValue,
+            registrations
+        });
+    }
+
+    // POST /api/eventsair/sync-marketing-tags
+    // Fetches marketing tag values from EventsAir for all active guests and updates
+    // InvitedToOpeningCeremony and OldHotel fields.
+    [HttpPost("sync-marketing-tags")]
+    public async Task<IActionResult> SyncMarketingTags(CancellationToken cancellationToken)
+    {
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive || string.IsNullOrWhiteSpace(config.ClientId))
+            return BadRequest(new { message = "EventsAir integration is not configured or inactive." });
+
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+
+        // Load all active guests
+        var guests = await _appDb.Guests
+            .Where(g => g.IsActive && !string.IsNullOrEmpty(g.EventsAirContactId))
+            .ToListAsync(cancellationToken);
+
+        if (guests.Count == 0)
+            return Ok(new { success = true, updated = 0, message = "No active guests found." });
+
+        var contactIds = guests.Select(g => g.EventsAirContactId).Distinct().ToList();
+
+        // Fetch marketing tags for all contacts
+        var marketingTags = await Application.Common.Models.EventsAirSyncHelpers.FetchMarketingTagsAsync(
+            config.ApiBaseUrl, config.EventCode, token,
+            contactIds, _httpClientFactory, cancellationToken);
+
+        int updated = 0;
+        foreach (var guest in guests)
+        {
+            if (!marketingTags.TryGetValue(guest.EventsAirContactId, out var tags))
+                continue;
+
+            bool changed = false;
+
+            // "Invited to attend the opening ceremony" — boolean tag (value is "true"/"false" or "Yes"/"No")
+            if (tags.TryGetValue("Invited to attend the opening ceremony", out var openingVal))
+            {
+                var isInvited = openingVal.Equals("true", StringComparison.OrdinalIgnoreCase)
+                             || openingVal.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                             || openingVal == "1";
+                if (guest.InvitedToOpeningCeremony != isInvited)
+                {
+                    guest.InvitedToOpeningCeremony = isInvited;
+                    changed = true;
+                }
+            }
+
+            // "Hotel" — text tag, displayed as "Old Hotel"
+            if (tags.TryGetValue("Hotel", out var hotelVal))
+            {
+                var hotelStr = string.IsNullOrWhiteSpace(hotelVal) ? null : hotelVal.Trim();
+                if (guest.OldHotel != hotelStr)
+                {
+                    guest.OldHotel = hotelStr;
+                    changed = true;
+                }
+            }
+
+            // "Driver Name" — LO name tag
+            if (tags.TryGetValue("Driver Name", out var driverNameVal))
+            {
+                var nameStr = string.IsNullOrWhiteSpace(driverNameVal) ? null : driverNameVal.Trim();
+                if (guest.LiaisonOfficerName != nameStr)
+                {
+                    guest.LiaisonOfficerName = nameStr;
+                    changed = true;
+                }
+            }
+
+            // "Car number" — LO car plate tag
+            if (tags.TryGetValue("Car number", out var carNumberVal))
+            {
+                var carStr = string.IsNullOrWhiteSpace(carNumberVal) ? null : carNumberVal.Trim();
+                if (guest.LiaisonOfficerCarNumber != carStr)
+                {
+                    guest.LiaisonOfficerCarNumber = carStr;
+                    changed = true;
+                }
+            }
+
+            if (changed) updated++;
+        }
+
+        await _appDb.SaveChangesAsync(cancellationToken);
+
+        return Ok(new
+        {
+            success = true,
+            updated,
+            total = guests.Count,
+            fetched = marketingTags.Count,
+            message = $"Marketing tags synced. {updated} guest(s) updated out of {guests.Count} active."
+        });
+    }
+
+    // POST /api/eventsair/deactivate-canceled-guests
+    // One-time retroactive cleanup: deactivates all active guests whose EventsAir
+    // registrations are ALL CANCELED. Guests with no registrations or mixed statuses are NOT touched.
+    [HttpPost("deactivate-canceled-guests")]
+    public async Task<IActionResult> DeactivateCanceledGuests(CancellationToken cancellationToken)
+    {
+        var config = await _db.EventsAirConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config == null || !config.IsActive || string.IsNullOrWhiteSpace(config.ClientId))
+            return BadRequest(new { message = "EventsAir integration is not configured or inactive." });
+
+        var token = await Application.Common.Models.EventsAirSyncHelpers.GetEventsAirTokenAsync(
+            config.ClientId, config.ClientSecret, _httpClientFactory, await GetOAuthScopeAsync());
+
+        // Load all active guests that have an EventsAirContactId
+        var activeGuests = await _appDb.Guests
+            .Where(g => g.IsActive && !string.IsNullOrEmpty(g.EventsAirContactId))
+            .ToListAsync(cancellationToken);
+
+        if (activeGuests.Count == 0)
+            return Ok(new { success = true, checked_ = 0, deactivated = 0, message = "No active guests with EventsAirContactId found.", guests = new List<object>() });
+
+        var deactivatedGuests = new List<object>();
+        var httpClient = _httpClientFactory.CreateClient();
+        httpClient.Timeout = TimeSpan.FromMinutes(5);
+
+        // Process in batches of 15 — EventsAir enforces a maximum of 15 aliases per GraphQL query
+        const int batchSize = 15;
+        var contactIds = activeGuests.Select(g => g.EventsAirContactId).Distinct().ToList();
+
+        // Build a map: contactId -> paymentStatuses
+        var canceledContactIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < contactIds.Count; i += batchSize)
+        {
+            var batch = contactIds.Skip(i).Take(batchSize).ToList();
+
+            // Build a GraphQL query that fetches each contact's registrations with paymentStatus
+            // We use aliases to fetch multiple contacts in one query
+            var contactQueries = string.Join("\n", batch.Select((id, idx) =>
+                $"c{idx}: contact(id: \"{id}\") {{ id registrations {{ paymentDetails {{ paymentStatus }} }} }}"));
+
+            var graphqlQuery = $@"{{
+              event(id: ""{config.EventCode}"") {{
+                {contactQueries}
+              }}
+            }}";
+
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{config.ApiBaseUrl.TrimEnd('/')}/graphql")
+            {
+                Headers = { Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token) },
+                Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { query = graphqlQuery }),
+                    System.Text.Encoding.UTF8, "application/json")
+            };
+
+            var response = await httpClient.SendAsync(req, cancellationToken);
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var doc = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
+
+            if (doc.TryGetProperty("errors", out var errs) && errs.GetArrayLength() > 0)
+            {
+                var errMsg = errs[0].GetProperty("message").GetString() ?? "Unknown error";
+                return StatusCode(500, new { message = $"EventsAir GraphQL error: {errMsg}" });
+            }
+
+            var eventEl = doc.GetProperty("data").GetProperty("event");
+
+            for (int idx = 0; idx < batch.Count; idx++)
+            {
+                var contactId = batch[idx];
+                if (!eventEl.TryGetProperty($"c{idx}", out var contactEl) ||
+                    contactEl.ValueKind == System.Text.Json.JsonValueKind.Null)
+                    continue;
+
+                if (!contactEl.TryGetProperty("registrations", out var regsEl) ||
+                    regsEl.ValueKind != System.Text.Json.JsonValueKind.Array)
+                    continue;
+
+                int totalRegs = 0, canceledRegs = 0;
+                foreach (var reg in regsEl.EnumerateArray())
+                {
+                    totalRegs++;
+                    if (reg.TryGetProperty("paymentDetails", out var pd) &&
+                        pd.TryGetProperty("paymentStatus", out var ps) &&
+                        ps.GetString()?.Equals("CANCELED", StringComparison.OrdinalIgnoreCase) == true)
+                        canceledRegs++;
+                }
+
+                // Only deactivate if there is at least one registration AND all are CANCELED
+                if (totalRegs > 0 && canceledRegs == totalRegs)
+                    canceledContactIds.Add(contactId);
+            }
+        }
+
+        // Deactivate the identified guests
+        int deactivated = 0;
+        foreach (var guest in activeGuests)
+        {
+            if (!canceledContactIds.Contains(guest.EventsAirContactId))
+                continue;
+
+            guest.IsActive = false;
+            deactivated++;
+            deactivatedGuests.Add(new
+            {
+                guestId = guest.Id,
+                fullName = $"{guest.Title} {guest.FirstName} {guest.LastName}".Trim(),
+                eventsAirContactId = guest.EventsAirContactId
+            });
+        }
+
+        if (deactivated > 0)
+            await _appDb.SaveChangesAsync(cancellationToken);
+
+        return Ok(new
+        {
+            success = true,
+            checked_ = activeGuests.Count,
+            deactivated,
+            message = $"Checked {activeGuests.Count} active guests. Deactivated {deactivated} with all-CANCELED registrations.",
+            guests = deactivatedGuests
+        });
+    }
 }

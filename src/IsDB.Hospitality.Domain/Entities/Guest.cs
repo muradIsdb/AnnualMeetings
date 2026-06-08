@@ -62,6 +62,36 @@ public class Guest : BaseEntity
     public string? VehicleTypeValue { get; set; }
     public string? DedicatedCar { get; set; }
 
+    /// <summary>
+    /// Whether this guest is entitled to a dedicated liaison officer.
+    /// Populated from EventsAir custom field f4d27526-7af9-5ed4-ebe1-3a1d4e2e471d (checkbox).
+    /// </summary>
+    public bool? LiaisonOfficer { get; set; }
+
+    /// <summary>
+    /// Whether this guest is invited to attend the opening ceremony.
+    /// Populated from EventsAir marketing tag "Invited to attend the opening ceremony".
+    /// </summary>
+    public bool? InvitedToOpeningCeremony { get; set; }
+
+    /// <summary>
+    /// The hotel name from EventsAir marketing tag "Hotel" (displayed as "Old Hotel").
+    /// Populated during Sync Marketing Tags.
+    /// </summary>
+    public string? OldHotel { get; set; }
+
+    /// <summary>
+    /// The liaison officer's name from EventsAir marketing tag "Driver Name".
+    /// Populated during Sync Marketing Tags.
+    /// </summary>
+    public string? LiaisonOfficerName { get; set; }
+
+    /// <summary>
+    /// The liaison officer's car number from EventsAir marketing tag "Car number".
+    /// Populated during Sync Marketing Tags.
+    /// </summary>
+    public string? LiaisonOfficerCarNumber { get; set; }
+
     // Navigation properties
     public ICollection<TravelBooking> TravelBookings { get; set; } = new List<TravelBooking>();
     public ICollection<ChecklistCompletion> ChecklistCompletions { get; set; } = new List<ChecklistCompletion>();

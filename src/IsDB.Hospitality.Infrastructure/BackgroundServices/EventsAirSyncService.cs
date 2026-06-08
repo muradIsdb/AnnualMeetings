@@ -194,6 +194,7 @@ public class EventsAirSyncService : BackgroundService
             // Load field GUIDs from DB filtered by active event code
             const string defaultDedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
             const string defaultRankGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+            const string defaultLiaisonOfficerGuid = "f4d27526-7af9-5ed4-ebe1-3a1d4e2e471d";
             var fieldMappings = await db.SyncFieldMappings
                 .Where(f => f.EventCode == null || f.EventCode == eventCode)
                 .ToListAsync(cancellationToken);
@@ -207,8 +208,13 @@ public class EventsAirSyncService : BackgroundService
                 ?? fieldMappings.FirstOrDefault(f =>
                     f.DisplayName.Equals("Rank", StringComparison.OrdinalIgnoreCase)))
                 ?.EventsAirFieldGuid ?? defaultRankGuid;
-            _logger.LogInformation("EventsAir background sync using DedicatedCar GUID={DedicatedCarGuid}, Rank GUID={RankGuid} for event {EventCode}.",
-                dedicatedCarGuid, rankGuid, eventCode);
+            var liaisonOfficerGuid = (fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Liaison Officer", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+                ?? fieldMappings.FirstOrDefault(f =>
+                    f.DisplayName.Equals("Liaison Officer", StringComparison.OrdinalIgnoreCase)))
+                ?.EventsAirFieldGuid ?? defaultLiaisonOfficerGuid;
+            _logger.LogInformation("EventsAir background sync using DedicatedCar GUID={DedicatedCarGuid}, Rank GUID={RankGuid}, LiaisonOfficer GUID={LiaisonOfficerGuid} for event {EventCode}.",
+                dedicatedCarGuid, rankGuid, liaisonOfficerGuid, eventCode);
             var contacts = await EventsAirSyncHelpers.FetchContactsWithDedicatedCarAsync(
                 apiBaseUrl, eventCode, token, httpClientFactory, cancellationToken, dedicatedCarGuid, rankGuid);
 
@@ -216,13 +222,25 @@ public class EventsAirSyncService : BackgroundService
 
             var syncedContactIds = new HashSet<string>(contacts.Select(c => c.ContactId), StringComparer.OrdinalIgnoreCase);
 
+            // ── Fetch LiaisonOfficer boolean values for all synced contacts ──
+            Dictionary<string, string> liaisonOfficerValues = new(StringComparer.OrdinalIgnoreCase);
+            if (contacts.Count > 0)
+            {
+                liaisonOfficerValues = await EventsAirSyncHelpers.FetchCustomFieldValuesAsync(
+                    apiBaseUrl, eventCode, token, liaisonOfficerGuid,
+                    contacts.Select(c => c.ContactId), httpClientFactory, cancellationToken);
+            }
+
             // ── Bulk-load ALL guests keyed by EventsAirContactId (eliminates N per-contact SELECT) ──
             var existingGuestsByContactId = await db.Guests
                 .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
             // ── Bulk-load CarClasses by Name for DeservedCarClassId resolution ──
-            var carClassesByName = await db.CarClasses
-                .ToDictionaryAsync(c => c.Name, StringComparer.OrdinalIgnoreCase, cancellationToken);
+            // Use GroupBy + First() to safely handle duplicate names in the database
+            var carClassesByName = (await db.CarClasses
+                .ToListAsync(cancellationToken))
+                .GroupBy(c => c.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
             // ── Pre-load open alert guest IDs for deduplication (Pass 1 & 2) ──
             var openAlertsBg = await db.SyncAlerts
@@ -256,6 +274,9 @@ public class EventsAirSyncService : BackgroundService
                         RegistrationTypeId = contact.RegistrationTypeId,
                         RegistrationTypeName = contact.RegistrationTypeName,
                         DedicatedCar = "True",
+                        LiaisonOfficer = liaisonOfficerValues.TryGetValue(contact.ContactId, out var loNew)
+                            ? (loNew.Equals("true", StringComparison.OrdinalIgnoreCase) || loNew.Equals("True", StringComparison.OrdinalIgnoreCase))
+                            : (bool?)null,
                         RankValue = contact.RankValue,
                         VehicleTypeValue = contact.VehicleTypeValue,
                         DeservedCarClassId = (!string.IsNullOrWhiteSpace(contact.VehicleTypeValue) && carClassesByName.TryGetValue(contact.VehicleTypeValue.Trim(), out var newGuestClass)) ? newGuestClass.Id : (Guid?)null,
@@ -306,6 +327,10 @@ public class EventsAirSyncService : BackgroundService
                     var resolvedBgCarClassId = (!string.IsNullOrWhiteSpace(contact.VehicleTypeValue) && carClassesByName.TryGetValue(contact.VehicleTypeValue.Trim(), out var bgClass)) ? bgClass.Id : (Guid?)null;
                     if (existing.DeservedCarClassId != resolvedBgCarClassId) { existing.DeservedCarClassId = resolvedBgCarClassId; changed = true; }
                     if (existing.DedicatedCar != "True") { existing.DedicatedCar = "True"; changed = true; }
+                    var newLiaisonOfficer = liaisonOfficerValues.TryGetValue(contact.ContactId, out var loExisting)
+                        ? (loExisting.Equals("true", StringComparison.OrdinalIgnoreCase) || loExisting.Equals("True", StringComparison.OrdinalIgnoreCase))
+                        : (bool?)null;
+                    if (existing.LiaisonOfficer != newLiaisonOfficer) { existing.LiaisonOfficer = newLiaisonOfficer; changed = true; }
                     if (!existing.IsActive) { existing.IsActive = true; changed = true; }
                     if (changed) { existing.LastSyncedAt = DateTime.UtcNow; updated++; }
                 }

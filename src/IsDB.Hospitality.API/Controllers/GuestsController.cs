@@ -27,6 +27,7 @@ public class GuestsController : ApiControllerBase
     // Well-known custom field GUIDs
     private const string DEDICATED_CAR_FIELD_GUID = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
     private const string RANK_FIELD_GUID = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
+    private const string LIAISON_OFFICER_FIELD_GUID = "f4d27526-7af9-5ed4-ebe1-3a1d4e2e471d";
 
     [HttpGet("arrival-flights")]
     public async Task<ActionResult<List<ArrivalFlightGroupDto>>> GetArrivalFlights(
@@ -232,6 +233,11 @@ public class GuestsController : ApiControllerBase
             ?? fieldMappings.FirstOrDefault(f =>
                 f.DisplayName.Equals("Vehicle Types", StringComparison.OrdinalIgnoreCase)))
             ?.EventsAirFieldGuid ?? VEHICLE_TYPE_FIELD_GUID;
+        var liaisonOfficerGuid = (fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Liaison Officer", StringComparison.OrdinalIgnoreCase) && f.EventCode == eventCode)
+            ?? fieldMappings.FirstOrDefault(f =>
+                f.DisplayName.Equals("Liaison Officer", StringComparison.OrdinalIgnoreCase)))
+            ?.EventsAirFieldGuid ?? LIAISON_OFFICER_FIELD_GUID;
 
         // Capture caller identity before entering the background Task (HttpContext not available inside)
         var callerStaffIdClaim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -260,6 +266,16 @@ public class GuestsController : ApiControllerBase
                 var bgDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 int added = 0, updated = 0, deactivated = 0;
                  var syncedContactIds = new HashSet<string>(contacts.Select(c => c.ContactId), StringComparer.OrdinalIgnoreCase);
+
+                // ── Fetch LiaisonOfficer boolean values for all synced contacts ──
+                Dictionary<string, string> liaisonOfficerValues = new(StringComparer.OrdinalIgnoreCase);
+                if (contacts.Count > 0)
+                {
+                    liaisonOfficerValues = await Application.Common.Models.EventsAirSyncHelpers.FetchCustomFieldValuesAsync(
+                        apiBaseUrl, eventCode, token, liaisonOfficerGuid,
+                        contacts.Select(c => c.ContactId), httpClientFactory, CancellationToken.None);
+                    Console.WriteLine($"[SYNC] LiaisonOfficer values fetched: {liaisonOfficerValues.Count} contacts have a value.");
+                }
 
                 // ── Bulk-load ALL guests keyed by EventsAirContactId (eliminates N per-contact SELECT) ──
                 var existingGuestsByContactId = await bgDb.Guests
@@ -325,6 +341,9 @@ public class GuestsController : ApiControllerBase
                             RegistrationTypeId = contact.RegistrationTypeId,
                             RegistrationTypeName = contact.RegistrationTypeName,
                             DedicatedCar = "True",
+                            LiaisonOfficer = liaisonOfficerValues.TryGetValue(contact.ContactId, out var loNew)
+                                ? (loNew.Equals("true", StringComparison.OrdinalIgnoreCase) || loNew.Equals("True", StringComparison.OrdinalIgnoreCase))
+                                : (bool?)null,
                             RankValue = contact.RankValue,
                             VehicleTypeValue = contact.VehicleTypeValue,
                             DeservedCarClassId = resolvedCarClassId,
@@ -375,6 +394,10 @@ public class GuestsController : ApiControllerBase
                         // Always overwrite DeservedCarClassId from VehicleTypeValue on every sync
                         if (existing.DeservedCarClassId != resolvedCarClassId) { existing.DeservedCarClassId = resolvedCarClassId; changed = true; }
                         if (existing.DedicatedCar != "True") { existing.DedicatedCar = "True"; changed = true; }
+                        var newLiaisonOfficer = liaisonOfficerValues.TryGetValue(contact.ContactId, out var loExisting)
+                            ? (loExisting.Equals("true", StringComparison.OrdinalIgnoreCase) || loExisting.Equals("True", StringComparison.OrdinalIgnoreCase))
+                            : (bool?)null;
+                        if (existing.LiaisonOfficer != newLiaisonOfficer) { existing.LiaisonOfficer = newLiaisonOfficer; changed = true; }
                         if (!existing.IsActive) { existing.IsActive = true; changed = true; }
                         // Stamp EventCode if not already set or if it differs from the active event
                         if (existing.EventCode != eventCode) { existing.EventCode = eventCode; changed = true; }
@@ -1261,7 +1284,8 @@ public class GuestsController : ApiControllerBase
         return Ok(new { message = $"Inbound status updated to '{statusLabel}'." });
     }
 
-    /// <summary>Undo the last inbound status change (if allowed by role and no subsequent changes).</summary>
+    /// <summary>Undo the last inbound status change (Admin only).</summary>
+    [Authorize(Roles = "Admin")]
     [HttpPost("{id:guid}/inbound-status/undo")]
     public async Task<IActionResult> UndoInboundStatus(
         Guid id,
@@ -1316,6 +1340,13 @@ public class GuestsController : ApiControllerBase
             guest.InboundStatus = previousEntry != null
                 ? (InboundStatus)previousEntry.StatusValue
                 : InboundStatus.ArrivalScheduled;
+        }
+
+        // Clear hotel info when cancelling a check-in
+        if (lastEntry.StatusValue == (int)InboundStatus.AtHotel)
+        {
+            guest.HotelName = null;
+            guest.RoomNumber = null;
         }
 
         await db.SaveChangesAsync(ct);

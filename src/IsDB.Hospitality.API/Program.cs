@@ -186,6 +186,73 @@ using (var scope = app.Services.CreateScope())
         ");
         logger.LogInformation("VehicleTypeValue column pre-check complete.");
 
+        // ALWAYS ensure LiaisonOfficer column exists on Guests — runs for ALL database paths.
+        // This column was added in migration 20260608100000_AddLiaisonOfficerToGuest but legacy
+        // production databases skip MigrateAsync() and need this explicit pre-check.
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Guests' AND column_name = 'LiaisonOfficer'
+                ) THEN
+                    ALTER TABLE ""Guests"" ADD COLUMN ""LiaisonOfficer"" boolean NULL;
+                END IF;
+            END $$;
+        ");
+        logger.LogInformation("LiaisonOfficer column pre-check complete.");
+
+        // ALWAYS ensure InvitedToOpeningCeremony column exists on Guests — runs for ALL database paths.
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Guests' AND column_name = 'InvitedToOpeningCeremony'
+                ) THEN
+                    ALTER TABLE ""Guests"" ADD COLUMN ""InvitedToOpeningCeremony"" boolean NULL;
+                END IF;
+            END $$;
+        ");
+        logger.LogInformation("InvitedToOpeningCeremony column pre-check complete.");
+
+        // ALWAYS ensure OldHotel column exists on Guests — runs for ALL database paths.
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Guests' AND column_name = 'OldHotel'
+                ) THEN
+                    ALTER TABLE ""Guests"" ADD COLUMN ""OldHotel"" text NULL;
+                END IF;
+            END $$;
+        ");
+        logger.LogInformation("OldHotel column pre-check complete.");
+
+        // ALWAYS ensure LiaisonOfficerName column exists on Guests — runs for ALL database paths.
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Guests' AND column_name = 'LiaisonOfficerName'
+                ) THEN
+                    ALTER TABLE ""Guests"" ADD COLUMN ""LiaisonOfficerName"" text NULL;
+                END IF;
+            END $$;
+        ");
+        logger.LogInformation("LiaisonOfficerName column pre-check complete.");
+
+        // ALWAYS ensure LiaisonOfficerCarNumber column exists on Guests — runs for ALL database paths.
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Guests' AND column_name = 'LiaisonOfficerCarNumber'
+                ) THEN
+                    ALTER TABLE ""Guests"" ADD COLUMN ""LiaisonOfficerCarNumber"" text NULL;
+                END IF;
+            END $$;
+        ");
+        logger.LogInformation("LiaisonOfficerCarNumber column pre-check complete.");
+
         if (isFreshDatabase || isEfCoreCreatedDb)
         {
             // Fresh or EF Core-managed database: run MigrateAsync() directly.

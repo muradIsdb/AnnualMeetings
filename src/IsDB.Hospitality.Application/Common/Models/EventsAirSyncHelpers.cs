@@ -71,7 +71,7 @@ public static class EventsAirSyncHelpers
                   primaryAddress {{ country }}
                   photo {{ url }}
                   customFields {{ definitionId value }}
-                  registrations {{ type {{ id name }} }}
+                  registrations {{ type {{ id name }} paymentDetails {{ paymentStatus }} }}
                 }}
               }}
             }}";
@@ -130,15 +130,28 @@ public static class EventsAirSyncHelpers
                 string regTypeId = "", regTypeName = "";
                 if (contact.TryGetProperty("registrations", out var regsEl) && regsEl.ValueKind == JsonValueKind.Array)
                 {
+                    int totalRegs = 0;
+                    int canceledRegs = 0;
                     foreach (var reg in regsEl.EnumerateArray())
                     {
-                        if (reg.TryGetProperty("type", out var typeEl) && typeEl.ValueKind == JsonValueKind.Object)
+                        totalRegs++;
+                        // Check if this registration is CANCELED
+                        if (reg.TryGetProperty("paymentDetails", out var pdEl) &&
+                            pdEl.TryGetProperty("paymentStatus", out var psEl) &&
+                            psEl.GetString()?.Equals("CANCELED", StringComparison.OrdinalIgnoreCase) == true)
+                        {
+                            canceledRegs++;
+                            continue;
+                        }
+                        // Non-canceled registration — use its type if not yet set
+                        if (string.IsNullOrEmpty(regTypeId) && reg.TryGetProperty("type", out var typeEl) && typeEl.ValueKind == JsonValueKind.Object)
                         {
                             regTypeId = typeEl.TryGetProperty("id", out var tidEl) ? tidEl.GetString() ?? "" : "";
                             regTypeName = typeEl.TryGetProperty("name", out var tn) ? tn.GetString() ?? "" : "";
-                            break;
                         }
                     }
+                    // Exclude only if there is at least one registration AND all are CANCELED
+                    if (totalRegs > 0 && canceledRegs == totalRegs) continue;
                 }
 
                 string? country = null;
@@ -195,6 +208,7 @@ public static class EventsAirSyncHelpers
                 contacts(input: {{ contactFilter: {{ customFields: {{ checkboxCustomFieldFilters: [{{ definitionId: ""{dedicatedCarGuid}"", isChecked: true }}] }} }} }}, offset: {offset}, limit: {pageSize}) {{
                   id firstName lastName title jobTitle organizationName primaryEmail
                   primaryAddress {{ country }}
+                  registrations {{ paymentDetails {{ paymentStatus }} }}
                 }}
               }}
             }}";
@@ -222,6 +236,24 @@ public static class EventsAirSyncHelpers
                 pageCount++;
                 var contactId = contact.TryGetProperty("id", out var cidEl) ? cidEl.GetString() ?? "" : "";
                 if (string.IsNullOrEmpty(contactId) || !seenContactIds.Add(contactId)) continue;
+
+                // Exclude contacts whose registrations are all CANCELED
+                // (contacts with zero registrations are NOT excluded)
+                if (contact.TryGetProperty("registrations", out var regsElLight) && regsElLight.ValueKind == JsonValueKind.Array)
+                {
+                    int totalRegsLight = 0;
+                    int canceledRegsLight = 0;
+                    foreach (var reg in regsElLight.EnumerateArray())
+                    {
+                        totalRegsLight++;
+                        if (reg.TryGetProperty("paymentDetails", out var pdElLight) &&
+                            pdElLight.TryGetProperty("paymentStatus", out var psElLight) &&
+                            psElLight.GetString()?.Equals("CANCELED", StringComparison.OrdinalIgnoreCase) == true)
+                            canceledRegsLight++;
+                    }
+                    // Exclude only if there is at least one registration AND all are CANCELED
+                    if (totalRegsLight > 0 && canceledRegsLight == totalRegsLight) continue;
+                }
 
                 string? country = null;
                 if (contact.TryGetProperty("primaryAddress", out var addrEl) && addrEl.ValueKind == JsonValueKind.Object)
@@ -629,6 +661,84 @@ public static class EventsAirSyncHelpers
         }
 
         return new Dictionary<string, string>(result, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // ─── Fetch marketing tag values ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Fetches all marketing record values for a batch of contacts.
+    /// Returns a dictionary: ContactId -> (TagName -> Value).
+    /// </summary>
+    public static async Task<Dictionary<string, Dictionary<string, string>>> FetchMarketingTagsAsync(
+        string baseUrl, string eventCode, string accessToken,
+        IEnumerable<string> contactIds, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        var allContactIds = contactIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var client = httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromMinutes(5);
+        const int batchSize = 10;
+
+        for (int i = 0; i < allContactIds.Count; i += batchSize)
+        {
+            var batch = allContactIds.Skip(i).Take(batchSize).ToList();
+            // Build a single GraphQL query with one alias per contact using field aliases
+            var contactFragments = string.Join(" ",
+                batch.Select((id, idx) =>
+                    $"c{idx}: contact(id: \"{id}\") {{ id marketingRecords {{ id name value }} }}"));
+            var queryBody = JsonSerializer.Serialize(new
+            {
+                query = $"{{ event(id: \"{eventCode}\") {{ {contactFragments} }} }}"
+            });
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/graphql")
+            {
+                Headers = { Authorization = new AuthenticationHeaderValue("Bearer", accessToken) },
+                Content = new StringContent(queryBody, Encoding.UTF8, "application/json")
+            };
+            HttpResponseMessage response;
+            string json;
+            try
+            {
+                response = await client.SendAsync(req, cancellationToken);
+                json = await response.Content.ReadAsStringAsync(cancellationToken);
+            }
+            catch (Exception ex) { Console.WriteLine($"[MKTG-BATCH] HTTP exception for batch {i/batchSize}: {ex.Message}"); continue; }
+            if (!response.IsSuccessStatusCode) { Console.WriteLine($"[MKTG-BATCH] HTTP {(int)response.StatusCode} for batch {i/batchSize}: {json[..Math.Min(json.Length,300)]}"); continue; }
+            JsonElement doc;
+            try { doc = JsonSerializer.Deserialize<JsonElement>(json); }
+            catch (Exception ex) { Console.WriteLine($"[MKTG-BATCH] JSON parse error for batch {i/batchSize}: {ex.Message}"); continue; }
+            if (!doc.TryGetProperty("data", out var data) || !data.TryGetProperty("event", out var eventObj))
+            {
+                Console.WriteLine($"[MKTG-BATCH] No data.event for batch {i/batchSize}: {json[..Math.Min(json.Length,500)]}");
+                continue;
+            }
+            for (int idx = 0; idx < batch.Count; idx++)
+            {
+                var aliasKey = $"c{idx}";
+                var contactId = batch[idx];
+                if (!eventObj.TryGetProperty(aliasKey, out var contactObj) ||
+                    contactObj.ValueKind != JsonValueKind.Object) continue;
+                if (!contactObj.TryGetProperty("marketingRecords", out var records)) continue;
+                var tagDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var rec in records.EnumerateArray())
+                {
+                    var name = rec.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    string value = "";
+                    if (rec.TryGetProperty("value", out var v))
+                    {
+                        value = v.ValueKind == JsonValueKind.Number
+                            ? v.GetRawText()
+                            : v.ValueKind == JsonValueKind.Null ? ""
+                            : v.GetString() ?? "";
+                    }
+                    if (!string.IsNullOrEmpty(name))
+                        tagDict[name] = value;
+                }
+                result[contactId] = tagDict;
+            }
+        }
+
+        return result;
     }
 }
 

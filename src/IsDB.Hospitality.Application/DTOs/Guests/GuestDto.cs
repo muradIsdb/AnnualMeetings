@@ -27,6 +27,11 @@ public class GuestDto
     public string? RankValue { get; set; }
     public string? VehicleTypeValue { get; set; }
     public string? DedicatedCar { get; set; }
+    public bool? LiaisonOfficer { get; set; }
+    public bool? InvitedToOpeningCeremony { get; set; }
+    public string? OldHotel { get; set; }
+    public string? LiaisonOfficerName { get; set; }
+    public string? LiaisonOfficerCarNumber { get; set; }
     public string? RegistrationTypeName { get; set; }
     public Guid? DeservedCarClassId { get; set; }
     public string? DeservedCarClassName { get; set; }
