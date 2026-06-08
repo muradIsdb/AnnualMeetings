@@ -1417,7 +1417,9 @@ public class EventsAirController : ApiControllerBase
                 if (cf.TryGetProperty("definitionId", out var did) &&
                     did.GetString()?.Equals(dedicatedCarGuid, StringComparison.OrdinalIgnoreCase) == true)
                 {
-                    dedicatedCarValue = cf.TryGetProperty("value", out var v) ? v.GetString() : null;
+                    dedicatedCarValue = cf.TryGetProperty("value", out var v)
+                        ? (v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : v.GetRawText())
+                        : null;
                     break;
                 }
             }
