@@ -1244,10 +1244,10 @@ public class EventsAirController : ApiControllerBase
         }
         catch { }
 
-        // Step 1b: Introspect PaymentDetails type
+        // Step 1b: Introspect RegistrationPaymentDetails type
         var introspectPaymentQuery = System.Text.Json.JsonSerializer.Serialize(new
         {
-            query = "{ __type(name: \"PaymentDetails\") { fields { name type { name kind ofType { name kind } } } } }"
+            query = "{ __type(name: \"RegistrationPaymentDetails\") { fields { name type { name kind ofType { name kind } } } } }"
         });
         var reqPD = new HttpRequestMessage(HttpMethod.Post, $"{base_url}/graphql")
         {
@@ -1269,7 +1269,7 @@ public class EventsAirController : ApiControllerBase
         // Step 2: Fetch first 5 registrations with paymentDetails
         var regsQuery = System.Text.Json.JsonSerializer.Serialize(new
         {
-            query = $"{{ event(id: \"{event_code}\") {{ registrations(limit: 5, offset: 0) {{ id paymentDetails {{ status }} cancelationTaxes {{ id }} type {{ id name }} contact {{ id firstName lastName }} }} }} }}"
+            query = $"{{ event(id: \"{event_code}\") {{ registrations(limit: 5, offset: 0) {{ id paymentDetails {{ paymentStatus }} cancelationTaxes {{ amount }} type {{ id name }} contact {{ id firstName lastName }} }} }} }}"
         });
         var req2 = new HttpRequestMessage(HttpMethod.Post, $"{base_url}/graphql")
         {
@@ -1285,7 +1285,7 @@ public class EventsAirController : ApiControllerBase
         {
             var specificQuery = System.Text.Json.JsonSerializer.Serialize(new
             {
-                query = $"{{ event(id: \"{event_code}\") {{ registration(id: \"{registrationId}\") {{ id paymentDetails {{ status }} cancelationTaxes {{ id }} type {{ id name }} contact {{ id firstName lastName }} }} }} }}"
+                query = $"{{ event(id: \"{event_code}\") {{ registration(id: \"{registrationId}\") {{ id paymentDetails {{ paymentStatus }} cancelationTaxes {{ amount }} type {{ id name }} contact {{ id firstName lastName }} }} }} }}"
             });
             var req3 = new HttpRequestMessage(HttpMethod.Post, $"{base_url}/graphql")
             {
