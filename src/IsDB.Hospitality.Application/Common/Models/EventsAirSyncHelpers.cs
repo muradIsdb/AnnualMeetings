@@ -691,7 +691,14 @@ public static class EventsAirSyncHelpers
                 foreach (var rec in records.EnumerateArray())
                 {
                     var name = rec.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                    var value = rec.TryGetProperty("value", out var v) ? v.GetString() ?? "" : "";
+                    string value = "";
+                    if (rec.TryGetProperty("value", out var v))
+                    {
+                        value = v.ValueKind == JsonValueKind.Number
+                            ? v.GetRawText()
+                            : v.ValueKind == JsonValueKind.Null ? ""
+                            : v.GetString() ?? "";
+                    }
                     if (!string.IsNullOrEmpty(name))
                         tagDict[name] = value;
                 }
