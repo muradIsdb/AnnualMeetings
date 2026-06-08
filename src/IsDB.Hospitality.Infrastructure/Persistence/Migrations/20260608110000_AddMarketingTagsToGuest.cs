@@ -30,6 +30,28 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     END IF;
                 END $$;
             ");
+            // Add LiaisonOfficerName column (idempotent)
+            migrationBuilder.Sql(@"
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'Guests' AND column_name = 'LiaisonOfficerName'
+                    ) THEN
+                        ALTER TABLE ""Guests"" ADD COLUMN ""LiaisonOfficerName"" text NULL;
+                    END IF;
+                END $$;
+            ");
+            // Add LiaisonOfficerCarNumber column (idempotent)
+            migrationBuilder.Sql(@"
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'Guests' AND column_name = 'LiaisonOfficerCarNumber'
+                    ) THEN
+                        ALTER TABLE ""Guests"" ADD COLUMN ""LiaisonOfficerCarNumber"" text NULL;
+                    END IF;
+                END $$;
+            ");
             // Register migration in history (idempotent)
             migrationBuilder.Sql(@"
                 INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")

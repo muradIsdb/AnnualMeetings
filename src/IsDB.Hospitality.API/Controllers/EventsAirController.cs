@@ -1265,6 +1265,28 @@ public class EventsAirController : ApiControllerBase
                 }
             }
 
+            // "Driver Name" — LO name tag
+            if (tags.TryGetValue("Driver Name", out var driverNameVal))
+            {
+                var nameStr = string.IsNullOrWhiteSpace(driverNameVal) ? null : driverNameVal.Trim();
+                if (guest.LiaisonOfficerName != nameStr)
+                {
+                    guest.LiaisonOfficerName = nameStr;
+                    changed = true;
+                }
+            }
+
+            // "Car number" — LO car plate tag
+            if (tags.TryGetValue("Car number", out var carNumberVal))
+            {
+                var carStr = string.IsNullOrWhiteSpace(carNumberVal) ? null : carNumberVal.Trim();
+                if (guest.LiaisonOfficerCarNumber != carStr)
+                {
+                    guest.LiaisonOfficerCarNumber = carStr;
+                    changed = true;
+                }
+            }
+
             if (changed) updated++;
         }
 

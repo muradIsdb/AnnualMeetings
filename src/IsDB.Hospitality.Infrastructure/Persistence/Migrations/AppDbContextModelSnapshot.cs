@@ -675,6 +675,12 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.Property<string>("OldHotel")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("LiaisonOfficerName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LiaisonOfficerCarNumber")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid?>("DeservedCarClassId")
                         .HasColumnType("TEXT");
 

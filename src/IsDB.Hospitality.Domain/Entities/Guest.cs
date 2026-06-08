@@ -80,6 +80,18 @@ public class Guest : BaseEntity
     /// </summary>
     public string? OldHotel { get; set; }
 
+    /// <summary>
+    /// The liaison officer's name from EventsAir marketing tag "Driver Name".
+    /// Populated during Sync Marketing Tags.
+    /// </summary>
+    public string? LiaisonOfficerName { get; set; }
+
+    /// <summary>
+    /// The liaison officer's car number from EventsAir marketing tag "Car number".
+    /// Populated during Sync Marketing Tags.
+    /// </summary>
+    public string? LiaisonOfficerCarNumber { get; set; }
+
     // Navigation properties
     public ICollection<TravelBooking> TravelBookings { get; set; } = new List<TravelBooking>();
     public ICollection<ChecklistCompletion> ChecklistCompletions { get; set; } = new List<ChecklistCompletion>();
