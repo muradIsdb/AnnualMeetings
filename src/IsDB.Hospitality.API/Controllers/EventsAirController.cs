@@ -1347,8 +1347,8 @@ public class EventsAirController : ApiControllerBase
                 }
             }
 
-            // "Driver Name" — LO name tag
-            if (tags.TryGetValue("Driver Name", out var driverNameVal))
+            // "Liaison Officer Name" — LO name tag
+            if (tags.TryGetValue("Liaison Officer Name", out var driverNameVal))
             {
                 var nameStr = string.IsNullOrWhiteSpace(driverNameVal) ? null : driverNameVal.Trim();
                 if (guest.LiaisonOfficerName != nameStr)
@@ -1358,8 +1358,8 @@ public class EventsAirController : ApiControllerBase
                 }
             }
 
-            // "Car number" — LO car plate tag
-            if (tags.TryGetValue("Car number", out var carNumberVal))
+            // "Liaison Officer Mobile" — LO mobile tag
+            if (tags.TryGetValue("Liaison Officer Mobile", out var carNumberVal))
             {
                 var carStr = string.IsNullOrWhiteSpace(carNumberVal) ? null : carNumberVal.Trim();
                 if (guest.LiaisonOfficerCarNumber != carStr)
