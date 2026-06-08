@@ -1244,10 +1244,32 @@ public class EventsAirController : ApiControllerBase
         }
         catch { }
 
-        // Step 2: Fetch first 5 registrations with paymentStatus
+        // Step 1b: Introspect PaymentDetails type
+        var introspectPaymentQuery = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            query = "{ __type(name: \"PaymentDetails\") { fields { name type { name kind ofType { name kind } } } } }"
+        });
+        var reqPD = new HttpRequestMessage(HttpMethod.Post, $"{base_url}/graphql")
+        {
+            Headers = { Authorization = ea_headers },
+            Content = new System.Net.Http.StringContent(introspectPaymentQuery, System.Text.Encoding.UTF8, "application/json")
+        };
+        var respPD = await client.SendAsync(reqPD, cancellationToken);
+        var paymentDetailsJson = await respPD.Content.ReadAsStringAsync(cancellationToken);
+        var paymentDetailsFields = new List<string>();
+        try
+        {
+            var pdDoc = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(paymentDetailsJson);
+            if (pdDoc.TryGetProperty("data", out var pdData) && pdData.TryGetProperty("__type", out var pdType) && pdType.TryGetProperty("fields", out var pdFs))
+                foreach (var f in pdFs.EnumerateArray())
+                    if (f.TryGetProperty("name", out var fn)) paymentDetailsFields.Add(fn.GetString() ?? "");
+        }
+        catch { }
+
+        // Step 2: Fetch first 5 registrations with paymentDetails
         var regsQuery = System.Text.Json.JsonSerializer.Serialize(new
         {
-            query = $"{{ event(id: \"{event_code}\") {{ registrations(limit: 5, offset: 0) {{ id paymentStatus type {{ id name }} contact {{ id firstName lastName }} }} }} }}"
+            query = $"{{ event(id: \"{event_code}\") {{ registrations(limit: 5, offset: 0) {{ id paymentDetails {{ status }} cancelationTaxes {{ id }} type {{ id name }} contact {{ id firstName lastName }} }} }} }}"
         });
         var req2 = new HttpRequestMessage(HttpMethod.Post, $"{base_url}/graphql")
         {
@@ -1263,7 +1285,7 @@ public class EventsAirController : ApiControllerBase
         {
             var specificQuery = System.Text.Json.JsonSerializer.Serialize(new
             {
-                query = $"{{ event(id: \"{event_code}\") {{ registration(id: \"{registrationId}\") {{ id paymentStatus type {{ id name }} contact {{ id firstName lastName }} }} }} }}"
+                query = $"{{ event(id: \"{event_code}\") {{ registration(id: \"{registrationId}\") {{ id paymentDetails {{ status }} cancelationTaxes {{ id }} type {{ id name }} contact {{ id firstName lastName }} }} }} }}"
             });
             var req3 = new HttpRequestMessage(HttpMethod.Post, $"{base_url}/graphql")
             {
@@ -1277,7 +1299,9 @@ public class EventsAirController : ApiControllerBase
         return Ok(new
         {
             registrationTypeFields = registrationFields,
+            paymentDetailsTypeFields = paymentDetailsFields,
             hasPaymentStatus = registrationFields.Contains("paymentStatus"),
+            hasCancelationTaxes = registrationFields.Contains("cancelationTaxes"),
             first5RegistrationsRaw = regsJson.Length > 3000 ? regsJson[..3000] + "...[truncated]" : regsJson,
             specificRegistrationRaw = specificRegJson
         });
