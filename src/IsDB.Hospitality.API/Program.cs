@@ -186,6 +186,21 @@ using (var scope = app.Services.CreateScope())
         ");
         logger.LogInformation("VehicleTypeValue column pre-check complete.");
 
+        // ALWAYS ensure LiaisonOfficer column exists on Guests — runs for ALL database paths.
+        // This column was added in migration 20260608100000_AddLiaisonOfficerToGuest but legacy
+        // production databases skip MigrateAsync() and need this explicit pre-check.
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'Guests' AND column_name = 'LiaisonOfficer'
+                ) THEN
+                    ALTER TABLE ""Guests"" ADD COLUMN ""LiaisonOfficer"" boolean NULL;
+                END IF;
+            END $$;
+        ");
+        logger.LogInformation("LiaisonOfficer column pre-check complete.");
+
         if (isFreshDatabase || isEfCoreCreatedDb)
         {
             // Fresh or EF Core-managed database: run MigrateAsync() directly.
