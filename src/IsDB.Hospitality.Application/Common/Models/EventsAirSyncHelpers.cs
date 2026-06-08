@@ -128,32 +128,31 @@ public static class EventsAirSyncHelpers
                 }
 
                 string regTypeId = "", regTypeName = "";
-                bool allCanceled = true;
                 if (contact.TryGetProperty("registrations", out var regsEl) && regsEl.ValueKind == JsonValueKind.Array)
                 {
+                    int totalRegs = 0;
+                    int canceledRegs = 0;
                     foreach (var reg in regsEl.EnumerateArray())
                     {
-                        // Skip registrations with paymentStatus == CANCELED
+                        totalRegs++;
+                        // Check if this registration is CANCELED
                         if (reg.TryGetProperty("paymentDetails", out var pdEl) &&
                             pdEl.TryGetProperty("paymentStatus", out var psEl) &&
                             psEl.GetString()?.Equals("CANCELED", StringComparison.OrdinalIgnoreCase) == true)
+                        {
+                            canceledRegs++;
                             continue;
-
-                        allCanceled = false;
+                        }
+                        // Non-canceled registration — use its type if not yet set
                         if (string.IsNullOrEmpty(regTypeId) && reg.TryGetProperty("type", out var typeEl) && typeEl.ValueKind == JsonValueKind.Object)
                         {
                             regTypeId = typeEl.TryGetProperty("id", out var tidEl) ? tidEl.GetString() ?? "" : "";
                             regTypeName = typeEl.TryGetProperty("name", out var tn) ? tn.GetString() ?? "" : "";
                         }
                     }
+                    // Exclude only if there is at least one registration AND all are CANCELED
+                    if (totalRegs > 0 && canceledRegs == totalRegs) continue;
                 }
-                else
-                {
-                    allCanceled = false;
-                }
-
-                // If all registrations are CANCELED, exclude this contact from the sync
-                if (allCanceled) continue;
 
                 string? country = null;
                 if (contact.TryGetProperty("primaryAddress", out var addrEl) && addrEl.ValueKind == JsonValueKind.Object)
@@ -239,19 +238,21 @@ public static class EventsAirSyncHelpers
                 if (string.IsNullOrEmpty(contactId) || !seenContactIds.Add(contactId)) continue;
 
                 // Exclude contacts whose registrations are all CANCELED
+                // (contacts with zero registrations are NOT excluded)
                 if (contact.TryGetProperty("registrations", out var regsElLight) && regsElLight.ValueKind == JsonValueKind.Array)
                 {
-                    bool allCanceledLight = true;
+                    int totalRegsLight = 0;
+                    int canceledRegsLight = 0;
                     foreach (var reg in regsElLight.EnumerateArray())
                     {
+                        totalRegsLight++;
                         if (reg.TryGetProperty("paymentDetails", out var pdElLight) &&
                             pdElLight.TryGetProperty("paymentStatus", out var psElLight) &&
                             psElLight.GetString()?.Equals("CANCELED", StringComparison.OrdinalIgnoreCase) == true)
-                            continue;
-                        allCanceledLight = false;
-                        break;
+                            canceledRegsLight++;
                     }
-                    if (allCanceledLight) continue;
+                    // Exclude only if there is at least one registration AND all are CANCELED
+                    if (totalRegsLight > 0 && canceledRegsLight == totalRegsLight) continue;
                 }
 
                 string? country = null;
