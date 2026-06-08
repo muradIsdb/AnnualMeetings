@@ -41,6 +41,7 @@ public class GetArrivalFlightsQueryHandler : IRequestHandler<GetArrivalFlightsQu
                     RegistrationTypeName = g.RegistrationTypeName,
                     RankValue = g.RankValue,
                     DedicatedCar = g.DedicatedCar,
+                    LiaisonOfficer = g.LiaisonOfficer,
                     DeservedCarClassId = g.DeservedCarClassId,
                     DeservedCarClassName = g.DeservedCarClass != null ? g.DeservedCarClass.Name : null,
                     DeservedCarClassColor = g.DeservedCarClass != null ? g.DeservedCarClass.Color : null,

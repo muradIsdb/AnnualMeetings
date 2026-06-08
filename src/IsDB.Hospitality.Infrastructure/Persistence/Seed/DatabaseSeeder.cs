@@ -203,6 +203,7 @@ public static class DatabaseSeeder
         const string rankGuid = "3d96b87e-87b0-145e-5f45-3a17bafe26d4";
         const string dedicatedCarGuid = "d6b74b23-c8b6-d044-5d86-3a17bafe27de";
         const string vehicleTypeGuid = "5f6b0e9e-7d1c-4f91-affc-ecbe95cef678";
+        const string liaisonOfficerGuid = "f4d27526-7af9-5ed4-ebe1-3a1d4e2e471d";
 
         // Seed the Rank field mapping if it doesn't already exist
         var rankExists = await context.SyncFieldMappings.AnyAsync(m => m.EventsAirFieldGuid == rankGuid);
@@ -261,6 +262,23 @@ public static class DatabaseSeeder
                 FieldRole = "VehicleType",
                 Description = "Preferred vehicle type from EventsAir (e.g. Hyundai Elantra, Toyota Land Cruiser). Stored for display only.",
                 SortOrder = 3,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            });
+        }
+
+        // Seed the Liaison Officer field mapping if it doesn't already exist
+        var liaisonOfficerExists = await context.SyncFieldMappings.AnyAsync(m => m.EventsAirFieldGuid == liaisonOfficerGuid);
+        if (!liaisonOfficerExists)
+        {
+            context.SyncFieldMappings.Add(new SyncFieldMapping
+            {
+                Id = Guid.NewGuid(),
+                DisplayName = "Liaison Officer",
+                EventsAirFieldGuid = liaisonOfficerGuid,
+                FieldRole = "LiaisonOfficer",
+                Description = "Boolean flag indicating whether the guest is entitled to a dedicated liaison officer. Fetched from EventsAir checkbox field.",
+                SortOrder = 4,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             });

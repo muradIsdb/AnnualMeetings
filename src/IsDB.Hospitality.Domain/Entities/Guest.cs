@@ -62,6 +62,12 @@ public class Guest : BaseEntity
     public string? VehicleTypeValue { get; set; }
     public string? DedicatedCar { get; set; }
 
+    /// <summary>
+    /// Whether this guest is entitled to a dedicated liaison officer.
+    /// Populated from EventsAir custom field f4d27526-7af9-5ed4-ebe1-3a1d4e2e471d (checkbox).
+    /// </summary>
+    public bool? LiaisonOfficer { get; set; }
+
     // Navigation properties
     public ICollection<TravelBooking> TravelBookings { get; set; } = new List<TravelBooking>();
     public ICollection<ChecklistCompletion> ChecklistCompletions { get; set; } = new List<ChecklistCompletion>();
