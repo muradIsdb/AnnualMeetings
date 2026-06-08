@@ -1575,8 +1575,8 @@ public class EventsAirController : ApiControllerBase
         var httpClient = _httpClientFactory.CreateClient();
         httpClient.Timeout = TimeSpan.FromMinutes(5);
 
-        // Process in batches of 25 to avoid API cost limits
-        const int batchSize = 25;
+        // Process in batches of 15 — EventsAir enforces a maximum of 15 aliases per GraphQL query
+        const int batchSize = 15;
         var contactIds = activeGuests.Select(g => g.EventsAirContactId).Distinct().ToList();
 
         // Build a map: contactId -> paymentStatuses
