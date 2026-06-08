@@ -641,48 +641,65 @@ public static class EventsAirSyncHelpers
         string baseUrl, string eventCode, string accessToken,
         IEnumerable<string> contactIds, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
     {
-        var result = new ConcurrentDictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-        var allContactIds = contactIds.Where(id => !string.IsNullOrWhiteSpace(id)).ToList();
+        var result = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        var allContactIds = contactIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var client = httpClientFactory.CreateClient();
-        const int concurrency = 15;
+        client.Timeout = TimeSpan.FromMinutes(5);
+        const int batchSize = 10;
 
-        for (int i = 0; i < allContactIds.Count; i += concurrency)
+        for (int i = 0; i < allContactIds.Count; i += batchSize)
         {
-            var batch = allContactIds.Skip(i).Take(concurrency).ToList();
-            var tasks = batch.Select(async contactId =>
+            var batch = allContactIds.Skip(i).Take(batchSize).ToList();
+            // Build a single GraphQL query with one alias per contact using field aliases
+            var contactFragments = string.Join(" ",
+                batch.Select((id, idx) =>
+                    $"c{idx}: contact(id: \"{id}\") {{ id marketingRecords {{ id name value }} }}"));
+            var queryBody = JsonSerializer.Serialize(new
             {
-                try
-                {
-                    var queryBody = JsonSerializer.Serialize(new { query = $"{{ event(id: \"{eventCode}\") {{ contact(id: \"{contactId}\") {{ id marketingRecords {{ id name value }} }} }} }}" });
-                    var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/graphql")
-                    {
-                        Headers = { Authorization = new AuthenticationHeaderValue("Bearer", accessToken) },
-                        Content = new StringContent(queryBody, Encoding.UTF8, "application/json")
-                    };
-                    var response = await client.SendAsync(req, cancellationToken);
-                    var json = await response.Content.ReadAsStringAsync(cancellationToken);
-                    if (!response.IsSuccessStatusCode) return;
-                    var doc = JsonSerializer.Deserialize<JsonElement>(json);
-                    if (doc.TryGetProperty("errors", out _) || !doc.TryGetProperty("data", out var data)) return;
-                    var contactEl = data.GetProperty("event").GetProperty("contact");
-                    if (contactEl.ValueKind == JsonValueKind.Null) return;
-                    if (!contactEl.TryGetProperty("marketingRecords", out var records)) return;
-                    var tagDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var rec in records.EnumerateArray())
-                    {
-                        var name = rec.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-                        var value = rec.TryGetProperty("value", out var v) ? v.GetString() ?? "" : "";
-                        if (!string.IsNullOrEmpty(name))
-                            tagDict[name] = value;
-                    }
-                    result[contactId] = tagDict;
-                }
-                catch { }
+                query = $"{{ event(id: \"{eventCode}\") {{ {contactFragments} }} }}"
             });
-            await Task.WhenAll(tasks);
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl.TrimEnd('/')}/graphql")
+            {
+                Headers = { Authorization = new AuthenticationHeaderValue("Bearer", accessToken) },
+                Content = new StringContent(queryBody, Encoding.UTF8, "application/json")
+            };
+            HttpResponseMessage response;
+            string json;
+            try
+            {
+                response = await client.SendAsync(req, cancellationToken);
+                json = await response.Content.ReadAsStringAsync(cancellationToken);
+            }
+            catch (Exception ex) { Console.WriteLine($"[MKTG-BATCH] HTTP exception for batch {i/batchSize}: {ex.Message}"); continue; }
+            if (!response.IsSuccessStatusCode) { Console.WriteLine($"[MKTG-BATCH] HTTP {(int)response.StatusCode} for batch {i/batchSize}: {json[..Math.Min(json.Length,300)]}"); continue; }
+            JsonElement doc;
+            try { doc = JsonSerializer.Deserialize<JsonElement>(json); }
+            catch (Exception ex) { Console.WriteLine($"[MKTG-BATCH] JSON parse error for batch {i/batchSize}: {ex.Message}"); continue; }
+            if (!doc.TryGetProperty("data", out var data) || !data.TryGetProperty("event", out var eventObj))
+            {
+                Console.WriteLine($"[MKTG-BATCH] No data.event for batch {i/batchSize}: {json[..Math.Min(json.Length,500)]}");
+                continue;
+            }
+            for (int idx = 0; idx < batch.Count; idx++)
+            {
+                var aliasKey = $"c{idx}";
+                var contactId = batch[idx];
+                if (!eventObj.TryGetProperty(aliasKey, out var contactObj) ||
+                    contactObj.ValueKind != JsonValueKind.Object) continue;
+                if (!contactObj.TryGetProperty("marketingRecords", out var records)) continue;
+                var tagDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var rec in records.EnumerateArray())
+                {
+                    var name = rec.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    var value = rec.TryGetProperty("value", out var v) ? v.GetString() ?? "" : "";
+                    if (!string.IsNullOrEmpty(name))
+                        tagDict[name] = value;
+                }
+                result[contactId] = tagDict;
+            }
         }
 
-        return new Dictionary<string, Dictionary<string, string>>(result, StringComparer.OrdinalIgnoreCase);
+        return result;
     }
 }
 
