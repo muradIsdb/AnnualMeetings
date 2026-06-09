@@ -444,6 +444,18 @@ public class FleetController : ApiControllerBase
         return Ok(new { trip.Id, trip.CompletedAt });
     }
 
+    // POST /api/fleet/dropoff-trips — log a drop-off trip directly (used by the assign modal)
+    [HttpPost("dropoff-trips")]
+    [Authorize(Roles = "Admin,Transport")]
+    public async Task<IActionResult> CreateDropOffTrip([FromBody] DropOffTripRequest req)
+    {
+        var vehicle = await _db.Vehicles.Include(v => v.Driver).FirstOrDefaultAsync(v => v.Id == req.VehicleId);
+        if (vehicle == null) return NotFound(new { message = "Vehicle not found." });
+        var guest = await _db.Guests.FindAsync(req.GuestId);
+        if (guest == null) return NotFound(new { message = "Guest not found." });
+        return await LogDropOffTripInternal(vehicle, guest, req.Destination, req.Notes);
+    }
+
     // ── PRIVATE HELPERS ──────────────────────────────────────────────────────────
 
     /// <summary>
@@ -494,3 +506,4 @@ public class FleetController : ApiControllerBase
 }
 
 public record FleetAssignRequest(Guid VehicleId, Guid GuestId, string AssignmentType, string? Destination, string? Notes);
+public record DropOffTripRequest(Guid VehicleId, Guid GuestId, string? Destination, string? Notes);
