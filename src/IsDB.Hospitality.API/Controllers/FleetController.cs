@@ -64,21 +64,33 @@ public class FleetController : ApiControllerBase
         }).ToList());
     }
 
-    // POST /api/fleet/assign — assign vehicle to guest
+    // POST /api/fleet/assign — assign vehicle to guest (or log a drop-off trip)
     [HttpPost("assign")]
     [Authorize(Roles = "Admin,Transport")]
     public async Task<ActionResult> AssignToGuest([FromBody] FleetAssignRequest req)
     {
         var vehicle = await _db.Vehicles.Include(v => v.Driver).FirstOrDefaultAsync(v => v.Id == req.VehicleId);
         if (vehicle == null) return NotFound(new { message = "Vehicle not found." });
-        if (vehicle.Status == VehicleStatus.Assigned)
-            return BadRequest(new { message = "Vehicle is already assigned to a guest." });
 
         var guest = await _db.Guests.FindAsync(req.GuestId);
         if (guest == null) return NotFound(new { message = "Guest not found." });
 
         if (!Enum.TryParse<AssignmentType>(req.AssignmentType, true, out var assignmentType))
             return BadRequest(new { message = "Invalid assignment type. Use 'DropOff' or 'Dedicated'." });
+
+        // ── DROP-OFF PATH ─────────────────────────────────────────────────────────
+        // Vehicle is NOT linked to the guest; we only log the trip.
+        if (assignmentType == AssignmentType.DropOff)
+        {
+            if (vehicle.Status == VehicleStatus.Assigned)
+                return BadRequest(new { message = "Vehicle is already assigned to a guest." });
+
+            return await LogDropOffTripInternal(vehicle, guest, req.Destination, req.Notes);
+        }
+
+        // ── DEDICATED PATH ────────────────────────────────────────────────────────
+        if (vehicle.Status == VehicleStatus.Assigned)
+            return BadRequest(new { message = "Vehicle is already assigned to a guest." });
 
         // Close any existing active assignment for this guest
         var existing = await _db.VehicleAssignments.Where(a => a.GuestId == req.GuestId && a.IsActive).ToListAsync();
@@ -179,6 +191,11 @@ public class FleetController : ApiControllerBase
         if (!Enum.TryParse<AssignmentType>(req.AssignmentType, true, out var assignmentType))
             return BadRequest(new { message = "Invalid assignment type. Use 'DropOff' or 'Dedicated'." });
 
+        // ── DROP-OFF PATH ─────────────────────────────────────────────────────────
+        if (assignmentType == AssignmentType.DropOff)
+            return await LogDropOffTripInternal(vehicle, guest, req.Destination, req.Notes);
+
+        // ── DEDICATED PATH ────────────────────────────────────────────────────────
         // Displace any existing active assignment on this vehicle (different guest)
         string? displacedGuestName = null;
         var displacedAssignment = await _db.VehicleAssignments
@@ -348,6 +365,132 @@ public class FleetController : ApiControllerBase
         await _db.SaveChangesAsync();
         return Ok();
     }
+
+    // ── DROP-OFF TRIP ENDPOINTS ──────────────────────────────────────────────────
+
+    // GET /api/fleet/dropoff-trips?status=all|inprogress|completed&page=1&pageSize=20
+    [HttpGet("dropoff-trips")]
+    [Authorize(Roles = "Admin,Transport")]
+    public async Task<ActionResult<object>> GetDropOffTrips(
+        [FromQuery] string? status = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20)
+    {
+        var query = _db.DropOffTrips
+            .Include(d => d.Guest)
+            .Include(d => d.Vehicle)
+            .Include(d => d.Driver)
+            .Include(d => d.LoggedByStaff)
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(status) && status.ToLower() != "all")
+        {
+            if (Enum.TryParse<DropOffTripStatus>(status, true, out var parsedStatus))
+                query = query.Where(d => d.Status == parsedStatus);
+        }
+
+        var total = await query.CountAsync();
+        var trips = await query
+            .OrderByDescending(d => d.LoggedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        return Ok(new
+        {
+            total,
+            page,
+            pageSize,
+            totalPages = (int)Math.Ceiling(total / (double)pageSize),
+            items = trips.Select(d => new
+            {
+                d.Id,
+                GuestId      = d.GuestId,
+                GuestName    = d.Guest?.FullName,
+                GuestCountry = d.Guest?.Country,
+                VehicleId    = d.VehicleId,
+                CarNumber    = d.CarNumber ?? d.Vehicle?.CarNumber,
+                VehicleMake  = d.Vehicle?.Make,
+                VehicleModel = d.Vehicle?.Model,
+                LicensePlate = d.Vehicle?.LicensePlate,
+                DriverId     = d.DriverId,
+                DriverName   = d.DriverName ?? d.Driver?.FullName,
+                DriverPhone  = d.DriverPhone ?? d.Driver?.Phone,
+                d.Destination,
+                d.Notes,
+                d.LoggedAt,
+                d.CompletedAt,
+                Status       = d.Status.ToString(),
+                LoggedBy     = d.LoggedByStaff?.FullName,
+                LoggedByRole = d.LoggedByStaff?.Role.ToString(),
+            })
+        });
+    }
+
+    // POST /api/fleet/dropoff-trips/{id}/complete — mark a drop-off trip as completed
+    [HttpPost("dropoff-trips/{id:guid}/complete")]
+    [Authorize(Roles = "Admin,Transport")]
+    public async Task<IActionResult> CompleteDropOffTrip(Guid id)
+    {
+        var trip = await _db.DropOffTrips.FindAsync(id);
+        if (trip == null) return NotFound(new { message = "Drop-off trip not found." });
+        if (trip.Status == DropOffTripStatus.Completed)
+            return BadRequest(new { message = "Trip is already completed." });
+
+        trip.Status = DropOffTripStatus.Completed;
+        trip.CompletedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+        return Ok(new { trip.Id, trip.CompletedAt });
+    }
+
+    // ── PRIVATE HELPERS ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Logs a drop-off trip. The vehicle is NOT linked to the guest and its status is NOT changed.
+    /// </summary>
+    private async Task<ActionResult> LogDropOffTripInternal(Vehicle vehicle, Guest guest, string? destination, string? notes)
+    {
+        if (string.IsNullOrWhiteSpace(destination))
+            return BadRequest(new { message = "Destination is required for drop-off trips." });
+
+        var staffUser = await _db.StaffUsers.FindAsync(CurrentUserId);
+
+        var trip = new DropOffTrip
+        {
+            Id              = Guid.NewGuid(),
+            GuestId         = guest.Id,
+            VehicleId       = vehicle.Id,
+            DriverId        = vehicle.DriverId,
+            DriverName      = vehicle.Driver?.FullName,
+            DriverPhone     = vehicle.Driver?.Phone,
+            CarNumber       = vehicle.CarNumber,
+            Destination     = destination,
+            Notes           = notes,
+            LoggedByStaffId = CurrentUserId,
+            LoggedAt        = DateTime.UtcNow,
+            Status          = DropOffTripStatus.InProgress,
+        };
+        _db.DropOffTrips.Add(trip);
+
+        // Write a history entry on the guest timeline so the team can see the drop-off was logged
+        _db.GuestStatusHistories.Add(new GuestStatusHistory
+        {
+            Id               = Guid.NewGuid(),
+            GuestId          = guest.Id,
+            Track            = StatusTrack.Vehicle,
+            StatusValue      = 0,
+            StatusLabel      = $"Drop-off Trip Logged — {vehicle.Make} {vehicle.Model} ({vehicle.CarNumber ?? vehicle.LicensePlate}) → {destination}",
+            ChangedByStaffId = CurrentUserId,
+            ChangedByName    = staffUser?.FullName,
+            ChangedByRole    = staffUser?.Role,
+            IsSystemGenerated = false,
+            Notes            = notes
+        });
+
+        await _db.SaveChangesAsync();
+        return CreatedAtAction(nameof(GetDropOffTrips), new { }, new { trip.Id });
+    }
 }
 
-public record FleetAssignRequest(Guid VehicleId, Guid GuestId, string AssignmentType, string? Notes);
+public record FleetAssignRequest(Guid VehicleId, Guid GuestId, string AssignmentType, string? Destination, string? Notes);

@@ -35,6 +35,8 @@ public interface IAppDbContext
     DbSet<TravelBookingHistory> TravelBookingHistories { get; }
     DbSet<FlightSyncLog> FlightSyncLogs { get; }
     DbSet<SystemLog> SystemLogs { get; }
+    DbSet<SyncAlert> SyncAlerts { get; }
+    DbSet<DropOffTrip> DropOffTrips { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
