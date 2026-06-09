@@ -8,6 +8,7 @@ import AirportDashboard from './pages/airport/AirportDashboard'
 import GuestDetailPage from './pages/airport/GuestDetailPage'
 import TransportDashboard from './pages/transport/TransportDashboard'
 import TransportRoleDashboard from './pages/transport/TransportRoleDashboard'
+import VASummaryPage from './pages/transport/VASummaryPage'
 import HotelDashboard from './pages/hotel/HotelDashboard'
 import HotelDashboardPage from './pages/hotel/HotelDashboardPage'
 import HotelArrivalsQueuePage from './pages/hotel/HotelArrivalsQueuePage'
@@ -130,6 +131,11 @@ export default function App() {
           } />
 
           {/* Transport Module */}
+          <Route path="transport/va-summary" element={
+            <ProtectedRoute allowedRoles={[UserRole.Transport, UserRole.ControlRoom, UserRole.Admin]}>
+              <VASummaryPage />
+            </ProtectedRoute>
+          } />
           <Route path="transport/dashboard" element={
             <ProtectedRoute allowedRoles={[UserRole.Transport, UserRole.ControlRoom, UserRole.Admin]}>
               <TransportRoleDashboard />
