@@ -87,6 +87,19 @@ export interface GuestSummary {
   statusLabel?: string;
   inboundStatusLabel?: string;
   outboundStatusLabel?: string;
+  country?: string;
+  nationality?: string;
+  organization?: string;
+  hasChangedFlights?: boolean;
+  liaisonOfficer?: boolean;
+  liaisonOfficerName?: string;
+  liaisonOfficerCarNumber?: string;
+  invitedToOpeningCeremony?: boolean;
+  oldHotel?: string;
+  dedicatedCar?: string;
+  vehicleTypeValue?: string;
+  arrivalTime?: string;
+  notes?: string;
 }
 
 export interface Guest extends GuestSummary {

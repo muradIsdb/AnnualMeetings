@@ -27,6 +27,7 @@ import {
   ListChecks,
   Hotel,
   Shield,
+  LayoutGrid,
 } from 'lucide-react'
 
 // ─── Nav item type ─────────────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ type NavItem = {
 const mainNavItems: NavItem[] = [
   { to: '/airport',         label: 'Airport',           icon: Plane,          pageId: 'airport.dashboard' },
   { to: '/transport/dashboard', label: 'Transport Dashboard', icon: LayoutDashboard, roles: [UserRole.Transport, UserRole.Admin] },
+  { to: '/transport/va-summary', label: 'VA Summary',          icon: LayoutGrid,     roles: [UserRole.Transport, UserRole.ControlRoom, UserRole.Admin] },
   { to: '/transport',       label: 'Transport',          icon: Car,            pageId: 'transport.dashboard' },
   { to: '/departure-stats', label: 'Departure Shuttle',  icon: Bus,            pageId: 'transport.departure_stats' },
   { to: '/control-room',    label: 'Control Room',       icon: LayoutDashboard, pageId: 'controlroom.dashboard' },
