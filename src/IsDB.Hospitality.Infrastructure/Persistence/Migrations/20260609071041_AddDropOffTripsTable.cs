@@ -11,11 +11,8 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.AddColumn<string>(
-                name: "ShortName",
-                table: "CarClasses",
-                type: "TEXT",
-                nullable: true);
+            // ShortName column is added idempotently by Program.cs startup code
+            // (IF NOT EXISTS guard) — skip here to avoid duplicate column error on PostgreSQL.
 
             migrationBuilder.CreateTable(
                 name: "DropOffTrips",
@@ -105,9 +102,7 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
             migrationBuilder.DropTable(
                 name: "DropOffTrips");
 
-            migrationBuilder.DropColumn(
-                name: "ShortName",
-                table: "CarClasses");
+            // ShortName column intentionally not dropped — managed by Program.cs.
         }
     }
 }
