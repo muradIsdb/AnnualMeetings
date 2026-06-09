@@ -444,26 +444,6 @@ public class FleetController : ApiControllerBase
         return Ok(new { trip.Id, trip.CompletedAt });
     }
 
-    // POST /api/fleet/dropoff-trips/complete-all — mark all in-progress trips as completed
-    [HttpPost("dropoff-trips/complete-all")]
-    [Authorize(Roles = "Admin,Transport")]
-    public async Task<IActionResult> CompleteAllDropOffTrips()
-    {
-        var trips = await _db.DropOffTrips
-            .Where(t => t.Status == DropOffTripStatus.InProgress)
-            .ToListAsync();
-        if (!trips.Any())
-            return Ok(new { updated = 0, message = "No in-progress trips to complete." });
-        var now = DateTime.UtcNow;
-        foreach (var trip in trips)
-        {
-            trip.Status = DropOffTripStatus.Completed;
-            trip.CompletedAt = now;
-        }
-        await _db.SaveChangesAsync();
-        return Ok(new { updated = trips.Count });
-    }
-
     // POST /api/fleet/dropoff-trips — log a drop-off trip directly (used by the assign modal)
     [HttpPost("dropoff-trips")]
     [Authorize(Roles = "Admin,Transport")]

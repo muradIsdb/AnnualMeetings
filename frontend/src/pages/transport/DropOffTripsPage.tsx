@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import apiClient from '../../api/client';
-import { Car, CheckCircle, Clock, MapPin, User, Phone, Hash, Calendar, Search, CheckSquare } from 'lucide-react';
+import { apiClient } from '../../api/client';
+import { Car, CheckCircle, Clock, MapPin, User, Phone, Hash, Calendar } from 'lucide-react';
 
 interface DropOffTrip {
   id: string;
@@ -40,11 +40,6 @@ const completeTrip = async (id: string) => {
   return res.data;
 };
 
-const completeAllTrips = async () => {
-  const res = await apiClient.post('/fleet/dropoff-trips/complete-all');
-  return res.data;
-};
-
 const formatDate = (iso: string) => {
   const d = new Date(iso);
   return d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -53,7 +48,6 @@ const formatDate = (iso: string) => {
 export default function DropOffTripsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
   const queryClient = useQueryClient();
 
   const { data, isLoading, isError } = useQuery({
@@ -67,28 +61,8 @@ export default function DropOffTripsPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dropoff-trips'] }),
   });
 
-  const completeAllMutation = useMutation({
-    mutationFn: completeAllTrips,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dropoff-trips'] }),
-  });
-
   const inProgressCount = data?.items.filter(t => t.status === 'InProgress').length ?? 0;
   const completedCount  = data?.items.filter(t => t.status === 'Completed').length ?? 0;
-
-  // Client-side search filter
-  const q = search.trim().toLowerCase();
-  const filteredItems = (data?.items ?? []).filter(trip => {
-    if (!q) return true;
-    return (
-      trip.guestName.toLowerCase().includes(q) ||
-      (trip.guestCountry ?? '').toLowerCase().includes(q) ||
-      (trip.carNumber ?? '').toLowerCase().includes(q) ||
-      (trip.licensePlate ?? '').toLowerCase().includes(q) ||
-      (trip.driverName ?? '').toLowerCase().includes(q) ||
-      trip.destination.toLowerCase().includes(q) ||
-      (trip.notes ?? '').toLowerCase().includes(q)
-    );
-  });
 
   return (
     <div className="p-6 space-y-6">
@@ -98,23 +72,7 @@ export default function DropOffTripsPage() {
           <h1 className="text-2xl font-bold text-gray-900">Drop-off Trips</h1>
           <p className="text-sm text-gray-500 mt-1">Track all logged drop-off trips</p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-400">Auto-refreshes every 60s</span>
-          {inProgressCount > 0 && (
-            <button
-              onClick={() => {
-                if (window.confirm(`Mark all ${inProgressCount} in-progress trip(s) as completed?`)) {
-                  completeAllMutation.mutate();
-                }
-              }}
-              disabled={completeAllMutation.isPending}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
-            >
-              <CheckSquare className="w-4 h-4" />
-              {completeAllMutation.isPending ? 'Completing…' : `Mark All Complete (${inProgressCount})`}
-            </button>
-          )}
-        </div>
+        <span className="text-xs text-gray-400">Auto-refreshes every 60s</span>
       </div>
 
       {/* KPI Strip */}
@@ -148,33 +106,21 @@ export default function DropOffTripsPage() {
         </div>
       </div>
 
-      {/* Filters + Search */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          {(['all', 'inprogress', 'completed'] as const).map(s => (
-            <button
-              key={s}
-              onClick={() => { setStatusFilter(s); setPage(1); }}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                statusFilter === s
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              {s === 'all' ? 'All' : s === 'inprogress' ? 'In Progress' : 'Completed'}
-            </button>
-          ))}
-        </div>
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search guest, vehicle, destination…"
-            className="w-full pl-9 pr-3 py-1.5 border border-gray-300 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-          />
-        </div>
+      {/* Filters */}
+      <div className="flex items-center gap-2">
+        {(['all', 'inprogress', 'completed'] as const).map(s => (
+          <button
+            key={s}
+            onClick={() => { setStatusFilter(s); setPage(1); }}
+            className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              statusFilter === s
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            {s === 'all' ? 'All' : s === 'inprogress' ? 'In Progress' : 'Completed'}
+          </button>
+        ))}
       </div>
 
       {/* Table */}
@@ -183,10 +129,8 @@ export default function DropOffTripsPage() {
           <div className="p-12 text-center text-gray-400">Loading trips...</div>
         ) : isError ? (
           <div className="p-12 text-center text-red-500">Failed to load trips.</div>
-        ) : !filteredItems.length ? (
-          <div className="p-12 text-center text-gray-400">
-            {q ? `No trips match "${search}".` : 'No drop-off trips found.'}
-          </div>
+        ) : !data?.items.length ? (
+          <div className="p-12 text-center text-gray-400">No drop-off trips found.</div>
         ) : (
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
@@ -202,7 +146,7 @@ export default function DropOffTripsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filteredItems.map(trip => (
+              {data.items.map(trip => (
                 <tr key={trip.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3">
                     <div className="font-medium text-gray-900">{trip.guestName}</div>
