@@ -64,8 +64,10 @@ public class AviationstackClient : IFlightTrackerClient
 
             // Use the override key (from DB) if provided; fall back to IOptions (appsettings/env)
             var effectiveKey = !string.IsNullOrWhiteSpace(apiKeyOverride) ? apiKeyOverride : _options.ApiKey;
-            var dateParam = flightDate.HasValue ? $"&flight_date={flightDate.Value:yyyy-MM-dd}" : string.Empty;
-            var url = $"{_options.BaseUrl}/flights?access_key={effectiveKey}&flight_iata={Uri.EscapeDataString(normalised)}{dateParam}&limit=1";
+            // Do NOT pass flight_date to AviationStack — the date filter only works for a narrow
+            // real-time window (~current day) and returns 0 results for past/future dates.
+            // The date guard in FlightTrackerSyncService rejects results that belong to the wrong day.
+            var url = $"{_options.BaseUrl}/flights?access_key={effectiveKey}&flight_iata={Uri.EscapeDataString(normalised)}&limit=1";
             var response = await _retryPolicy.ExecuteAsync(() => _httpClient.GetAsync(url, cancellationToken));
 
             if (!response.IsSuccessStatusCode)
