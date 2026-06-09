@@ -114,6 +114,12 @@ public enum StatusTrack
     Vehicle = 2
 }
 
+public enum DropOffTripStatus
+{
+    InProgress = 0,
+    Completed = 1
+}
+
 public enum SyncAlertType
 {
     GuestRemoved = 1,

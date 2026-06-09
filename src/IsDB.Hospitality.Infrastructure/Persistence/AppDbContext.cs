@@ -41,6 +41,7 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<FlightSyncLog> FlightSyncLogs => Set<FlightSyncLog>();
     public DbSet<SystemLog> SystemLogs => Set<SystemLog>();
     public DbSet<SyncAlert> SyncAlerts => Set<SyncAlert>();
+    public DbSet<DropOffTrip> DropOffTrips => Set<DropOffTrip>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -261,6 +262,43 @@ public class AppDbContext : DbContext, IAppDbContext
             .WithMany(f => f.TravelBookings)
             .HasForeignKey(tb => tb.FlightId)
             .OnDelete(DeleteBehavior.Restrict); // Prevent cascade delete of Flight if bookings exist
+
+        // DropOffTrip → Guest (many-to-one, no cascade to preserve log after guest deletion)
+        modelBuilder.Entity<DropOffTrip>()
+            .HasOne(d => d.Guest)
+            .WithMany()
+            .HasForeignKey(d => d.GuestId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // DropOffTrip → Vehicle (many-to-one, no cascade)
+        modelBuilder.Entity<DropOffTrip>()
+            .HasOne(d => d.Vehicle)
+            .WithMany()
+            .HasForeignKey(d => d.VehicleId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // DropOffTrip → Driver (optional snapshot)
+        modelBuilder.Entity<DropOffTrip>()
+            .HasOne(d => d.Driver)
+            .WithMany()
+            .HasForeignKey(d => d.DriverId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        // DropOffTrip → LoggedByStaff
+        modelBuilder.Entity<DropOffTrip>()
+            .HasOne(d => d.LoggedByStaff)
+            .WithMany()
+            .HasForeignKey(d => d.LoggedByStaffId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // DropOffTrip indexes
+        modelBuilder.Entity<DropOffTrip>()
+            .HasIndex(d => d.LoggedAt)
+            .IsDescending();
+
+        modelBuilder.Entity<DropOffTrip>()
+            .HasIndex(d => new { d.Status, d.LoggedAt })
+            .IsDescending(false, true);
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

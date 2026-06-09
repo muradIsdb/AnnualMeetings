@@ -3,6 +3,7 @@ using System;
 using IsDB.Hospitality.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260609071041_AddDropOffTripsTable")]
+    partial class AddDropOffTripsTable
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.11");
@@ -1241,79 +1244,6 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.ToTable("StaffUserRoles");
                 });
 
-            modelBuilder.Entity("IsDB.Hospitality.Domain.Entities.SyncAlert", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("AlertType")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("CarClassName")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("DetectedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("EventsAirContactId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid?>("GuestId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("GuestName")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool>("IsResolved")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("NewValue")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Notes")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("OldValue")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("ResolvedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ResolvedByUserName")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("SyncSource")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid?>("VehicleId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("VehiclePlate")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DetectedAt")
-                        .IsDescending();
-
-                    b.HasIndex("GuestId");
-
-                    b.HasIndex("VehicleId");
-
-                    b.HasIndex("IsResolved", "DetectedAt")
-                        .IsDescending(false, true);
-
-                    b.ToTable("SyncAlerts");
-                });
-
             modelBuilder.Entity("IsDB.Hospitality.Domain.Entities.SyncFieldMapping", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1995,23 +1925,6 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("StaffUser");
-                });
-
-            modelBuilder.Entity("IsDB.Hospitality.Domain.Entities.SyncAlert", b =>
-                {
-                    b.HasOne("IsDB.Hospitality.Domain.Entities.Guest", "Guest")
-                        .WithMany()
-                        .HasForeignKey("GuestId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("IsDB.Hospitality.Domain.Entities.Vehicle", "Vehicle")
-                        .WithMany()
-                        .HasForeignKey("VehicleId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("Guest");
-
-                    b.Navigation("Vehicle");
                 });
 
             modelBuilder.Entity("IsDB.Hospitality.Domain.Entities.SyncFieldValue", b =>
