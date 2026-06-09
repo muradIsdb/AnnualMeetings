@@ -100,6 +100,7 @@ export function AssignVehicleModal({ guest, onClose, onSuccess }: AssignVehicleM
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null)
   const [forcedVehicle, setForcedVehicle] = useState<VehicleOption | null>(null)
   const [assignmentType, setAssignmentType] = useState<'Dedicated' | 'DropOff'>('Dedicated')
+  const [destination, setDestination] = useState('')
   const [estimatedArrival, setEstimatedArrival] = useState('')
   const [notes, setNotes] = useState('')
   const [showScanner, setShowScanner] = useState(false)
@@ -145,6 +146,8 @@ export function AssignVehicleModal({ guest, onClose, onSuccess }: AssignVehicleM
         selectedVehicleId!,
         notes || undefined,
         estimatedArrival || undefined,
+        assignmentType,
+        destination || undefined,
       ),
     onSuccess: () => {
       invalidate()
@@ -163,6 +166,7 @@ export function AssignVehicleModal({ guest, onClose, onSuccess }: AssignVehicleM
         notes || undefined,
         estimatedArrival || undefined,
         assignmentType,
+        destination || undefined,
       ),
     onSuccess: (data) => {
       invalidate()
@@ -210,7 +214,7 @@ export function AssignVehicleModal({ guest, onClose, onSuccess }: AssignVehicleM
   }
 
   const isPending = assignMutation.isPending || forceMutation.isPending || barcodeMutation.isPending
-  const canConfirm = !!(selectedVehicleId || forcedVehicle) && !isPending
+  const canConfirm = !!(selectedVehicleId || forcedVehicle) && !isPending && (assignmentType !== 'DropOff' || !!destination.trim())
 
   return (
     <>
@@ -428,6 +432,8 @@ export function AssignVehicleModal({ guest, onClose, onSuccess }: AssignVehicleM
                   </div>
                 </div>
 
+                {/* Estimated arrival — only relevant for Dedicated */}
+                {assignmentType === 'Dedicated' && (
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">
                     Estimated Arrival Time <span className="text-gray-400">(optional)</span>
@@ -439,6 +445,7 @@ export function AssignVehicleModal({ guest, onClose, onSuccess }: AssignVehicleM
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-isdb-green/30 focus:border-isdb-green"
                   />
                 </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">
@@ -452,6 +459,22 @@ export function AssignVehicleModal({ guest, onClose, onSuccess }: AssignVehicleM
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-isdb-green/30 focus:border-isdb-green resize-none"
                   />
                 </div>
+
+                {/* Destination — required for Drop-off */}
+                {assignmentType === 'DropOff' && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Destination <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={destination}
+                      onChange={e => setDestination(e.target.value)}
+                      placeholder="e.g. Hotel Hilton, Conference Centre…"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-isdb-green/30 focus:border-isdb-green"
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
