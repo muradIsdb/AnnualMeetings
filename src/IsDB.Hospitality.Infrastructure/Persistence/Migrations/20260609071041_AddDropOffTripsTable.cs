@@ -11,98 +11,17 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // ShortName column is added idempotently by Program.cs startup code
-            // (IF NOT EXISTS guard) — skip here to avoid duplicate column error on PostgreSQL.
-
-            migrationBuilder.CreateTable(
-                name: "DropOffTrips",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    GuestId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    VehicleId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    DriverId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    DriverName = table.Column<string>(type: "TEXT", nullable: true),
-                    DriverPhone = table.Column<string>(type: "TEXT", nullable: true),
-                    CarNumber = table.Column<string>(type: "TEXT", nullable: true),
-                    Destination = table.Column<string>(type: "TEXT", nullable: false),
-                    Notes = table.Column<string>(type: "TEXT", nullable: true),
-                    LoggedByStaffId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    LoggedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    Status = table.Column<int>(type: "INTEGER", nullable: false),
-                    CompletedAt = table.Column<DateTime>(type: "TEXT", nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_DropOffTrips", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_DropOffTrips_Drivers_DriverId",
-                        column: x => x.DriverId,
-                        principalTable: "Drivers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
-                    table.ForeignKey(
-                        name: "FK_DropOffTrips_Guests_GuestId",
-                        column: x => x.GuestId,
-                        principalTable: "Guests",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_DropOffTrips_StaffUsers_LoggedByStaffId",
-                        column: x => x.LoggedByStaffId,
-                        principalTable: "StaffUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_DropOffTrips_Vehicles_VehicleId",
-                        column: x => x.VehicleId,
-                        principalTable: "Vehicles",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_DropOffTrips_DriverId",
-                table: "DropOffTrips",
-                column: "DriverId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_DropOffTrips_GuestId",
-                table: "DropOffTrips",
-                column: "GuestId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_DropOffTrips_LoggedAt",
-                table: "DropOffTrips",
-                column: "LoggedAt",
-                descending: new bool[0]);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_DropOffTrips_LoggedByStaffId",
-                table: "DropOffTrips",
-                column: "LoggedByStaffId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_DropOffTrips_Status_LoggedAt",
-                table: "DropOffTrips",
-                columns: new[] { "Status", "LoggedAt" },
-                descending: new[] { false, true });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_DropOffTrips_VehicleId",
-                table: "DropOffTrips",
-                column: "VehicleId");
+            // DropOffTrips table and ShortName column are created by Program.cs startup
+            // using raw SQL with proper PostgreSQL types (uuid, timestamptz) and
+            // CREATE TABLE IF NOT EXISTS / IF NOT EXISTS guards.
+            // This migration is intentionally a no-op to avoid SQLite TEXT vs PostgreSQL
+            // UUID type mismatches on foreign key constraints.
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropTable(
-                name: "DropOffTrips");
-
-            // ShortName column intentionally not dropped — managed by Program.cs.
+            // Intentionally empty — table managed by Program.cs.
         }
     }
 }

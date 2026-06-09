@@ -1125,6 +1125,50 @@ using (var scope = app.Services.CreateScope())
         logger.LogWarning(ex, "AddSyncAlertsTable migration failed (non-fatal).");
     }
 
+    // AddDropOffTripsTable: creates the DropOffTrips table for drop-off vehicle trip tracking.
+    try
+    {
+        logger.LogInformation("Running AddDropOffTripsTable migration...");
+        await context.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "DropOffTrips" (
+                "Id"               uuid         NOT NULL DEFAULT gen_random_uuid(),
+                "GuestId"          uuid         NOT NULL,
+                "VehicleId"        uuid         NOT NULL,
+                "DriverId"         uuid         NULL,
+                "DriverName"       text         NULL,
+                "DriverPhone"      text         NULL,
+                "CarNumber"        text         NULL,
+                "Destination"      text         NOT NULL DEFAULT '',
+                "Notes"            text         NULL,
+                "LoggedByStaffId"  uuid         NOT NULL,
+                "LoggedAt"         timestamptz  NOT NULL DEFAULT now(),
+                "Status"           integer      NOT NULL DEFAULT 0,
+                "CompletedAt"      timestamptz  NULL,
+                "CreatedAt"        timestamptz  NOT NULL DEFAULT now(),
+                "UpdatedAt"        timestamptz  NOT NULL DEFAULT now(),
+                CONSTRAINT "PK_DropOffTrips" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_DropOffTrips_Guests_GuestId" FOREIGN KEY ("GuestId") REFERENCES "Guests" ("Id") ON DELETE RESTRICT,
+                CONSTRAINT "FK_DropOffTrips_Vehicles_VehicleId" FOREIGN KEY ("VehicleId") REFERENCES "Vehicles" ("Id") ON DELETE RESTRICT,
+                CONSTRAINT "FK_DropOffTrips_Drivers_DriverId" FOREIGN KEY ("DriverId") REFERENCES "Drivers" ("Id") ON DELETE SET NULL,
+                CONSTRAINT "FK_DropOffTrips_StaffUsers_LoggedByStaffId" FOREIGN KEY ("LoggedByStaffId") REFERENCES "StaffUsers" ("Id") ON DELETE RESTRICT
+            );
+            CREATE INDEX IF NOT EXISTS "IX_DropOffTrips_GuestId" ON "DropOffTrips" ("GuestId");
+            CREATE INDEX IF NOT EXISTS "IX_DropOffTrips_VehicleId" ON "DropOffTrips" ("VehicleId");
+            CREATE INDEX IF NOT EXISTS "IX_DropOffTrips_DriverId" ON "DropOffTrips" ("DriverId");
+            CREATE INDEX IF NOT EXISTS "IX_DropOffTrips_LoggedByStaffId" ON "DropOffTrips" ("LoggedByStaffId");
+            CREATE INDEX IF NOT EXISTS "IX_DropOffTrips_LoggedAt" ON "DropOffTrips" ("LoggedAt" DESC);
+            CREATE INDEX IF NOT EXISTS "IX_DropOffTrips_Status_LoggedAt" ON "DropOffTrips" ("Status", "LoggedAt" DESC);
+            INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+            VALUES ('20260609071041_AddDropOffTripsTable', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        """);
+        logger.LogInformation("AddDropOffTripsTable migration complete.");
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "AddDropOffTripsTable migration failed (non-fatal).");
+    }
+
     // ── Data integrity cleanup: clear stale CurrentGuestId on Available vehicles ──
     // If a vehicle's Status is Available but CurrentGuestId is still set, the
     // denormalised field is out of sync with reality (can happen from legacy data
