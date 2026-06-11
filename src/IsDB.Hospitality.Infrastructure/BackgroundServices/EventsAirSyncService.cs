@@ -570,6 +570,14 @@ public class EventsAirSyncService : BackgroundService
         {
             sw.Stop();
             _logger.LogError(ex, "EventsAir background sync failed.");
+
+            // CRITICAL: Clear the EF change tracker before attempting to save the failure status.
+            // If the exception was caused by a dirty entity (e.g. a varchar overflow), the change
+            // tracker still holds that entity in a Modified/Added state. A second SaveChangesAsync
+            // without clearing would re-throw the same exception, causing an "Unhandled error in
+            // background loop" and preventing the sync log from being written.
+            db.ChangeTracker.Clear();
+
             config.LastSyncAt = DateTime.UtcNow;
             config.LastSyncStatus = "Failed";
             config.LastSyncMessage = ex.Message;

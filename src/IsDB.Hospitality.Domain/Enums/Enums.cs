@@ -124,7 +124,9 @@ public enum SyncAlertType
 {
     GuestRemoved = 1,
     CarClassMismatch = 2,
-    RegTypeChanged = 3
+    RegTypeChanged = 3,
+    /// <summary>A guest's data (e.g. FlightNumber or RoomNumber) could not be saved due to a data quality issue.</summary>
+    DataQualityIssue = 4
 }
 
 public enum SyncAlertSource
