@@ -429,6 +429,10 @@ public class EventsAirSyncService : BackgroundService
             }
             catch (Exception ex)
             {
+                // Clear the change tracker so that any partially-staged Flight/TravelBooking
+                // entities from the failed Pass 3 do not leak into the final config SaveChanges
+                // at the end of SyncAsync and cause a second, unrelated DbUpdateException.
+                db.ChangeTracker.Clear();
                 _logger.LogWarning(ex, "EventsAir background sync Pass 3 (travel) failed — guest sync still succeeded.");
             }
 
