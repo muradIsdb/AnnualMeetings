@@ -646,7 +646,7 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("FlightNumber")
                         .IsRequired()
-                        .HasMaxLength(20)
+                        .HasMaxLength(50)
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime?>("LastTrackedAt")
@@ -844,7 +844,7 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("RoomNumber")
-                        .HasMaxLength(20)
+                        .HasMaxLength(50)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("SpecialRequirements")

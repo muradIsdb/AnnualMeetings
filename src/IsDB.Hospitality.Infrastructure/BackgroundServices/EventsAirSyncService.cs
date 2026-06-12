@@ -429,6 +429,10 @@ public class EventsAirSyncService : BackgroundService
             }
             catch (Exception ex)
             {
+                // Clear the change tracker so that any partially-staged Flight/TravelBooking
+                // entities from the failed Pass 3 do not leak into the final config SaveChanges
+                // at the end of SyncAsync and cause a second, unrelated DbUpdateException.
+                db.ChangeTracker.Clear();
                 _logger.LogWarning(ex, "EventsAir background sync Pass 3 (travel) failed — guest sync still succeeded.");
             }
 
@@ -570,6 +574,14 @@ public class EventsAirSyncService : BackgroundService
         {
             sw.Stop();
             _logger.LogError(ex, "EventsAir background sync failed.");
+
+            // CRITICAL: Clear the EF change tracker before attempting to save the failure status.
+            // If the exception was caused by a dirty entity (e.g. a varchar overflow), the change
+            // tracker still holds that entity in a Modified/Added state. A second SaveChangesAsync
+            // without clearing would re-throw the same exception, causing an "Unhandled error in
+            // background loop" and preventing the sync log from being written.
+            db.ChangeTracker.Clear();
+
             config.LastSyncAt = DateTime.UtcNow;
             config.LastSyncStatus = "Failed";
             config.LastSyncMessage = ex.Message;

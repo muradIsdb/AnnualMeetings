@@ -548,6 +548,34 @@ public static class EventsAirSyncHelpers
                 var flightKey = $"{tb.FlightNumber}|{parsedDate.Date:yyyy-MM-dd}|{scheduledTime:HHmm}";
 
 
+                // Guard: reject flight numbers that exceed the column limit (50 chars after normalisation).
+                // A free-text entry like "Saudi Arabian Airlines SV1234" normalises to a string longer
+                // than the column allows. Rather than crashing the entire sync, skip this booking,
+                // create a DataQualityIssue SyncAlert so staff can fix the data in EventsAir, and continue.
+                if (tb.FlightNumber.Length > 50)
+                {
+                    result.ErrorCount++;
+                    var alertMsg = $"FlightNumber '{tb.FlightNumber}' ({tb.FlightNumber.Length} chars) exceeds the 50-character limit. Please correct the flight number in EventsAir.";
+                    if (result.Errors.Count < 5)
+                        result.Errors.Add($"ContactId={tb.ContactId}: {alertMsg}");
+                    // Create a SyncAlert so the issue is visible in the admin UI
+                    if (guestsByContactId.TryGetValue(tb.ContactId, out var alertGuest))
+                    {
+                        db.SyncAlerts.Add(new SyncAlert
+                        {
+                            AlertType          = SyncAlertType.DataQualityIssue,
+                            GuestId            = alertGuest.Id,
+                            GuestName          = $"{alertGuest.FirstName} {alertGuest.LastName}".Trim(),
+                            EventsAirContactId = tb.ContactId,
+                            OldValue           = tb.FlightNumber,
+                            NewValue           = $"Too long ({tb.FlightNumber.Length} chars, max 50)",
+                            SyncSource         = SyncAlertSource.AutoSync,
+                            DetectedAt         = DateTime.UtcNow
+                        });
+                    }
+                    continue;
+                }
+
                 if (!flightsByKey.TryGetValue(flightKey, out var flight))
                 {
                     // First guest on this flight+date — create the row

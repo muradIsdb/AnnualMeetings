@@ -27,7 +27,7 @@ public class GuestConfiguration : IEntityTypeConfiguration<Guest>
         builder.Property(g => g.MobileNumber).HasMaxLength(50);
         builder.Property(g => g.Email).HasMaxLength(200);
         builder.Property(g => g.GroupCode).HasMaxLength(50);
-        builder.Property(g => g.RoomNumber).HasMaxLength(20);
+        builder.Property(g => g.RoomNumber).HasMaxLength(50);
         builder.Property(g => g.HotelName).HasMaxLength(200);
         builder.Property(g => g.SpecialRequirements).HasMaxLength(1000);
         builder.Property(g => g.Notes).HasMaxLength(2000);
@@ -46,7 +46,7 @@ public class FlightConfiguration : IEntityTypeConfiguration<Flight>
     public void Configure(EntityTypeBuilder<Flight> builder)
     {
         builder.HasKey(f => f.Id);
-        builder.Property(f => f.FlightNumber).IsRequired().HasMaxLength(20);
+        builder.Property(f => f.FlightNumber).IsRequired().HasMaxLength(50);
         builder.Property(f => f.AirlineName).HasMaxLength(100);
         builder.Property(f => f.DeparturePortName).HasMaxLength(100);
         builder.Property(f => f.ArrivalPortName).HasMaxLength(100);
