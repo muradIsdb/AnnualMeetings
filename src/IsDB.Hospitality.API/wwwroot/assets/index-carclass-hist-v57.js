@@ -1631,17 +1631,17 @@ function uC() {
       }),
       // Main body
       s.jsx("div", {
-        className: "flex-1 flex flex-col items-center justify-start pt-4 px-12",
+        className: "flex-1 flex flex-col items-center justify-start pt-2 px-12",
         children: s.jsxs("div", {
-          className: "flex flex-col items-center gap-6 max-w-5xl w-full text-center",
+          className: "flex flex-col items-center gap-4 max-w-5xl w-full text-center",
           children: [
             // Logo
             s.jsx("div", {
-              className: "flex items-center justify-center rounded-2xl px-8 py-5",
+              className: "flex items-center justify-center rounded-2xl px-6 py-3",
               style: { background: "rgba(255,255,255,0.07)", backdropFilter: "blur(4px)" },
               children: s.jsx("img", {
                 src: x, alt: "Event Logo", className: "object-contain",
-                style: { maxWidth: 600, maxHeight: 260, width: "100%" },
+                style: { maxWidth: "min(480px,80vw)", maxHeight: "min(160px,18vh)", width: "100%" },
                 onError: u => { u.target.src = "/isdb-logo.png"; }
               })
             }),
@@ -1710,16 +1710,16 @@ function uC() {
       }),
       // Main body
       s.jsx("div", {
-        className: "flex-1 flex flex-col items-center justify-start pt-4 px-12",
+        className: "flex-1 flex flex-col items-center justify-start pt-2 px-12",
         children: s.jsxs("div", {
-          className: "flex flex-col items-center gap-6 max-w-5xl w-full text-center",
+          className: "flex flex-col items-center gap-4 max-w-5xl w-full text-center",
           children: [
             // Logo
             s.jsx("div", {
               className: "flex items-center justify-center",
               children: s.jsx("img", {
                 src: x, alt: "Event Logo", className: "object-contain",
-                style: { maxWidth: 600, maxHeight: 260, width: "100%" },
+                style: { maxWidth: "min(480px,80vw)", maxHeight: "min(160px,18vh)", width: "100%" },
                 onError: u => { u.target.src = "/isdb-logo.png"; }
               })
             }),
