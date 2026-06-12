@@ -1475,7 +1475,7 @@ function uC() {
         children: "Participant not found."
       }),
       s.jsx("button", {
-        onClick: () => t(-1),
+        onClick: () => window.close(),
         className: "px-6 py-2 rounded-lg border transition",
         style: { color: o ? "rgba(255,255,255,0.7)" : "#4b5563", borderColor: o ? "rgba(255,255,255,0.2)" : "#d1d5db" },
         children: "Go Back"
@@ -1623,7 +1623,7 @@ function uC() {
       }),
       // Close button
       s.jsx("button", {
-        onClick: () => t(-1),
+        onClick: () => window.close(),
         className: "absolute top-6 right-6 transition text-sm px-3 py-1 rounded z-10",
         style: { color: "rgba(255,255,255,0.5)", border: "1px solid rgba(255,255,255,0.15)" },
         title: "Close placard",
@@ -1703,7 +1703,7 @@ function uC() {
       }),
       // Close button
       s.jsx("button", {
-        onClick: () => t(-1),
+        onClick: () => window.close(),
         className: "absolute top-6 right-6 text-gray-400 hover:text-gray-600 transition text-sm px-3 py-1 rounded border border-gray-200 hover:border-gray-400 z-10",
         title: "Close placard",
         children: "\u2715 Close"
