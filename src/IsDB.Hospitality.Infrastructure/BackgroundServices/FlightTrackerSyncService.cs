@@ -144,13 +144,42 @@ public class FlightTrackerSyncService : BackgroundService
             {
                 var flightDateOnly = DateOnly.FromDateTime(flight.ScheduledArrival.Date);
                 var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, flightDateOnly, cancellationToken, apiKey);
-                if (status == null) continue;
+                if (status == null)
+                {
+                    // Create a deduplicated SyncAlert for unrecognized flight numbers so the team
+                    // knows which entries need manual correction in EventsAir.
+                    if (!string.IsNullOrWhiteSpace(flight.FlightNumber))
+                    {
+                        var alreadyAlerted = await context.SyncAlerts.AnyAsync(a =>
+                            a.AlertType == SyncAlertType.UnrecognizedFlightNumber &&
+                            a.OldValue == flight.FlightNumber &&
+                            !a.IsResolved, cancellationToken);
+                        if (!alreadyAlerted)
+                        {
+                            var guestName = flight.TravelBookings.FirstOrDefault()?.Guest is { } g
+                                ? $"{g.FirstName} {g.LastName}".Trim() : "Unknown";
+                            context.SyncAlerts.Add(new Domain.Entities.SyncAlert
+                            {
+                                AlertType = SyncAlertType.UnrecognizedFlightNumber,
+                                GuestId = flight.TravelBookings.FirstOrDefault()?.Guest?.Id,
+                                GuestName = guestName,
+                                OldValue = flight.FlightNumber,
+                                NewValue = null,
+                                Notes = $"AviationStack could not find flight '{flight.FlightNumber}'. The flight number may be malformed or missing an airline IATA code.",
+                                SyncSource = Domain.Enums.SyncAlertSource.AutoSync,
+                                DetectedAt = DateTime.UtcNow
+                            });
+                        }
+                    }
+                    flight.LastTrackedAt = DateTime.UtcNow;
+                    continue;
+                }
 
                 // Reject AviationStack results that belong to a different day's flight (configurable tolerance).
                 if (status.ScheduledArrival.HasValue)
                 {
                     var dayDiff = Math.Abs((status.ScheduledArrival.Value.Date - flight.ScheduledArrival.Date).TotalDays);
-                    if (dayDiff > dateGuardDays)
+                    if (dayDiff >= dateGuardDays)
                     {
                         _logger.LogDebug(
                             "Skipping flight {FlightNumber}: AviationStack returned {ApiDate}, DB expects {DbDate} (diff={Diff}d, guard={Guard}d)",
@@ -168,7 +197,17 @@ public class FlightTrackerSyncService : BackgroundService
                 bool changed = false;
 
                 var newStatus = ParseFlightStatus(status.Status);
-                if (flight.Status != newStatus) { flight.Status = newStatus; changed = true; }
+                // Prevent status downgrade — a flight should never regress from Active→Scheduled
+                // or Landed→Scheduled/Active. This protects against AviationStack returning the
+                // next day's instance for a recurring daily flight number.
+                if (newStatus < flight.Status && flight.Status != FlightStatus.Unknown)
+                {
+                    _logger.LogDebug(
+                        "Skipping status downgrade for {FlightNumber}: {OldStatus} → {NewStatus}",
+                        flight.FlightNumber, flight.Status, newStatus);
+                    // Still update non-status fields (terminal, gate, delay) if they come from the same day
+                }
+                else if (flight.Status != newStatus) { flight.Status = newStatus; changed = true; }
                 if (status.ActualArrival.HasValue && flight.ActualArrival != status.ActualArrival)
                 {
                     flight.ActualArrival = status.ActualArrival;
@@ -313,13 +352,41 @@ public class FlightTrackerSyncService : BackgroundService
             {
                 var flightDateOnly = DateOnly.FromDateTime(flight.ScheduledArrival.Date);
                 var status = await flightTracker.GetFlightStatusAsync(flight.FlightNumber, flightDateOnly, cancellationToken, apiKey);
-                if (status == null) continue;
+                if (status == null)
+                {
+                    // Create a deduplicated SyncAlert for unrecognized flight numbers
+                    if (!string.IsNullOrWhiteSpace(flight.FlightNumber))
+                    {
+                        var alreadyAlerted = await context.SyncAlerts.AnyAsync(a =>
+                            a.AlertType == SyncAlertType.UnrecognizedFlightNumber &&
+                            a.OldValue == flight.FlightNumber &&
+                            !a.IsResolved, cancellationToken);
+                        if (!alreadyAlerted)
+                        {
+                            var guestName = flight.TravelBookings.FirstOrDefault()?.Guest is { } g
+                                ? $"{g.FirstName} {g.LastName}".Trim() : "Unknown";
+                            context.SyncAlerts.Add(new Domain.Entities.SyncAlert
+                            {
+                                AlertType = SyncAlertType.UnrecognizedFlightNumber,
+                                GuestId = flight.TravelBookings.FirstOrDefault()?.Guest?.Id,
+                                GuestName = guestName,
+                                OldValue = flight.FlightNumber,
+                                NewValue = null,
+                                Notes = $"AviationStack could not find flight '{flight.FlightNumber}'. The flight number may be malformed or missing an airline IATA code.",
+                                SyncSource = Domain.Enums.SyncAlertSource.AutoSync,
+                                DetectedAt = DateTime.UtcNow
+                            });
+                        }
+                    }
+                    flight.LastTrackedAt = DateTime.UtcNow;
+                    continue;
+                }
 
                 // Reject AviationStack results that belong to a different day's flight (configurable tolerance).
                 if (status.ScheduledArrival.HasValue)
                 {
                     var dayDiff = Math.Abs((status.ScheduledArrival.Value.Date - flight.ScheduledArrival.Date).TotalDays);
-                    if (dayDiff > dateGuardDays)
+                    if (dayDiff >= dateGuardDays)
                     {
                         _logger.LogDebug(
                             "Skipping flight {FlightNumber}: AviationStack returned {ApiDate}, DB expects {DbDate} (diff={Diff}d, guard={Guard}d)",
@@ -338,7 +405,17 @@ public class FlightTrackerSyncService : BackgroundService
 
                 bool changed = false;
                 var newStatus = ParseFlightStatus(status.Status);
-                if (flight.Status != newStatus) { flight.Status = newStatus; changed = true; }
+                // Prevent status downgrade — a flight should never regress from Active→Scheduled
+                // or Landed→Scheduled/Active. This protects against AviationStack returning the
+                // next day's instance for a recurring daily flight number.
+                if (newStatus < flight.Status && flight.Status != FlightStatus.Unknown)
+                {
+                    _logger.LogDebug(
+                        "Skipping status downgrade for {FlightNumber}: {OldStatus} → {NewStatus}",
+                        flight.FlightNumber, flight.Status, newStatus);
+                    // Still update non-status fields (terminal, gate, delay) if they come from the same day
+                }
+                else if (flight.Status != newStatus) { flight.Status = newStatus; changed = true; }
                 if (status.ActualArrival.HasValue && flight.ActualArrival != status.ActualArrival) { flight.ActualArrival = status.ActualArrival; changed = true; }
                 if (status.ActualDeparture.HasValue && flight.ActualDeparture != status.ActualDeparture) { flight.ActualDeparture = status.ActualDeparture; changed = true; }
                 if (status.Terminal != null && flight.ActualTerminal != status.Terminal) { flight.ActualTerminal = status.Terminal; changed = true; }
