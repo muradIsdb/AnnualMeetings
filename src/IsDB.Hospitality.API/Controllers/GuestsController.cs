@@ -510,8 +510,14 @@ public class GuestsController : ApiControllerBase
                 }
                 catch (Exception ex)
                 {
-                    job.TravelFirstError = ex.Message;
-                    Console.WriteLine($"Travel sync error: {ex.Message}\n{ex.StackTrace}");
+                    // Surface the full inner exception chain for diagnostics
+                    var inner1 = ex.InnerException?.Message ?? "(none)";
+                    var inner2 = ex.InnerException?.InnerException?.Message ?? "(none)";
+                    job.TravelFirstError = $"{ex.Message} | Inner: {inner1} | Inner2: {inner2}";
+                    Console.WriteLine($"[TRAVEL-SYNC] ERROR: {ex.Message}");
+                    Console.WriteLine($"[TRAVEL-SYNC] Inner1: {inner1}");
+                    Console.WriteLine($"[TRAVEL-SYNC] Inner2: {inner2}");
+                    Console.WriteLine($"[TRAVEL-SYNC] StackTrace: {ex.StackTrace}");
                 }
 
                 // ═══════════════════════════════════════════════════════════════
