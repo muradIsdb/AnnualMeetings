@@ -229,7 +229,7 @@ export default function TransportDashboard() {
   // ── Derived lists ──────────────────────────────────────────────────────────
   const awaitingDispatch = useMemo(() => {
     const list = guests.filter(
-      (g) => g.inboundStatus === InboundStatus.Arrived && !g.activeVehiclePlate
+      (g) => g.inboundStatus === InboundStatus.Arrived && !g.activeVehiclePlate && !g.hasActiveDropOff
     )
     const priority = (g: GuestSummary) => {
       const r = g.rankValue?.toLowerCase()

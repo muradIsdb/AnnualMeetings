@@ -66,6 +66,7 @@ public class GetGuestsQueryHandler : IRequestHandler<GetGuestsQuery, List<GuestS
                 InboundStatus = g.InboundStatus,
                 InboundStatusLabel = g.InboundStatus.ToString(),
                 HasChangedFlights = g.TravelBookings.Any(tb => tb.ChangedSinceLastView),
+                HasActiveDropOff = _context.DropOffTrips.Any(t => t.GuestId == g.Id && t.Status == DropOffTripStatus.InProgress),
                 OutboundStatus = g.OutboundStatus,
                 OutboundStatusLabel = g.OutboundStatus.HasValue ? g.OutboundStatus.Value.ToString() : null,
                 HotelName = g.HotelName,

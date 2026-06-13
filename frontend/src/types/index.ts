@@ -91,6 +91,7 @@ export interface GuestSummary {
   nationality?: string;
   organization?: string;
   hasChangedFlights?: boolean;
+  hasActiveDropOff?: boolean;
   liaisonOfficer?: boolean;
   liaisonOfficerName?: string;
   liaisonOfficerCarNumber?: string;

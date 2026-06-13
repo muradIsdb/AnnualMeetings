@@ -69,6 +69,14 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
             .Select(va => new { va.GuestId, va.Vehicle!.LicensePlate })
             .ToListAsync(cancellationToken);
 
+        // ── 3b. Guests with active (InProgress) drop-off trips ─────────────────────
+        var guestsWithActiveDropOff = await _context.DropOffTrips.AsNoTracking()
+            .Where(t => t.Status == DropOffTripStatus.InProgress)
+            .Select(t => t.GuestId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        var activeDropOffSet = guestsWithActiveDropOff.ToHashSet();
+
         // ── 4. Alerts ─────────────────────────────────────────────────────────────
         var activeAlerts = await _context.Alerts.AsNoTracking()
             .Include(a => a.Guest)
@@ -132,6 +140,7 @@ public class GetDashboardSummaryQueryHandler : IRequestHandler<GetDashboardSumma
                     RequiresAccessibility = g.RequiresAccessibility,
                     StatusLabel           = g.Status.ToString(),
                     ActiveVehiclePlate    = plateLookup.TryGetValue(g.Id, out var plate) ? plate : null,
+                    HasActiveDropOff      = activeDropOffSet.Contains(g.Id),
                     Notes                 = g.Notes,
                     DedicatedCar          = g.DedicatedCar,
                     RankValue             = g.RankValue,

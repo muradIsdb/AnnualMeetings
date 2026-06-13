@@ -87,6 +87,8 @@ public class GuestSummaryDto
     public bool RequiresAccessibility { get; set; }
     public string StatusLabel { get; set; } = string.Empty;
     public string? ActiveVehiclePlate { get; set; }
+    /// <summary>True if the guest has an in-progress drop-off trip (should be hidden from dispatch queue).</summary>
+    public bool HasActiveDropOff { get; set; }
     public string? Notes { get; set; }
     public string? RegistrationTypeName { get; set; }
     public string? RankValue { get; set; }
