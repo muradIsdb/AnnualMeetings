@@ -479,6 +479,18 @@ public static class EventsAirSyncHelpers
     {
         var result = new TravelSyncResult();
 
+        // ── Safety guard: never truncate when EventsAir returned 0 bookings ──
+        // A 0-booking response almost always means a quota error, network failure,
+        // or API outage — NOT that all guests genuinely have no travel.
+        // Truncating in this case would wipe all existing travel data.
+        // Return immediately with SkippedNoFlight=0 so the caller can distinguish
+        // "no bookings fetched" from a successful empty sync.
+        if (travelBookings.Count == 0)
+        {
+            result.SkippedNoFlight = 0;
+            return result;
+        }
+
         // ── Option A: Truncate-and-reload within the same transaction ──
         // First, clear all existing flight data. Because we do this here, 
         // it runs inside the single SaveChangesAsync transaction, so the UI

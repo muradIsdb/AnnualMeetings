@@ -472,6 +472,11 @@ public class GuestsController : ApiControllerBase
                 // ═══════════════════════════════════════════════════════════════
                 try
                 {
+                    // Clear the change tracker so that Guest/VehicleAssignment entities tracked
+                    // during Pass 1 & 2 do not interfere with the truncate-and-reload in
+                    // ProcessTravelBookingsAsync (which calls RemoveRange on all TravelBookings
+                    // and Flights before re-inserting from EventsAir).
+                    bgDb.ChangeTracker.Clear();
                     var travelBookings = await EventsAirSyncHelpers.FetchTravelBookingsByContactsAsync(apiBaseUrl, eventCode, token, httpClientFactory, syncedContactIds, CancellationToken.None);
                     Console.WriteLine($"[TRAVEL-SYNC] Processing {travelBookings.Count} travel bookings...");
                     foreach (var sample in travelBookings.Take(5))
