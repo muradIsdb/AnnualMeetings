@@ -499,10 +499,14 @@ public static class EventsAirSyncHelpers
         db.TravelBookings.RemoveRange(db.TravelBookings);
         db.Flights.RemoveRange(db.Flights);
 
-        // Bulk-load active guests to link the new bookings
-        var guestsByContactId = await db.Guests
-            .Where(g => g.IsActive)
-            .ToDictionaryAsync(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        // Bulk-load active guests to link the new bookings.
+        // Use GroupBy+First to safely handle any duplicate or null EventsAirContactId values
+        // that could cause ToDictionaryAsync to throw ArgumentException.
+        var guestsByContactId = (await db.Guests
+            .Where(g => g.IsActive && !string.IsNullOrEmpty(g.EventsAirContactId))
+            .ToListAsync(cancellationToken))
+            .GroupBy(g => g.EventsAirContactId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(grp => grp.Key, grp => grp.First(), StringComparer.OrdinalIgnoreCase);
 
         // Track flights we create in this pass to avoid duplicates within the new dataset
         var flightsByKey = new Dictionary<string, Flight>(StringComparer.OrdinalIgnoreCase);
