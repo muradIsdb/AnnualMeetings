@@ -268,6 +268,13 @@ public class FlightTrackerSyncService : BackgroundService
             else
                 logMessage = $"Scheduled sync — {queried} flight(s) queried, {updated} updated.";
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Normal shutdown — the host is stopping. Don't log as failure.
+            logStatus = "Cancelled";
+            logMessage = "Sync cancelled due to application shutdown.";
+            _logger.LogInformation("Flight tracker sync cancelled (shutdown).");
+        }
         catch (Exception ex)
         {
             logStatus = "Failed";
@@ -295,7 +302,7 @@ public class FlightTrackerSyncService : BackgroundService
                     Message = logMessage,
                     InitiatedByStaffName = null
                 });
-                await logContext.SaveChangesAsync(cancellationToken);
+                await logContext.SaveChangesAsync(CancellationToken.None);
             }
             catch (Exception logEx)
             {
@@ -454,6 +461,14 @@ public class FlightTrackerSyncService : BackgroundService
                 $"Flights in window: {inWindow}, queried: {queried}, updated: {updated}",
                 null, null, initiatedByStaffName);
 
+            return new SyncResult(queried, updated, logMessage);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Normal shutdown — don't log as failure.
+            logStatus = "Cancelled";
+            logMessage = "Sync cancelled due to application shutdown.";
+            _logger.LogInformation("Manual flight sync cancelled (shutdown).");
             return new SyncResult(queried, updated, logMessage);
         }
         catch (Exception ex)
