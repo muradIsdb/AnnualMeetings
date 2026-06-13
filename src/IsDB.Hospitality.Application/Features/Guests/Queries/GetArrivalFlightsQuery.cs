@@ -135,9 +135,12 @@ public class GetArrivalFlightsQueryHandler : IRequestHandler<GetArrivalFlightsQu
                         .ToList()
                 };
             })
-            // Flights with a scheduled arrival first, sorted ascending (soonest first)
+            // Flights where ALL guests have arrived (InboundStatus >= Arrived) move to the end of the queue
+            // so the operations team can focus on flights with pending guests.
+            .OrderBy(f => f.Guests.All(g => g.InboundStatus >= InboundStatus.Arrived) ? 1 : 0)
+            // Then: flights with a scheduled arrival first, sorted ascending (soonest first)
             // No-flight group goes to the end
-            .OrderBy(f => f.ScheduledArrival.HasValue ? 0 : 1)
+            .ThenBy(f => f.ScheduledArrival.HasValue ? 0 : 1)
             .ThenBy(f => f.ScheduledArrival)
             .ToList();
 
