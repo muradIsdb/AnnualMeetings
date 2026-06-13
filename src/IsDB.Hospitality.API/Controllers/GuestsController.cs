@@ -486,20 +486,11 @@ public class GuestsController : ApiControllerBase
                     // This is the single source of truth for flight deduplication rules.
                     var syncResult = await EventsAirSyncHelpers.ProcessTravelBookingsAsync(bgDb, travelBookings);
 
-                    // ── Orphan cleanup: delete flight rows with no remaining bookings ──────
-                    // When a guest's date or time changes, the old flight row may be left with
-                    // no bookings. Clean it up here to keep the Flights table tidy.
-                    var orphanFlightIds = await bgDb.Flights
-                        .Where(f => !bgDb.TravelBookings.Any(tb => tb.FlightId == f.Id))
-                        .Select(f => f.Id)
-                        .ToListAsync();
-                    if (orphanFlightIds.Count > 0)
-                    {
-                        var orphans = await bgDb.Flights.Where(f => orphanFlightIds.Contains(f.Id)).ToListAsync();
-                        bgDb.Flights.RemoveRange(orphans);
-                        Console.WriteLine($"[TRAVEL-SYNC] Orphan cleanup: removed {orphans.Count} flight rows with no bookings.");
-                    }
-
+                    // Note: orphan flight cleanup is not needed here because ProcessTravelBookingsAsync
+                    // uses a truncate-and-reload approach — it deletes ALL Flights and TravelBookings
+                    // before re-inserting from EventsAir. There can never be orphan flights after this.
+                    // Querying bgDb.Flights while they are all marked Deleted in the change tracker
+                    // causes EF to throw an InvalidOperationException on SaveChangesAsync.
                     await bgDb.SaveChangesAsync();
 
                     Console.WriteLine($"[TRAVEL-SYNC] Results: {syncResult.SavedNew} new, {syncResult.UpdatedExisting} updated, {syncResult.Rebooked} rebooked, {syncResult.ErrorCount} errors, skipped: {syncResult.SkippedNoFlight} no flight, {syncResult.SkippedNoContact} no contact, {syncResult.SkippedNoGuest} no guest match");
