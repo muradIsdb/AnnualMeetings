@@ -644,7 +644,7 @@ public class SettingsController : ApiControllerBase
         if (status.ScheduledArrival.HasValue)
         {
             var dayDiff = Math.Abs((status.ScheduledArrival.Value.Date - flight.ScheduledArrival.Date).TotalDays);
-            if (dayDiff > 1)
+            if (dayDiff >= 1)
                 dateGuardReason = $"Date guard: AviationStack={status.ScheduledArrival.Value.Date:yyyy-MM-dd}, DB={flight.ScheduledArrival.Date:yyyy-MM-dd}, diff={dayDiff}d";
         }
 
@@ -663,8 +663,14 @@ public class SettingsController : ApiControllerBase
             return Ok(new { before, apiResult, dateGuardReason, updated = false });
 
         bool changed = false;
+        string? statusDowngradeReason = null;
         var newStatus = ParseFlightStatusDebug(status.Status);
-        if (flight.Status != newStatus) { flight.Status = newStatus; changed = true; }
+        // Prevent status downgrade (same logic as background sync)
+        if (newStatus < flight.Status && flight.Status != IsDB.Hospitality.Domain.Enums.FlightStatus.Unknown)
+        {
+            statusDowngradeReason = $"Status downgrade blocked: {flight.Status} → {newStatus}";
+        }
+        else if (flight.Status != newStatus) { flight.Status = newStatus; changed = true; }
         if (status.ActualArrival.HasValue && flight.ActualArrival != status.ActualArrival) { flight.ActualArrival = status.ActualArrival; changed = true; }
         if (status.ActualDeparture.HasValue && flight.ActualDeparture != status.ActualDeparture) { flight.ActualDeparture = status.ActualDeparture; changed = true; }
         if (status.Terminal != null && flight.ActualTerminal != status.Terminal) { flight.ActualTerminal = status.Terminal; changed = true; }
@@ -683,7 +689,7 @@ public class SettingsController : ApiControllerBase
             flight.LiveDelayMinutes,
             flight.LastTrackedAt
         };
-        return Ok(new { before, apiResult, dateGuardReason = (string?)null, changed, updated = changed, after });
+        return Ok(new { before, apiResult, dateGuardReason = (string?)null, statusDowngradeReason, changed, updated = changed, after });
     }
 
     private static IsDB.Hospitality.Domain.Enums.FlightStatus ParseFlightStatusDebug(string? s) => s?.ToLower() switch
