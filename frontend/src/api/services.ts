@@ -109,16 +109,18 @@ export const vehiclesApi = {
     return data
   },
 
-  assign: async (guestId: string, vehicleId: string, notes?: string, estimatedArrivalTime?: string): Promise<void> => {
-    await apiClient.post('/vehicles/assign', { guestId, vehicleId, notes, estimatedArrivalTime })
+  assign: async (guestId: string, vehicleId: string, notes?: string, estimatedArrivalTime?: string, driverName?: string, driverPhone?: string): Promise<void> => {
+    await apiClient.post('/fleet/assign', { guestId, vehicleId, assignmentType: 'Dedicated', notes: notes ?? null, driverName: driverName || null, driverPhone: driverPhone || null })
   },
 
-  forceAssign: async (guestId: string, vehicleId: string, notes?: string, estimatedArrivalTime?: string, assignmentType?: string): Promise<{ displacedGuestName?: string }> => {
+  forceAssign: async (guestId: string, vehicleId: string, notes?: string, estimatedArrivalTime?: string, assignmentType?: string, driverName?: string, driverPhone?: string): Promise<{ displacedGuestName?: string }> => {
     const { data } = await apiClient.post<{ displacedGuestName?: string }>('/fleet/force-assign', {
       vehicleId,
       guestId,
       assignmentType: assignmentType ?? 'Dedicated',
       notes: notes ?? null,
+      driverName: driverName || null,
+      driverPhone: driverPhone || null,
     })
     return data
   },
