@@ -5,6 +5,7 @@ export enum UserRole {
   ControlRoom = 'ControlRoom',
   Admin = 'Admin',
   Liaison = 'Liaison',
+  AirportView = 'AirportView',
 }
 
 export interface StaffUser {

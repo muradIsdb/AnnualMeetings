@@ -63,7 +63,7 @@ function RoleBasedHome() {
   if (userRoles.includes(UserRole.Admin) || userRoles.includes(UserRole.ControlRoom)) {
     return <Navigate to="/control-room" replace />
   }
-  if (userRoles.includes(UserRole.Airport)) {
+  if (userRoles.includes(UserRole.Airport) || userRoles.includes(UserRole.AirportView)) {
     return <Navigate to="/airport" replace />
   }
   if (userRoles.includes(UserRole.Transport)) {
@@ -99,12 +99,12 @@ export default function App() {
 
           {/* Airport Module */}
           <Route path="airport" element={
-            <ProtectedRoute allowedRoles={[UserRole.Airport, UserRole.ControlRoom, UserRole.Admin]}>
+            <ProtectedRoute allowedRoles={[UserRole.Airport, UserRole.AirportView, UserRole.ControlRoom, UserRole.Admin]}>
               <AirportDashboard />
             </ProtectedRoute>
           } />
           <Route path="airport/guest/:id" element={
-            <ProtectedRoute allowedRoles={[UserRole.Airport, UserRole.Transport, UserRole.ControlRoom, UserRole.Admin]}>
+            <ProtectedRoute allowedRoles={[UserRole.Airport, UserRole.AirportView, UserRole.Transport, UserRole.ControlRoom, UserRole.Admin]}>
               <GuestDetailPage />
             </ProtectedRoute>
           } />
