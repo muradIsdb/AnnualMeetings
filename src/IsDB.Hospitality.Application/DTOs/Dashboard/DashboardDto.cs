@@ -100,6 +100,8 @@ public class GuestSummaryDto
     public string? LiaisonOfficerName { get; set; }
     public string? LiaisonOfficerCarNumber { get; set; }
     public DateTime? ArrivalTime { get; set; }
+    public DateTime? ArrivalDate { get; set; }
+    public DateTime? DepartureDate { get; set; }
     public Guid? DeservedCarClassId { get; set; }
     public string? DeservedCarClassName { get; set; }
     public string? DeservedCarClassColor { get; set; }
