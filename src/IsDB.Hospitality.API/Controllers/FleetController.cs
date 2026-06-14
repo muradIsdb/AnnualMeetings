@@ -20,6 +20,9 @@ public class FleetController : ApiControllerBase
         _templates = templates;
     }
 
+    private async Task<string?> GetActiveEventCodeAsync() =>
+        (await _db.EventsAirConfigs.FirstOrDefaultAsync())?.EventCode;
+
     // GET /api/fleet/assignments?includeHistory=false
     [HttpGet("assignments")]
     public async Task<ActionResult<List<object>>> GetAssignments([FromQuery] bool includeHistory = false)
@@ -91,6 +94,24 @@ public class FleetController : ApiControllerBase
         // ── DEDICATED PATH ────────────────────────────────────────────────────────
         if (vehicle.Status == VehicleStatus.Assigned)
             return BadRequest(new { message = "Vehicle is already assigned to a guest." });
+
+        // ── AUTO-CREATE DRIVER if name+phone provided and vehicle has no driver ──
+        if (!string.IsNullOrWhiteSpace(req.DriverName) && !string.IsNullOrWhiteSpace(req.DriverPhone) && !vehicle.DriverId.HasValue)
+        {
+            var activeEventCode = await GetActiveEventCodeAsync();
+            var newDriver = new Driver
+            {
+                Id = Guid.NewGuid(),
+                FullName = req.DriverName.Trim(),
+                Phone = req.DriverPhone.Trim(),
+                Status = DriverStatus.Available,
+                IsActive = true,
+                EventCode = activeEventCode,
+                VehicleId = vehicle.Id,
+            };
+            _db.Drivers.Add(newDriver);
+            vehicle.DriverId = newDriver.Id;
+        }
 
         // Close any existing active assignment for this guest
         var existing = await _db.VehicleAssignments.Where(a => a.GuestId == req.GuestId && a.IsActive).ToListAsync();
@@ -196,6 +217,24 @@ public class FleetController : ApiControllerBase
             return await LogDropOffTripInternal(vehicle, guest, req.Destination, req.Notes);
 
         // ── DEDICATED PATH ────────────────────────────────────────────────────────
+        // ── AUTO-CREATE DRIVER if name+phone provided and vehicle has no driver ──
+        if (!string.IsNullOrWhiteSpace(req.DriverName) && !string.IsNullOrWhiteSpace(req.DriverPhone) && !vehicle.DriverId.HasValue)
+        {
+            var activeEventCode = await GetActiveEventCodeAsync();
+            var newDriver = new Driver
+            {
+                Id = Guid.NewGuid(),
+                FullName = req.DriverName.Trim(),
+                Phone = req.DriverPhone.Trim(),
+                Status = DriverStatus.Available,
+                IsActive = true,
+                EventCode = activeEventCode,
+                VehicleId = vehicle.Id,
+            };
+            _db.Drivers.Add(newDriver);
+            vehicle.DriverId = newDriver.Id;
+        }
+
         // Displace any existing active assignment on this vehicle (different guest)
         string? displacedGuestName = null;
         var displacedAssignment = await _db.VehicleAssignments
@@ -505,5 +544,5 @@ public class FleetController : ApiControllerBase
     }
 }
 
-public record FleetAssignRequest(Guid VehicleId, Guid GuestId, string AssignmentType, string? Destination, string? Notes);
+public record FleetAssignRequest(Guid VehicleId, Guid GuestId, string AssignmentType, string? Destination, string? Notes, string? DriverName = null, string? DriverPhone = null);
 public record DropOffTripRequest(Guid VehicleId, Guid GuestId, string? Destination, string? Notes);
