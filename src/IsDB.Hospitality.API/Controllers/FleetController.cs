@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IsDB.Hospitality.API.Controllers;
 
-[Authorize(Roles = "Admin,Transport,Airport")]
+[Authorize(Roles = "Admin,Transport,Airport,AirportView")]
 public class FleetController : ApiControllerBase
 {
     private readonly AppDbContext _db;

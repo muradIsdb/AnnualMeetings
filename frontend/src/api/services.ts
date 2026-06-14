@@ -87,7 +87,7 @@ export const guestsApi = {
     const { data } = await apiClient.get<{ history: any[] }>(`/guests/${id}/journey-status`)
     // The API returns track as integer (0=Inbound,1=Outbound) and changedByRole as integer;
     // normalize both to human-readable strings for the frontend.
-    const roleMap: Record<number, string> = { 0: 'Admin', 1: 'Airport', 2: 'Transport', 3: 'Hotel', 4: 'ControlRoom', 5: 'Liaison' }
+    const roleMap: Record<number, string> = { 0: 'Admin', 1: 'Airport', 2: 'Transport', 3: 'Hotel', 4: 'ControlRoom', 5: 'Liaison', 6: 'AirportView' }
     return (data.history ?? []).map((h) => ({
       ...h,
       track: (h.track === 0 || h.track === 'Inbound') ? 'Inbound' : 'Outbound',
