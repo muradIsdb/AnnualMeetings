@@ -63,6 +63,14 @@ public class GetGuestsQueryHandler : IRequestHandler<GetGuestsQuery, List<GuestS
                     .Where(tb => tb.IsArrival)
                     .Select(tb => (DateTime?)tb.Flight.ScheduledArrival)
                     .FirstOrDefault(),
+                ArrivalDate = g.TravelBookings
+                    .Where(tb => tb.IsArrival)
+                    .Select(tb => (DateTime?)tb.Flight.ScheduledArrival)
+                    .FirstOrDefault(),
+                DepartureDate = g.TravelBookings
+                    .Where(tb => !tb.IsArrival)
+                    .Select(tb => (DateTime?)tb.Flight.ScheduledArrival)
+                    .FirstOrDefault(),
                 InboundStatus = g.InboundStatus,
                 InboundStatusLabel = g.InboundStatus.ToString(),
                 HasChangedFlights = g.TravelBookings.Any(tb => tb.ChangedSinceLastView),
