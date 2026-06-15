@@ -1050,11 +1050,11 @@ function TransportGuestsPage(){
           s.jsx("div",{className:"flex-1 h-px bg-gray-200"})
         ]}),
         s.jsxs("div",{className:"bg-white border border-gray-200 rounded-xl overflow-hidden transition-shadow hover:shadow-md",children:[
-          s.jsxs("button",{className:"w-full text-left px-4 py-3.5 flex items-center gap-3 hover:bg-gray-50 transition-colors",onClick:()=>toggleFlight(fId),children:[
+          s.jsxs("button",{className:"w-full text-left px-4 py-3.5 flex items-start gap-2 md:gap-3 hover:bg-gray-50 transition-colors",onClick:()=>toggleFlight(fId),children:[
             s.jsx(Aa,{className:"w-4 h-4 text-gray-400 flex-shrink-0 transition-transform duration-200 "+(isExpanded?"rotate-90":"")}),
             hasNoFlight?
               s.jsx("div",{className:"w-11 h-11 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 border bg-gray-100 text-gray-400 border-gray-200",children:"?"}):
-              s.jsx("div",{className:"w-11 h-11 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 border bg-blue-50 text-blue-700 border-blue-200",children:airlineCode}),
+              s.jsx("div",{className:"w-9 h-9 md:w-11 md:h-11 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 border bg-blue-50 text-blue-700 border-blue-200",children:airlineCode}),
             s.jsx("div",{className:"flex-1 min-w-0",children:hasNoFlight?
               s.jsxs(s.Fragment,{children:[
                 s.jsx("div",{className:"text-sm font-semibold text-gray-500",children:"No Flight Info"}),
@@ -1066,7 +1066,7 @@ function TransportGuestsPage(){
                   s.jsx("span",{className:"text-gray-300 text-xs",children:"\u00b7"}),
                   s.jsx("span",{className:"text-sm text-gray-500",children:flight.airlineName||"Unknown Airline"})
                 ]}),
-                s.jsxs("div",{className:"flex items-center gap-1.5 flex-wrap mt-1",children:[
+                s.jsxs("div",{className:"flex items-center gap-1.5 flex-wrap mt-1.5",children:[
                   flight.scheduledArrival&&s.jsxs("span",{className:"inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[12px] font-semibold bg-blue-50 text-blue-700 border border-blue-100",children:[fmtDateShort(flight.scheduledArrival)," \u00b7 ",fmtTime(flight.scheduledArrival)]}),
                   flight.terminal&&s.jsxs("span",{className:"inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-violet-50 text-violet-700 border border-violet-100",children:["T",flight.terminal]})
                 ]})
