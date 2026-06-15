@@ -1091,7 +1091,7 @@ function TransportGuestsPage(){
                   s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Reg. Type"}),
                   s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Deserved Car Class"}),
                   s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Old Hotel"}),
-                  s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Current Hotel"}),
+                  
                   s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Vehicle"}),
                   s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Status"})
                 ]})}),
@@ -1114,10 +1114,7 @@ function TransportGuestsPage(){
                       s.jsx("span",{className:"inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200",children:g.oldHotel}):
                       s.jsx("span",{className:"text-gray-400 text-xs",children:"\u2014"})
                     }),
-                    s.jsx("td",{className:"px-4 py-3",children:s.jsxs("div",{children:[
-                      s.jsx("span",{className:"text-gray-700 text-sm",children:g.hotelName||"\u2014"}),
-                      g.roomNumber&&s.jsxs("span",{className:"text-xs text-gray-400 ml-1",children:["Rm ",g.roomNumber]})
-                    ]})}),
+                    
                     s.jsx("td",{className:"px-4 py-3",children:g.activeVehiclePlate?
                       s.jsx("span",{className:"inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-50 text-green-700 border border-green-200",children:g.activeVehiclePlate}):
                       s.jsx("span",{className:"text-gray-400 text-xs",children:"\u2014"})
