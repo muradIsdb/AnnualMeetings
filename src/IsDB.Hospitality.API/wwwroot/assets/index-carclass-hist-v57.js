@@ -1067,7 +1067,7 @@ function TransportGuestsPage(){
                   s.jsx("span",{className:"text-sm text-gray-500",children:flight.airlineName||"Unknown Airline"})
                 ]}),
                 s.jsxs("div",{className:"flex items-center gap-1.5 flex-wrap mt-1",children:[
-                  flight.scheduledArrival&&s.jsxs("span",{className:"text-[11px] text-gray-400",children:[fmtDateShort(flight.scheduledArrival)," \u00b7 ",fmtTime(flight.scheduledArrival)]}),
+                  flight.scheduledArrival&&s.jsxs("span",{className:"inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[12px] font-semibold bg-blue-50 text-blue-700 border border-blue-100",children:[fmtDateShort(flight.scheduledArrival)," \u00b7 ",fmtTime(flight.scheduledArrival)]}),
                   flight.terminal&&s.jsxs("span",{className:"inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-violet-50 text-violet-700 border border-violet-100",children:["T",flight.terminal]})
                 ]})
               ]})
