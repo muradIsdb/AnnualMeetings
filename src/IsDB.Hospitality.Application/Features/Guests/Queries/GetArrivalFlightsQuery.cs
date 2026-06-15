@@ -135,9 +135,19 @@ public class GetArrivalFlightsQueryHandler : IRequestHandler<GetArrivalFlightsQu
                         .ToList()
                 };
             })
-            // Flights where ALL guests have arrived (InboundStatus >= Arrived) move to the end of the queue
-            // so the operations team can focus on flights with pending guests.
-            .OrderBy(f => f.Guests.All(g => g.InboundStatus >= InboundStatus.Arrived) ? 1 : 0)
+            // Compute IsExpired: all guests arrived OR flight is 2+ hours past scheduled arrival
+            .Select(f =>
+            {
+                var allArrived = f.Guests.All(g => g.InboundStatus >= InboundStatus.Arrived);
+                // EventsAir stores times as local Jeddah time (UTC+3); server runs in UTC
+                var jeddahNow = DateTime.UtcNow.AddHours(3);
+                var timePassed = f.ScheduledArrival.HasValue
+                    && jeddahNow > f.ScheduledArrival.Value.AddHours(3);
+                f.IsExpired = allArrived || timePassed;
+                return f;
+            })
+            // Expired flights (all arrived or 2+ hours past) move to the end
+            .OrderBy(f => f.IsExpired ? 1 : 0)
             // Then: flights with a scheduled arrival first, sorted ascending (soonest first)
             // No-flight group goes to the end
             .ThenBy(f => f.ScheduledArrival.HasValue ? 0 : 1)
