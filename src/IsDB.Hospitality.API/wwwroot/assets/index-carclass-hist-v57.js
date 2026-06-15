@@ -939,17 +939,14 @@ function TransportGuestsPage(){
   const [statusFilter,setStatusFilter]=N.useState("all");
   const [carClassFilter,setCarClassFilter]=N.useState("all");
   const [expandedFlights,setExpandedFlights]=N.useState({});
-
   const {data:flights=[],isLoading}=ae({
     queryKey:["arrival-flights","transport-guests"],
     queryFn:async()=>{const{data:d}=await _.get("/guests/arrival-flights");return d},
     refetchInterval:3e4
   });
-
   const toggleFlight=(flightId)=>{
     setExpandedFlights(prev=>({...prev,[flightId]:!prev[flightId]}));
   };
-
   const filteredFlights=N.useMemo(()=>{
     return flights.map(f=>{
       const filtered=f.guests.filter(g=>{
@@ -972,15 +969,12 @@ function TransportGuestsPage(){
       return {...f,guests:filtered};
     }).filter(f=>f.guests.length>0);
   },[flights,search,statusFilter,carClassFilter]);
-
   const totalGuests=filteredFlights.reduce((sum,f)=>sum+f.guests.length,0);
-
   const allCarClasses=N.useMemo(()=>{
     const set=new Set();
     flights.forEach(f=>f.guests.forEach(g=>{if(g.deservedCarClassName)set.add(g.deservedCarClassName)}));
     return [...set].sort();
   },[flights]);
-
   const allStatuses=N.useMemo(()=>{
     const set=new Set();
     flights.forEach(f=>f.guests.forEach(g=>{
@@ -989,24 +983,29 @@ function TransportGuestsPage(){
     }));
     return [...set].sort();
   },[flights]);
-
   const fmtTime=(d)=>{
-    if(!d)return"—";
-    try{return new Date(d).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}catch{return"—"}
+    if(!d)return"\u2014";
+    try{const dt=new Date(d.replace("Z",""));const h=String(dt.getHours()).padStart(2,"0");const m=String(dt.getMinutes()).padStart(2,"0");return h+":"+m}catch{return"\u2014"}
   };
-
-  const fmtDate=(d)=>{
+  const fmtDateShort=(d)=>{
     if(!d)return"";
-    try{return new Date(d).toLocaleDateString("en-GB",{day:"2-digit",month:"short"})}catch{return""}
+    try{const dt=new Date(d.replace("Z",""));return dt.toLocaleDateString("en-GB",{day:"2-digit",month:"short"})}catch{return""}
   };
-
+  const getDateKey=(d)=>{
+    if(!d)return"__unknown__";
+    try{return new Date(d.replace("Z","")).toDateString()}catch{return"__unknown__"}
+  };
+  const getDateLabel=(d)=>{
+    if(!d)return"DATE UNKNOWN";
+    try{return new Date(d.replace("Z","")).toLocaleDateString("en-GB",{weekday:"short",day:"2-digit",month:"short",year:"numeric"}).toUpperCase()}catch{return"DATE UNKNOWN"}
+  };
   return s.jsx("div",{className:"p-4 md:p-6 space-y-6",children:s.jsxs(s.Fragment,{children:[
     s.jsxs("div",{className:"flex items-center justify-between flex-wrap gap-3",children:[
       s.jsxs("div",{className:"flex items-center gap-3",children:[
         s.jsx("div",{className:"w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center",children:s.jsx(vt,{className:"w-5 h-5 text-emerald-600"})}),
         s.jsxs("div",{children:[
           s.jsx("h1",{className:"text-xl font-bold text-gray-900",children:"Transport Guests"}),
-          s.jsx("p",{className:"text-sm text-gray-500",children:"Grouped by flight · Car class & hotel info"})
+          s.jsx("p",{className:"text-sm text-gray-500",children:"Grouped by flight \u00b7 Car class & hotel info"})
         ]})
       ]}),
       s.jsxs("div",{className:"flex items-center gap-2 text-sm text-gray-500",children:[
@@ -1015,11 +1014,10 @@ function TransportGuestsPage(){
         s.jsxs("span",{className:"font-semibold text-gray-800",children:[filteredFlights.length," flight",filteredFlights.length!==1?"s":""]})
       ]})
     ]}),
-
     s.jsxs("div",{className:"flex flex-wrap gap-3 items-center",children:[
       s.jsxs("div",{className:"relative flex-1 min-w-[200px]",children:[
         s.jsx(bt,{className:"absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"}),
-        s.jsx("input",{type:"text",value:search,onChange:e=>setSearch(e.target.value),placeholder:"Search by name, car class, hotel, country…",className:"w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-isdb-green"})
+        s.jsx("input",{type:"text",value:search,onChange:e=>setSearch(e.target.value),placeholder:"Search by name, car class, hotel, country\u2026",className:"w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-isdb-green"})
       ]}),
       s.jsxs("select",{value:statusFilter,onChange:e=>setStatusFilter(e.target.value),className:"px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-isdb-green",children:[
         s.jsx("option",{value:"all",children:"All Statuses"}),
@@ -1030,106 +1028,114 @@ function TransportGuestsPage(){
         allCarClasses.map(cc=>s.jsx("option",{value:cc,children:cc},cc))
       ]})
     ]}),
-
     isLoading?s.jsx("div",{className:"space-y-3",children:[...Array(4)].map((_,i)=>s.jsx("div",{className:"bg-white border border-gray-200 rounded-xl animate-pulse h-20"},i))}):
     filteredFlights.length===0?s.jsxs("div",{className:"card text-center py-12",children:[
       s.jsx(vt,{className:"w-12 h-12 text-gray-300 mx-auto mb-3"}),
       s.jsx("p",{className:"text-gray-500",children:flights.length===0?"No guests loaded yet.":"No flights match your filters."})
     ]}):
-    s.jsx("div",{className:"space-y-2.5",children:filteredFlights.map((flight,idx)=>{
+    s.jsx("div",{className:"space-y-2.5",children:(()=>{let prevDateKey="";return filteredFlights.map((flight,idx)=>{
       const fId=flight.flightId||("no-flight-"+idx);
       const isExpanded=expandedFlights[fId]!=null?expandedFlights[fId]:(idx===0);
       const noVehicle=flight.guests.filter(g=>!g.activeVehiclePlate).length;
       const airlineCode=flight.airlineIataCode?flight.airlineIataCode.toUpperCase():flight.airlineName?flight.airlineName.slice(0,2).toUpperCase():"?";
       const hasNoFlight=!flight.flightId;
-
-      return s.jsxs("div",{className:"bg-white border border-gray-200 rounded-xl overflow-hidden transition-shadow hover:shadow-md",children:[
-        s.jsxs("button",{className:"w-full text-left px-4 py-3.5 flex items-center gap-3 hover:bg-gray-50 transition-colors",onClick:()=>toggleFlight(fId),children:[
-          s.jsx(Aa,{className:`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform duration-200 ${isExpanded?"rotate-90":""}`}),
-          hasNoFlight?
-            s.jsx("div",{className:"w-11 h-11 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 border bg-gray-100 text-gray-400 border-gray-200",children:"?"}):
-            s.jsx("div",{className:"w-11 h-11 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 border bg-blue-50 text-blue-700 border-blue-200",children:airlineCode}),
-          s.jsx("div",{className:"flex-1 min-w-0",children:hasNoFlight?
-            s.jsxs(s.Fragment,{children:[
-              s.jsx("div",{className:"text-sm font-semibold text-gray-500",children:"No Flight Info"}),
-              s.jsx("div",{className:"text-xs text-gray-400 mt-0.5",children:"Guests with no travel booking recorded"})
-            ]}):
-            s.jsxs(s.Fragment,{children:[
-              s.jsxs("div",{className:"flex items-center gap-2 flex-wrap",children:[
-                s.jsx("span",{className:"text-[15px] font-bold text-gray-900",children:flight.flightNumber}),
-                s.jsx("span",{className:"text-gray-300 text-xs",children:"·"}),
-                s.jsx("span",{className:"text-sm text-gray-500",children:flight.airlineName||"Unknown Airline"})
+      const curDateKey=hasNoFlight?"__noflight__":getDateKey(flight.scheduledArrival);
+      const showDateSep=curDateKey!==prevDateKey;
+      prevDateKey=curDateKey;
+      const dateLabel=hasNoFlight?"NO FLIGHT INFO":getDateLabel(flight.scheduledArrival);
+      return s.jsxs(s.Fragment,{children:[
+        showDateSep&&s.jsxs("div",{className:"flex items-center gap-3 my-3",children:[
+          s.jsx("div",{className:"flex-1 h-px bg-gray-200"}),
+          s.jsx("span",{className:"text-[11px] font-semibold text-gray-400 tracking-wider whitespace-nowrap",children:dateLabel}),
+          s.jsx("div",{className:"flex-1 h-px bg-gray-200"})
+        ]}),
+        s.jsxs("div",{className:"bg-white border border-gray-200 rounded-xl overflow-hidden transition-shadow hover:shadow-md",children:[
+          s.jsxs("button",{className:"w-full text-left px-4 py-3.5 flex items-center gap-3 hover:bg-gray-50 transition-colors",onClick:()=>toggleFlight(fId),children:[
+            s.jsx(Aa,{className:"w-4 h-4 text-gray-400 flex-shrink-0 transition-transform duration-200 "+(isExpanded?"rotate-90":"")}),
+            hasNoFlight?
+              s.jsx("div",{className:"w-11 h-11 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 border bg-gray-100 text-gray-400 border-gray-200",children:"?"}):
+              s.jsx("div",{className:"w-11 h-11 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 border bg-blue-50 text-blue-700 border-blue-200",children:airlineCode}),
+            s.jsx("div",{className:"flex-1 min-w-0",children:hasNoFlight?
+              s.jsxs(s.Fragment,{children:[
+                s.jsx("div",{className:"text-sm font-semibold text-gray-500",children:"No Flight Info"}),
+                s.jsx("div",{className:"text-xs text-gray-400 mt-0.5",children:"Guests with no travel booking recorded"})
+              ]}):
+              s.jsxs(s.Fragment,{children:[
+                s.jsxs("div",{className:"flex items-center gap-2 flex-wrap",children:[
+                  s.jsx("span",{className:"text-[15px] font-bold text-gray-900",children:flight.flightNumber}),
+                  s.jsx("span",{className:"text-gray-300 text-xs",children:"\u00b7"}),
+                  s.jsx("span",{className:"text-sm text-gray-500",children:flight.airlineName||"Unknown Airline"})
+                ]}),
+                s.jsxs("div",{className:"flex items-center gap-1.5 flex-wrap mt-1",children:[
+                  flight.scheduledArrival&&s.jsxs("span",{className:"text-[11px] text-gray-400",children:[fmtDateShort(flight.scheduledArrival)," \u00b7 ",fmtTime(flight.scheduledArrival)]}),
+                  flight.terminal&&s.jsxs("span",{className:"inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-violet-50 text-violet-700 border border-violet-100",children:["T",flight.terminal]})
+                ]})
+              ]})
+            }),
+            s.jsxs("div",{className:"flex flex-col items-end gap-1.5 flex-shrink-0",children:[
+              s.jsxs("span",{className:"flex items-center gap-1.5 text-[14px] font-bold text-gray-800",children:[
+                s.jsx(vt,{className:"w-4 h-4 text-gray-400 flex-shrink-0"}),
+                flight.guests.length," guest",flight.guests.length!==1?"s":""
               ]}),
-              s.jsxs("div",{className:"flex items-center gap-1.5 flex-wrap mt-1",children:[
-                flight.scheduledArrival&&s.jsxs("span",{className:"text-[11px] text-gray-400",children:[fmtDate(flight.scheduledArrival)," · ",fmtTime(flight.scheduledArrival)]}),
-                flight.terminal&&s.jsxs("span",{className:"inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-violet-50 text-violet-700 border border-violet-100",children:["T",flight.terminal]})
+              noVehicle>0&&s.jsxs("span",{className:"flex items-center gap-1 text-[12px] font-medium text-amber-600",children:[
+                s.jsx("span",{className:"w-1.5 h-1.5 rounded-full bg-amber-400 inline-block"}),
+                noVehicle," no vehicle"
               ]})
             ]})
-          }),
-          s.jsxs("div",{className:"flex flex-col items-end gap-1.5 flex-shrink-0",children:[
-            s.jsxs("span",{className:"flex items-center gap-1.5 text-[14px] font-bold text-gray-800",children:[
-              s.jsx(vt,{className:"w-4 h-4 text-gray-400 flex-shrink-0"}),
-              flight.guests.length," guest",flight.guests.length!==1?"s":""
-            ]}),
-            noVehicle>0&&s.jsxs("span",{className:"flex items-center gap-1 text-[12px] font-medium text-amber-600",children:[
-              s.jsx("span",{className:"w-1.5 h-1.5 rounded-full bg-amber-400 inline-block"}),
-              noVehicle," no vehicle"
-            ]})
-          ]})
-        ]}),
-
-        isExpanded&&s.jsx("div",{className:"border-t border-gray-100 bg-gray-50/50",children:
-          s.jsx("div",{className:"overflow-x-auto",children:
-            s.jsxs("table",{className:"w-full text-sm",children:[
-              s.jsx("thead",{children:s.jsxs("tr",{className:"bg-gray-100/80 text-xs text-gray-500 uppercase tracking-wider",children:[
-                s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Guest"}),
-                s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Reg. Type"}),
-                s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Deserved Car Class"}),
-                s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Old Hotel"}),
-                s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Current Hotel"}),
-                s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Vehicle"}),
-                s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Status"})
-              ]})}),
-              s.jsx("tbody",{children:flight.guests.map(g=>
-                s.jsxs("tr",{className:"border-t border-gray-100 hover:bg-white cursor-pointer transition-colors",onClick:()=>navigate(`/airport/guest/${g.id}`),children:[
-                  s.jsx("td",{className:"px-4 py-3",children:s.jsxs("div",{className:"flex items-center gap-3",children:[
-                    g.photoUrl?s.jsx("img",{src:g.photoUrl,alt:g.fullName,className:"w-9 h-9 rounded-full object-cover flex-shrink-0"}):
-                    s.jsx("div",{className:"w-9 h-9 rounded-full bg-isdb-green/10 flex items-center justify-center flex-shrink-0",children:s.jsx(Ht,{className:"w-4 h-4 text-isdb-green"})}),
-                    s.jsxs("div",{className:"min-w-0",children:[
-                      s.jsx("p",{className:"font-medium text-gray-900 truncate text-sm",children:g.fullName}),
-                      s.jsx("p",{className:"text-xs text-gray-500 truncate",children:[g.designation,g.country].filter(Boolean).join(" · ")||"—"})
-                    ]})
-                  ]})}),
-                  s.jsx("td",{className:"px-4 py-3 text-gray-600",children:g.registrationTypeName||"—"}),
-                  s.jsx("td",{className:"px-4 py-3",children:g.deservedCarClassName?
-                    s.jsx("span",{className:"inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold",style:{backgroundColor:(g.deservedCarClassColor||"#6b7280")+"20",color:g.deservedCarClassColor||"#6b7280",border:"1px solid "+(g.deservedCarClassColor||"#6b7280")+"40"},children:g.deservedCarClassName}):
-                    s.jsx("span",{className:"text-gray-400 text-xs",children:"—"})
-                  }),
-                  s.jsx("td",{className:"px-4 py-3",children:g.oldHotel?
-                    s.jsx("span",{className:"inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200",children:g.oldHotel}):
-                    s.jsx("span",{className:"text-gray-400 text-xs",children:"—"})
-                  }),
-                  s.jsx("td",{className:"px-4 py-3",children:s.jsxs("div",{children:[
-                    s.jsx("span",{className:"text-gray-700 text-sm",children:g.hotelName||"—"}),
-                    g.roomNumber&&s.jsxs("span",{className:"text-xs text-gray-400 ml-1",children:["Rm ",g.roomNumber]})
-                  ]})}),
-                  s.jsx("td",{className:"px-4 py-3",children:g.activeVehiclePlate?
-                    s.jsx("span",{className:"inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-50 text-green-700 border border-green-200",children:g.activeVehiclePlate}):
-                    s.jsx("span",{className:"text-gray-400 text-xs",children:"—"})
-                  }),
-                  s.jsx("td",{className:"px-4 py-3",children:(()=>{
-                    const label=(g.inboundStatusLabel||g.statusLabel||"—").replace(/([A-Z])/g," $1").trim();
-                    const colors={"Expected":"bg-blue-50 text-blue-700 border-blue-200","Arrived":"bg-green-50 text-green-700 border-green-200","Vehicle Assigned":"bg-emerald-50 text-emerald-700 border-emerald-200","At Hotel":"bg-indigo-50 text-indigo-700 border-indigo-200","Checked In":"bg-purple-50 text-purple-700 border-purple-200"};
-                    const cls=colors[label]||"bg-gray-50 text-gray-600 border-gray-200";
-                    return s.jsx("span",{className:`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${cls}`,children:label});
-                  })()})
-                ]},g.id)
-              )})
-            ]})
+          ]}),
+          isExpanded&&s.jsx("div",{className:"border-t border-gray-100 bg-gray-50/50",children:
+            s.jsx("div",{className:"overflow-x-auto",children:
+              s.jsxs("table",{className:"w-full text-sm",children:[
+                s.jsx("thead",{children:s.jsxs("tr",{className:"bg-gray-100/80 text-xs text-gray-500 uppercase tracking-wider",children:[
+                  s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Guest"}),
+                  s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Reg. Type"}),
+                  s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Deserved Car Class"}),
+                  s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Old Hotel"}),
+                  s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Current Hotel"}),
+                  s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Vehicle"}),
+                  s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Status"})
+                ]})}),
+                s.jsx("tbody",{children:flight.guests.map(g=>
+                  s.jsxs("tr",{className:"border-t border-gray-100 hover:bg-white cursor-pointer transition-colors",onClick:()=>navigate("/airport/guest/"+g.id),children:[
+                    s.jsx("td",{className:"px-4 py-3",children:s.jsxs("div",{className:"flex items-center gap-3",children:[
+                      g.photoUrl?s.jsx("img",{src:g.photoUrl,alt:g.fullName,className:"w-9 h-9 rounded-full object-cover flex-shrink-0"}):
+                      s.jsx("div",{className:"w-9 h-9 rounded-full bg-isdb-green/10 flex items-center justify-center flex-shrink-0",children:s.jsx(Ht,{className:"w-4 h-4 text-isdb-green"})}),
+                      s.jsxs("div",{className:"min-w-0",children:[
+                        s.jsx("p",{className:"font-medium text-gray-900 truncate text-sm",children:g.fullName}),
+                        s.jsx("p",{className:"text-xs text-gray-500 truncate",children:[g.designation,g.country].filter(Boolean).join(" \u00b7 ")||"\u2014"})
+                      ]})
+                    ]})}),
+                    s.jsx("td",{className:"px-4 py-3 text-gray-600",children:g.registrationTypeName||"\u2014"}),
+                    s.jsx("td",{className:"px-4 py-3",children:g.deservedCarClassName?
+                      s.jsx("span",{className:"inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold",style:{backgroundColor:(g.deservedCarClassColor||"#6b7280")+"20",color:g.deservedCarClassColor||"#6b7280",border:"1px solid "+(g.deservedCarClassColor||"#6b7280")+"40"},children:g.deservedCarClassName}):
+                      s.jsx("span",{className:"text-gray-400 text-xs",children:"\u2014"})
+                    }),
+                    s.jsx("td",{className:"px-4 py-3",children:g.oldHotel?
+                      s.jsx("span",{className:"inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200",children:g.oldHotel}):
+                      s.jsx("span",{className:"text-gray-400 text-xs",children:"\u2014"})
+                    }),
+                    s.jsx("td",{className:"px-4 py-3",children:s.jsxs("div",{children:[
+                      s.jsx("span",{className:"text-gray-700 text-sm",children:g.hotelName||"\u2014"}),
+                      g.roomNumber&&s.jsxs("span",{className:"text-xs text-gray-400 ml-1",children:["Rm ",g.roomNumber]})
+                    ]})}),
+                    s.jsx("td",{className:"px-4 py-3",children:g.activeVehiclePlate?
+                      s.jsx("span",{className:"inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-50 text-green-700 border border-green-200",children:g.activeVehiclePlate}):
+                      s.jsx("span",{className:"text-gray-400 text-xs",children:"\u2014"})
+                    }),
+                    s.jsx("td",{className:"px-4 py-3",children:(()=>{
+                      const label=(g.inboundStatusLabel||g.statusLabel||"\u2014").replace(/([A-Z])/g," $1").trim();
+                      const colors={"Expected":"bg-blue-50 text-blue-700 border-blue-200","Arrived":"bg-green-50 text-green-700 border-green-200","Vehicle Assigned":"bg-emerald-50 text-emerald-700 border-emerald-200","At Hotel":"bg-indigo-50 text-indigo-700 border-indigo-200","Checked In":"bg-purple-50 text-purple-700 border-purple-200"};
+                      const cls=colors[label]||"bg-gray-50 text-gray-600 border-gray-200";
+                      return s.jsx("span",{className:"inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border "+cls,children:label});
+                    })()})
+                  ]},g.id)
+                )})
+              ]})
+            })
           })
-        })
+        ]})
       ]},fId);
-    })})
+    })})()})
   ]})});
 }
 function _SLFmtDate(d){if(!d)return"—";try{const dt=new Date(d);return dt.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})+" "+dt.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}catch{return d}}
