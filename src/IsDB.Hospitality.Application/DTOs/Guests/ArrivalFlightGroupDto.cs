@@ -16,5 +16,6 @@ public class ArrivalFlightGroupDto
     // Layer 2 live fields (Aviationstack-owned)
     public int? LiveDelayMinutes { get; set; }
     public DateTime? LastTrackedAt { get; set; }
+    public bool IsExpired { get; set; }
     public List<GuestSummaryDto> Guests { get; set; } = new();
 }
