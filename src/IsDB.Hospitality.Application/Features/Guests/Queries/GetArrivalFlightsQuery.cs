@@ -142,7 +142,7 @@ public class GetArrivalFlightsQueryHandler : IRequestHandler<GetArrivalFlightsQu
                 // EventsAir stores times as local Jeddah time (UTC+3); server runs in UTC
                 var jeddahNow = DateTime.UtcNow.AddHours(3);
                 var timePassed = f.ScheduledArrival.HasValue
-                    && jeddahNow > f.ScheduledArrival.Value.AddHours(2);
+                    && jeddahNow > f.ScheduledArrival.Value.AddHours(3);
                 f.IsExpired = allArrived || timePassed;
                 return f;
             })
