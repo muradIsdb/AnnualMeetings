@@ -1102,7 +1102,7 @@ function TransportGuestsPage(){
                       s.jsx("div",{className:"w-9 h-9 rounded-full bg-isdb-green/10 flex items-center justify-center flex-shrink-0",children:s.jsx(Ht,{className:"w-4 h-4 text-isdb-green"})}),
                       s.jsxs("div",{className:"min-w-0",children:[
                         s.jsx("p",{className:"font-medium text-gray-900 truncate text-sm",children:g.fullName}),
-                        s.jsx("p",{className:"text-xs text-gray-500 truncate",children:[g.designation,g.country].filter(Boolean).join(" \u00b7 ")||"\u2014"})
+                        s.jsx("p",{className:"text-xs text-gray-500",children:g.country||"\u2014"})
                       ]})
                     ]})}),
                     s.jsx("td",{className:"px-4 py-3 text-gray-600",children:g.registrationTypeName||"\u2014"}),
