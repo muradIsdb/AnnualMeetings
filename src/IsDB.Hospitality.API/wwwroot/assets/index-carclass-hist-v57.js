@@ -1095,8 +1095,8 @@ function TransportGuestsPage(){
                   s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Vehicle"}),
                   s.jsx("th",{className:"text-left px-4 py-2.5 font-medium",children:"Status"})
                 ]})}),
-                s.jsx("tbody",{children:flight.guests.map(g=>
-                  s.jsxs("tr",{className:"border-t border-gray-100 hover:bg-white cursor-pointer transition-colors",onClick:()=>navigate("/airport/guest/"+g.id),children:[
+                s.jsx("tbody",{children:[...flight.guests].sort((a,b)=>((a.inboundStatus||0)>0?1:0)-((b.inboundStatus||0)>0?1:0)).map(g=>
+                  s.jsxs("tr",{className:"border-t border-gray-100 hover:bg-white cursor-pointer transition-colors",style:{opacity:(g.inboundStatus||0)>0?0.4:1,transition:"opacity 0.3s"},onClick:()=>navigate("/airport/guest/"+g.id),children:[
                     s.jsx("td",{className:"px-4 py-3",children:s.jsxs("div",{className:"flex items-center gap-3",children:[
                       g.photoUrl?s.jsx("img",{src:g.photoUrl,alt:g.fullName,className:"w-9 h-9 rounded-full object-cover flex-shrink-0"}):
                       s.jsx("div",{className:"w-9 h-9 rounded-full bg-isdb-green/10 flex items-center justify-center flex-shrink-0",children:s.jsx(Ht,{className:"w-4 h-4 text-isdb-green"})}),
