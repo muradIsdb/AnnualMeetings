@@ -1888,8 +1888,10 @@ public class GuestsController : ApiControllerBase
                 CarClass = grp.Key,
                 TotalGuests = grp.Count(),
                 Pending = grp.Count(g => !g.HasVehicleAssigned),
-                // Count guests who have a vehicle assigned AND that vehicle's car class matches their deserved class
-                Assigned = grp.Count(g => g.HasVehicleAssigned &&
+                // Count guests who have any vehicle assigned (regardless of class)
+                Assigned = grp.Count(g => g.HasVehicleAssigned),
+                // Count guests whose assigned vehicle's car class matches their deserved class
+                Matched = grp.Count(g => g.HasVehicleAssigned &&
                     string.Equals(g.AssignedVehicleCarClassName, g.DeservedCarClassName, StringComparison.OrdinalIgnoreCase))
             })
             .OrderBy(x => x.CarClass)

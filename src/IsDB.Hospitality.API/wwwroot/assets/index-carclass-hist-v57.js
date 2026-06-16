@@ -2325,6 +2325,7 @@ function SC(){const[e,t]=N.useState("guests"),[r,n]=N.useState([]),[a,l]=N.useSt
       else if(sortCol==="total"){va=a.totalGuests;vb=b.totalGuests}
       else if(sortCol==="pending"){va=a.pending;vb=b.pending}
       else if(sortCol==="assigned"){va=a.assigned;vb=b.assigned}
+      else if(sortCol==="matched"){va=a.matched;vb=b.matched}
       else{va=a.carClass;vb=b.carClass}
       if(va<vb)return sortDir==="asc"?-1:1;
       if(va>vb)return sortDir==="asc"?1:-1;
@@ -2367,7 +2368,8 @@ function SC(){const[e,t]=N.useState("guests"),[r,n]=N.useState([]),[a,l]=N.useSt
             s.jsx("th",{onClick:()=>toggleSort("carClass"),className:"px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Car Class "+sortIcon("carClass")}),
             s.jsx("th",{onClick:()=>toggleSort("total"),className:"px-4 py-3 text-center font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Required "+sortIcon("total")}),
             s.jsx("th",{onClick:()=>toggleSort("pending"),className:"px-4 py-3 text-center font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Pending "+sortIcon("pending")}),
-            s.jsx("th",{onClick:()=>toggleSort("assigned"),className:"px-4 py-3 text-center font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Assigned "+sortIcon("assigned")})
+            s.jsx("th",{onClick:()=>toggleSort("assigned"),className:"px-4 py-3 text-center font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Assigned "+sortIcon("assigned")}),
+            s.jsx("th",{onClick:()=>toggleSort("matched"),className:"px-4 py-3 text-center font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Matched "+sortIcon("matched")})
           ]})
         }),
         s.jsxs("tbody",{className:"divide-y divide-gray-100",children:[
@@ -2375,13 +2377,15 @@ function SC(){const[e,t]=N.useState("guests"),[r,n]=N.useState([]),[a,l]=N.useSt
             s.jsx("td",{className:"px-4 py-3 font-medium text-gray-900",children:r.carClass}),
             s.jsx("td",{className:"px-4 py-3 text-center",children:s.jsx("span",{className:"inline-flex items-center justify-center min-w-[2rem] px-2 py-0.5 rounded-full text-sm font-bold bg-blue-100 text-blue-800",children:r.totalGuests})}),
             s.jsx("td",{className:"px-4 py-3 text-center",children:s.jsx("span",{className:"inline-flex items-center justify-center min-w-[2rem] px-2 py-0.5 rounded-full text-sm font-bold bg-yellow-100 text-yellow-800",children:r.pending})}),
-            s.jsx("td",{className:"px-4 py-3 text-center",children:s.jsx("span",{className:"inline-flex items-center justify-center min-w-[2rem] px-2 py-0.5 rounded-full text-sm font-bold bg-green-100 text-green-800",children:r.assigned})})
+            s.jsx("td",{className:"px-4 py-3 text-center",children:s.jsx("span",{className:"inline-flex items-center justify-center min-w-[2rem] px-2 py-0.5 rounded-full text-sm font-bold bg-green-100 text-green-800",children:r.assigned})}),
+            s.jsx("td",{className:"px-4 py-3 text-center",children:s.jsx("span",{className:"inline-flex items-center justify-center min-w-[2rem] px-2 py-0.5 rounded-full text-sm font-bold bg-purple-100 text-purple-800",children:r.matched})})
           ]},r.carClass)),
           s.jsxs("tr",{className:"bg-gray-50 font-bold border-t-2 border-gray-300",children:[
             s.jsx("td",{className:"px-4 py-3 text-gray-900",children:"TOTAL"}),
             s.jsx("td",{className:"px-4 py-3 text-center text-blue-800",children:sorted.reduce((s2,r)=>s2+r.totalGuests,0)}),
             s.jsx("td",{className:"px-4 py-3 text-center text-yellow-800",children:sorted.reduce((s2,r)=>s2+r.pending,0)}),
-            s.jsx("td",{className:"px-4 py-3 text-center text-green-800",children:sorted.reduce((s2,r)=>s2+r.assigned,0)})
+            s.jsx("td",{className:"px-4 py-3 text-center text-green-800",children:sorted.reduce((s2,r)=>s2+r.assigned,0)}),
+            s.jsx("td",{className:"px-4 py-3 text-center text-purple-800",children:sorted.reduce((s2,r)=>s2+r.matched,0)})
           ]})
         ]})
       ]})
