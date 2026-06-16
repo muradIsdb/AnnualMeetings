@@ -1756,7 +1756,7 @@ public class GuestsController : ApiControllerBase
     /// Designed for the Vendor role's Car Requirements page.
     /// </summary>
     [HttpGet("vendor-car-list")]
-    [Authorize(Roles = "Admin,Vendor")]
+    [Authorize(Roles = "Admin,Vendor,Transport,ControlRoom")]
     public async Task<IActionResult> GetVendorCarList(
         [FromQuery] DateTime? arrivalDate,
         [FromQuery] string? carClass,
@@ -1838,7 +1838,7 @@ public class GuestsController : ApiControllerBase
     /// and how many vehicles of that class are currently assigned.
     /// </summary>
     [HttpGet("vendor-car-summary")]
-    [Authorize(Roles = "Admin,Vendor")]
+    [Authorize(Roles = "Admin,Vendor,Transport,ControlRoom")]
     public async Task<IActionResult> GetVendorCarSummary(
         [FromQuery] DateTime? arrivalDate,
         [FromServices] AppDbContext db = null!,
