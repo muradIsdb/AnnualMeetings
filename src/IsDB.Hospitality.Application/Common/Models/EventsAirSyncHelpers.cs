@@ -491,6 +491,34 @@ public static class EventsAirSyncHelpers
             return result;
         }
 
+        // ── Snapshot AviationStack-enriched data before truncate ──
+        // When AviationStack has already updated a flight (Status, Terminal, Gate, etc.),
+        // we must preserve that data across the truncate-and-reload cycle.
+        // Key = "FlightNumber|yyyy-MM-dd|HHmm" (same key format used below).
+        var aviationSnapshot = await db.Flights
+            .Where(f => f.Status != FlightStatus.Scheduled || f.ActualTerminal != null || f.ActualArrival != null)
+            .Select(f => new
+            {
+                f.FlightNumber,
+                f.ScheduledArrival,
+                f.Status,
+                f.ActualArrival,
+                f.ActualDeparture,
+                f.ActualTerminal,
+                f.ActualGate,
+                f.LastTrackedAt,
+                f.LiveDelayMinutes
+            })
+            .ToListAsync(cancellationToken);
+
+        // Build a lookup dictionary using the same key format as the flight creation loop
+        var snapshotByKey = new Dictionary<string, (FlightStatus Status, DateTime? ActualArrival, DateTime? ActualDeparture, string? Terminal, string? Gate, DateTime? LastTrackedAt, int? DelayMinutes)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in aviationSnapshot)
+        {
+            var key = $"{s.FlightNumber}|{s.ScheduledArrival.Date:yyyy-MM-dd}|{s.ScheduledArrival:HHmm}";
+            snapshotByKey[key] = (s.Status, s.ActualArrival, s.ActualDeparture, s.ActualTerminal, s.ActualGate, s.LastTrackedAt, s.LiveDelayMinutes);
+        }
+
         // ── Option A: Truncate-and-reload within the same transaction ──
         // First, clear all existing flight data. Because we do this here, 
         // it runs inside the single SaveChangesAsync transaction, so the UI
@@ -607,6 +635,17 @@ public static class EventsAirSyncHelpers
                         DeparturePortIataCode = tb.DeparturePortCode,
                         Status             = FlightStatus.Scheduled
                     };
+                    // ── Restore AviationStack data from snapshot ──
+                    if (snapshotByKey.TryGetValue(flightKey, out var snap))
+                    {
+                        flight.Status           = snap.Status;
+                        flight.ActualArrival    = snap.ActualArrival;
+                        flight.ActualDeparture  = snap.ActualDeparture;
+                        flight.ActualTerminal   = snap.Terminal;
+                        flight.ActualGate       = snap.Gate;
+                        flight.LastTrackedAt    = snap.LastTrackedAt;
+                        flight.LiveDelayMinutes = snap.DelayMinutes;
+                    }
                     db.Flights.Add(flight);
                     flightsByKey[flightKey] = flight;
                     // Store the first guest's name for use in conflict messages
