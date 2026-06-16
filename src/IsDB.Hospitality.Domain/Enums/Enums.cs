@@ -27,7 +27,8 @@ public enum UserRole
     Hotel = 3,
     ControlRoom = 4,
     Liaison = 5,
-    AirportView = 6
+    AirportView = 6,
+    Vendor = 7
 }
 public enum VehicleStatus
 {

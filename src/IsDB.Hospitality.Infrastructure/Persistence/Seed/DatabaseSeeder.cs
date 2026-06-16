@@ -116,6 +116,7 @@ public static class DatabaseSeeder
             (Email: "hotel@isdb.org",     Name: "Hussain Al-Attas",     Role: UserRole.Hotel),
             (Email: "controlroom@isdb.org",Name: "Mahieddine Hamdani",  Role: UserRole.ControlRoom),
             (Email: "admin@isdb.org",     Name: "System Administrator", Role: UserRole.Admin),
+            (Email: "vendor@isdb.org",    Name: "Vendor User",           Role: UserRole.Vendor),
         };
 
         var users = seedData.Select(d =>
