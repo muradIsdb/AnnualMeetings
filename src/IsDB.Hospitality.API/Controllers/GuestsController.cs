@@ -1749,6 +1749,81 @@ public class GuestsController : ApiControllerBase
         });
     }
 
+
+    // ─── GET /api/guests/vendor-car-list ─────────────────────────────────────
+    /// <summary>
+    /// Returns a flat list of guests with car class, flight, and arrival info.
+    /// Designed for the Vendor role's Car Requirements page.
+    /// </summary>
+    [HttpGet("vendor-car-list")]
+    [Authorize(Roles = "Admin,Vendor")]
+    public async Task<IActionResult> GetVendorCarList(
+        [FromQuery] DateTime? arrivalDate,
+        [FromQuery] string? carClass,
+        [FromServices] AppDbContext db,
+        CancellationToken ct)
+    {
+        var query = db.Guests
+            .Where(g => g.IsActive)
+            .AsQueryable();
+
+        // Get active event code to filter
+        var activeEvent = await db.EventsAirConfigs.FirstOrDefaultAsync(ct);
+        if (activeEvent != null && !string.IsNullOrWhiteSpace(activeEvent.EventCode))
+            query = query.Where(g => g.EventCode == null || g.EventCode == activeEvent.EventCode);
+
+        var projected = await query
+            .Select(g => new
+            {
+                g.Id,
+                FullName = g.FirstName + " " + g.LastName,
+                g.Country,
+                g.RegistrationTypeName,
+                DeservedCarClassName = g.DeservedCarClass != null ? g.DeservedCarClass.Name : null,
+                DeservedCarClassColor = g.DeservedCarClass != null ? g.DeservedCarClass.Color : null,
+                ArrivalDate = g.TravelBookings
+                    .Where(tb => tb.IsArrival)
+                    .Select(tb => (DateTime?)tb.Flight.ScheduledArrival)
+                    .FirstOrDefault(),
+                FlightNumber = g.TravelBookings
+                    .Where(tb => tb.IsArrival)
+                    .Select(tb => tb.Flight.FlightNumber)
+                    .FirstOrDefault(),
+                g.HotelName,
+                g.OldHotel
+            })
+            .ToListAsync(ct);
+
+        // Apply filters in memory (date comparison needs date-only)
+        var result = projected.AsEnumerable();
+
+        if (arrivalDate.HasValue)
+            result = result.Where(g => g.ArrivalDate.HasValue &&
+                g.ArrivalDate.Value.Date == arrivalDate.Value.Date);
+
+        if (!string.IsNullOrWhiteSpace(carClass))
+            result = result.Where(g => string.Equals(g.DeservedCarClassName, carClass, StringComparison.OrdinalIgnoreCase));
+
+        var list = result
+            .OrderBy(g => g.ArrivalDate ?? DateTime.MaxValue)
+            .ThenBy(g => g.FullName)
+            .Select(g => new
+            {
+                g.Id,
+                g.FullName,
+                g.Country,
+                g.RegistrationTypeName,
+                g.DeservedCarClassName,
+                g.DeservedCarClassColor,
+                g.ArrivalDate,
+                g.FlightNumber,
+                g.HotelName,
+                g.OldHotel
+            })
+            .ToList();
+
+        return Ok(list);
+    }
 }
 public record UpdateStatusRequest(GuestStatus Status, string? Notes = null);
 public record CompleteChecklistRequest(string? Notes = null);
