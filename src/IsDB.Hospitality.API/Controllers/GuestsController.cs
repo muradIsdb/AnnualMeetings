@@ -1830,6 +1830,79 @@ public class GuestsController : ApiControllerBase
 
         return Ok(list);
     }
+
+    // ─── GET /api/guests/vendor-car-summary ─────────────────────────────────────
+    /// <summary>
+    /// Returns a grouped summary of car requirements by car class.
+    /// Shows total guests needing each class, how many have vehicles assigned,
+    /// and how many vehicles of that class are currently assigned.
+    /// </summary>
+    [HttpGet("vendor-car-summary")]
+    [Authorize(Roles = "Admin,Vendor")]
+    public async Task<IActionResult> GetVendorCarSummary(
+        [FromQuery] DateTime? arrivalDate,
+        [FromServices] AppDbContext db = null!,
+        CancellationToken ct = default)
+    {
+        // Get active event code
+        var activeEvent = await db.EventsAirConfigs.FirstOrDefaultAsync(ct);
+        var eventCode = activeEvent?.EventCode;
+
+        // Get all active guests with their car class and assignment status
+        var guestQuery = db.Guests.Where(g => g.IsActive).AsQueryable();
+        if (!string.IsNullOrWhiteSpace(eventCode))
+            guestQuery = guestQuery.Where(g => g.EventCode == null || g.EventCode == eventCode);
+
+        var guests = await guestQuery
+            .Select(g => new
+            {
+                g.Id,
+                DeservedCarClassName = g.DeservedCarClass != null ? g.DeservedCarClass.Name : null,
+                DeservedCarClassId = g.DeservedCarClassId,
+                ArrivalDate = g.TravelBookings
+                    .Where(tb => tb.IsArrival)
+                    .Select(tb => (DateTime?)tb.Flight.ScheduledArrival)
+                    .FirstOrDefault(),
+                HasVehicleAssigned = g.VehicleAssignments.Any(va => va.IsActive)
+            })
+            .ToListAsync(ct);
+
+        // Apply date filter
+        var filtered = guests.AsEnumerable();
+        if (arrivalDate.HasValue)
+            filtered = filtered.Where(g => g.ArrivalDate.HasValue &&
+                g.ArrivalDate.Value.Date == arrivalDate.Value.Date);
+
+        // Get count of vehicles assigned per car class (vehicles with an active guest)
+        var vehicleQuery = db.Vehicles.Where(v => v.IsActive && v.CarClassId != null).AsQueryable();
+        if (!string.IsNullOrWhiteSpace(eventCode))
+            vehicleQuery = vehicleQuery.Where(v => v.EventCode == null || v.EventCode == eventCode);
+
+        var vehiclesAssignedPerClass = await vehicleQuery
+            .Where(v => v.CurrentGuestId != null)
+            .GroupBy(v => v.CarClass!.Name)
+            .Select(grp => new { CarClass = grp.Key, Count = grp.Count() })
+            .ToListAsync(ct);
+
+        var assignedVehicleMap = vehiclesAssignedPerClass.ToDictionary(x => x.CarClass, x => x.Count);
+
+        // Group guests by car class
+        var summary = filtered
+            .Where(g => !string.IsNullOrWhiteSpace(g.DeservedCarClassName))
+            .GroupBy(g => g.DeservedCarClassName!)
+            .Select(grp => new
+            {
+                CarClass = grp.Key,
+                TotalGuests = grp.Count(),
+                Pending = grp.Count(g => !g.HasVehicleAssigned),
+                GuestsAssigned = grp.Count(g => g.HasVehicleAssigned),
+                VehiclesAssigned = assignedVehicleMap.GetValueOrDefault(grp.Key, 0)
+            })
+            .OrderBy(x => x.CarClass)
+            .ToList();
+
+        return Ok(summary);
+    }
 }
 public record UpdateStatusRequest(GuestStatus Status, string? Notes = null);
 public record CompleteChecklistRequest(string? Notes = null);

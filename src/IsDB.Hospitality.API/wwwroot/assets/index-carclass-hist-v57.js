@@ -2307,59 +2307,44 @@ function SC(){const[e,t]=N.useState("guests"),[r,n]=N.useState([]),[a,l]=N.useSt
   const [hideAssigned,setHideAssigned]=N.useState(false);
   const [sortCol,setSortCol]=N.useState("carClass");
   const [sortDir,setSortDir]=N.useState("asc");
-  const buildParams=()=>{const p=new URLSearchParams();if(dateFilter)p.append("arrivalDate",dateFilter);if(hideAssigned)p.append("hideAssigned","true");return p.toString()};
-  const {data:guests=[],isLoading}=ae({
-    queryKey:["vendor-car-list",dateFilter,hideAssigned],
-    queryFn:async()=>{const qs=buildParams();const{data:d}=await _.get("/guests/vendor-car-list"+(qs?"?"+qs:""));return d},
+  const buildParams=()=>{const p=new URLSearchParams();if(dateFilter)p.append("arrivalDate",dateFilter);return p.toString()};
+  const {data:summary=[],isLoading}=ae({
+    queryKey:["vendor-car-summary",dateFilter],
+    queryFn:async()=>{const qs=buildParams();const{data:d}=await _.get("/guests/vendor-car-summary"+(qs?"?"+qs:""));return d},
     refetchInterval:6e4
   });
-  const {data:allGuests=[]}=ae({
-    queryKey:["vendor-car-list-total",dateFilter],
-    queryFn:async()=>{const p=new URLSearchParams();if(dateFilter)p.append("arrivalDate",dateFilter);const qs=p.toString();const{data:d}=await _.get("/guests/vendor-car-list"+(qs?"?"+qs:""));return d},
-    refetchInterval:6e4
-  });
-  const totalCount=allGuests.length;
-  const assignedCount=allGuests.filter(g=>g.hasVehicleAssigned).length;
-  const pendingCount=totalCount-assignedCount;
-  const grouped=N.useMemo(()=>{
-    const map={};
-    guests.forEach(g=>{
-      const cls=g.deservedCarClassName||"Unassigned";
-      if(!map[cls])map[cls]={carClass:cls,total:0,assigned:0,pending:0};
-      map[cls].total++;
-      if(g.hasVehicleAssigned)map[cls].assigned++;
-      else map[cls].pending++;
-    });
-    return Object.values(map);
-  },[guests]);
+  const filtered=N.useMemo(()=>{
+    if(!hideAssigned)return summary;
+    return summary.filter(r=>r.pending>0);
+  },[summary,hideAssigned]);
   const sorted=N.useMemo(()=>{
-    const arr=[...grouped];
+    const arr=[...filtered];
     arr.sort((a,b)=>{
       let va,vb;
       if(sortCol==="carClass"){va=a.carClass.toLowerCase();vb=b.carClass.toLowerCase()}
-      else if(sortCol==="total"){va=a.total;vb=b.total}
-      else if(sortCol==="assigned"){va=a.assigned;vb=b.assigned}
+      else if(sortCol==="total"){va=a.totalGuests;vb=b.totalGuests}
       else if(sortCol==="pending"){va=a.pending;vb=b.pending}
+      else if(sortCol==="assigned"){va=a.vehiclesAssigned;vb=b.vehiclesAssigned}
       else{va=a.carClass;vb=b.carClass}
       if(va<vb)return sortDir==="asc"?-1:1;
       if(va>vb)return sortDir==="asc"?1:-1;
       return 0;
     });
     return arr;
-  },[grouped,sortCol,sortDir]);
+  },[filtered,sortCol,sortDir]);
   const toggleSort=(col)=>{if(sortCol===col)setSortDir(d=>d==="asc"?"desc":"asc");else{setSortCol(col);setSortDir("asc")}};
   const sortIcon=(col)=>sortCol===col?(sortDir==="asc"?"\u2191":"\u2193"):"\u2195";
-  const fmtDate=(d)=>{if(!d)return"-";const dt=new Date(d);return dt.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric",timeZone:"UTC"})};
-  const grandTotal=sorted.reduce((s,r)=>s+r.total,0);
+  const grandTotal=summary.reduce((s2,r)=>s2+r.totalGuests,0);
+  const totalPending=summary.reduce((s2,r)=>s2+r.pending,0);
+  const totalVehiclesAssigned=summary.reduce((s2,r)=>s2+r.vehiclesAssigned,0);
   return s.jsxs("div",{className:"p-4 md:p-6 space-y-5",children:[
     s.jsxs("div",{className:"flex items-center justify-between",children:[
       s.jsx("h1",{className:"text-xl font-bold text-gray-900",children:"Car Requirements"}),
       s.jsxs("div",{className:"flex items-center gap-3",children:[
         s.jsx("span",{className:"text-sm font-semibold text-gray-700 bg-gray-100 px-3 py-1.5 rounded-full",children:grandTotal+" guests"}),
-        hideAssigned&&assignedCount>0&&s.jsx("span",{className:"text-xs text-gray-500",children:assignedCount+" assigned hidden"}),
         s.jsxs("div",{className:"flex gap-2",children:[
-          s.jsx("span",{className:"inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800",children:pendingCount+" pending"}),
-          s.jsx("span",{className:"inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800",children:assignedCount+" assigned"})
+          s.jsx("span",{className:"inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800",children:totalPending+" pending"}),
+          s.jsx("span",{className:"inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800",children:totalVehiclesAssigned+" vehicles assigned"})
         ]})
       ]})
     ]}),
@@ -2370,7 +2355,7 @@ function SC(){const[e,t]=N.useState("guests"),[r,n]=N.useState([]),[a,l]=N.useSt
       ]}),
       s.jsxs("label",{className:"flex items-center gap-2 cursor-pointer",children:[
         s.jsx("input",{type:"checkbox",id:"hideAssigned",checked:hideAssigned,onChange:e=>setHideAssigned(e.target.checked),className:"w-4 h-4 rounded border-gray-300 text-isdb-green focus:ring-isdb-green"}),
-        s.jsx("span",{className:"text-sm text-gray-700",children:"Hide assigned"})
+        s.jsx("span",{className:"text-sm text-gray-700",children:"Hide fully assigned"})
       ]}),
       (dateFilter||hideAssigned)&&s.jsx("button",{onClick:()=>{setDateFilter("");setHideAssigned(false)},className:"text-sm text-red-600 hover:text-red-800 font-medium",children:"Clear filters"})
     ]}),
@@ -2380,23 +2365,23 @@ function SC(){const[e,t]=N.useState("guests"),[r,n]=N.useState([]),[a,l]=N.useSt
         s.jsx("thead",{children:
           s.jsxs("tr",{className:"bg-gray-50 border-b border-gray-200",children:[
             s.jsx("th",{onClick:()=>toggleSort("carClass"),className:"px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Car Class "+sortIcon("carClass")}),
-            s.jsx("th",{onClick:()=>toggleSort("total"),className:"px-4 py-3 text-center font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Total "+sortIcon("total")}),
+            s.jsx("th",{onClick:()=>toggleSort("total"),className:"px-4 py-3 text-center font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Required "+sortIcon("total")}),
             s.jsx("th",{onClick:()=>toggleSort("pending"),className:"px-4 py-3 text-center font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Pending "+sortIcon("pending")}),
-            s.jsx("th",{onClick:()=>toggleSort("assigned"),className:"px-4 py-3 text-center font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Assigned "+sortIcon("assigned")})
+            s.jsx("th",{onClick:()=>toggleSort("assigned"),className:"px-4 py-3 text-center font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 select-none",children:"Vehicles Assigned "+sortIcon("assigned")})
           ]})
         }),
         s.jsxs("tbody",{className:"divide-y divide-gray-100",children:[
           sorted.map(r=>s.jsxs("tr",{className:"hover:bg-gray-50 transition-colors",children:[
             s.jsx("td",{className:"px-4 py-3 font-medium text-gray-900",children:r.carClass}),
-            s.jsx("td",{className:"px-4 py-3 text-center",children:s.jsx("span",{className:"inline-flex items-center justify-center min-w-[2rem] px-2 py-0.5 rounded-full text-sm font-bold bg-blue-100 text-blue-800",children:r.total})}),
+            s.jsx("td",{className:"px-4 py-3 text-center",children:s.jsx("span",{className:"inline-flex items-center justify-center min-w-[2rem] px-2 py-0.5 rounded-full text-sm font-bold bg-blue-100 text-blue-800",children:r.totalGuests})}),
             s.jsx("td",{className:"px-4 py-3 text-center",children:s.jsx("span",{className:"inline-flex items-center justify-center min-w-[2rem] px-2 py-0.5 rounded-full text-sm font-bold bg-yellow-100 text-yellow-800",children:r.pending})}),
-            s.jsx("td",{className:"px-4 py-3 text-center",children:s.jsx("span",{className:"inline-flex items-center justify-center min-w-[2rem] px-2 py-0.5 rounded-full text-sm font-bold bg-green-100 text-green-800",children:r.assigned})})
+            s.jsx("td",{className:"px-4 py-3 text-center",children:s.jsx("span",{className:"inline-flex items-center justify-center min-w-[2rem] px-2 py-0.5 rounded-full text-sm font-bold bg-green-100 text-green-800",children:r.vehiclesAssigned})})
           ]},r.carClass)),
           s.jsxs("tr",{className:"bg-gray-50 font-bold border-t-2 border-gray-300",children:[
             s.jsx("td",{className:"px-4 py-3 text-gray-900",children:"TOTAL"}),
-            s.jsx("td",{className:"px-4 py-3 text-center text-blue-800",children:grandTotal}),
+            s.jsx("td",{className:"px-4 py-3 text-center text-blue-800",children:sorted.reduce((s2,r)=>s2+r.totalGuests,0)}),
             s.jsx("td",{className:"px-4 py-3 text-center text-yellow-800",children:sorted.reduce((s2,r)=>s2+r.pending,0)}),
-            s.jsx("td",{className:"px-4 py-3 text-center text-green-800",children:sorted.reduce((s2,r)=>s2+r.assigned,0)})
+            s.jsx("td",{className:"px-4 py-3 text-center text-green-800",children:sorted.reduce((s2,r)=>s2+r.vehiclesAssigned,0)})
           ]})
         ]})
       ]})
