@@ -1760,8 +1760,9 @@ public class GuestsController : ApiControllerBase
     public async Task<IActionResult> GetVendorCarList(
         [FromQuery] DateTime? arrivalDate,
         [FromQuery] string? carClass,
-        [FromServices] AppDbContext db,
-        CancellationToken ct)
+        [FromQuery] bool hideAssigned = false,
+        [FromServices] AppDbContext db = null!,
+        CancellationToken ct = default)
     {
         var query = db.Guests
             .Where(g => g.IsActive)
@@ -1790,7 +1791,8 @@ public class GuestsController : ApiControllerBase
                     .Select(tb => tb.Flight.FlightNumber)
                     .FirstOrDefault(),
                 g.HotelName,
-                g.OldHotel
+                g.OldHotel,
+                HasVehicleAssigned = g.VehicleAssignments.Any(va => va.IsActive)
             })
             .ToListAsync(ct);
 
@@ -1803,6 +1805,9 @@ public class GuestsController : ApiControllerBase
 
         if (!string.IsNullOrWhiteSpace(carClass))
             result = result.Where(g => string.Equals(g.DeservedCarClassName, carClass, StringComparison.OrdinalIgnoreCase));
+
+        if (hideAssigned)
+            result = result.Where(g => !g.HasVehicleAssigned);
 
         var list = result
             .OrderBy(g => g.ArrivalDate ?? DateTime.MaxValue)
@@ -1818,7 +1823,8 @@ public class GuestsController : ApiControllerBase
                 g.ArrivalDate,
                 g.FlightNumber,
                 g.HotelName,
-                g.OldHotel
+                g.OldHotel,
+                g.HasVehicleAssigned
             })
             .ToList();
 
