@@ -1853,6 +1853,7 @@ public class GuestsController : ApiControllerBase
         if (!string.IsNullOrWhiteSpace(eventCode))
             guestQuery = guestQuery.Where(g => g.EventCode == null || g.EventCode == eventCode);
 
+        // Query guests with their deserved car class and the car class of their assigned vehicle
         var guests = await guestQuery
             .Select(g => new
             {
@@ -1863,7 +1864,12 @@ public class GuestsController : ApiControllerBase
                     .Where(tb => tb.IsArrival)
                     .Select(tb => (DateTime?)tb.Flight.ScheduledArrival)
                     .FirstOrDefault(),
-                HasVehicleAssigned = g.VehicleAssignments.Any(va => va.IsActive)
+                HasVehicleAssigned = g.VehicleAssignments.Any(va => va.IsActive),
+                // Get the car class of the actively assigned vehicle
+                AssignedVehicleCarClassName = g.VehicleAssignments
+                    .Where(va => va.IsActive)
+                    .Select(va => va.Vehicle.CarClass != null ? va.Vehicle.CarClass.Name : null)
+                    .FirstOrDefault()
             })
             .ToListAsync(ct);
 
@@ -1872,19 +1878,6 @@ public class GuestsController : ApiControllerBase
         if (arrivalDate.HasValue)
             filtered = filtered.Where(g => g.ArrivalDate.HasValue &&
                 g.ArrivalDate.Value.Date == arrivalDate.Value.Date);
-
-        // Get count of vehicles assigned per car class (vehicles with an active guest)
-        var vehicleQuery = db.Vehicles.Where(v => v.IsActive && v.CarClassId != null).AsQueryable();
-        if (!string.IsNullOrWhiteSpace(eventCode))
-            vehicleQuery = vehicleQuery.Where(v => v.EventCode == null || v.EventCode == eventCode);
-
-        var vehiclesAssignedPerClass = await vehicleQuery
-            .Where(v => v.CurrentGuestId != null)
-            .GroupBy(v => v.CarClass!.Name)
-            .Select(grp => new { CarClass = grp.Key, Count = grp.Count() })
-            .ToListAsync(ct);
-
-        var assignedVehicleMap = vehiclesAssignedPerClass.ToDictionary(x => x.CarClass, x => x.Count);
 
         // Group guests by car class
         var summary = filtered
@@ -1895,8 +1888,9 @@ public class GuestsController : ApiControllerBase
                 CarClass = grp.Key,
                 TotalGuests = grp.Count(),
                 Pending = grp.Count(g => !g.HasVehicleAssigned),
-                GuestsAssigned = grp.Count(g => g.HasVehicleAssigned),
-                VehiclesAssigned = assignedVehicleMap.GetValueOrDefault(grp.Key, 0)
+                // Count guests who have a vehicle assigned AND that vehicle's car class matches their deserved class
+                Assigned = grp.Count(g => g.HasVehicleAssigned &&
+                    string.Equals(g.AssignedVehicleCarClassName, g.DeservedCarClassName, StringComparison.OrdinalIgnoreCase))
             })
             .OrderBy(x => x.CarClass)
             .ToList();
