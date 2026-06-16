@@ -2324,7 +2324,7 @@ function SC(){const[e,t]=N.useState("guests"),[r,n]=N.useState([]),[a,l]=N.useSt
   const grouped=N.useMemo(()=>{
     const map={};
     guests.forEach(g=>{
-      const cls=g.carClassName||"Unassigned";
+      const cls=g.deservedCarClassName||"Unassigned";
       if(!map[cls])map[cls]={carClass:cls,total:0,assigned:0,pending:0};
       map[cls].total++;
       if(g.hasVehicleAssigned)map[cls].assigned++;
