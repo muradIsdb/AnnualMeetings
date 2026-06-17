@@ -39,6 +39,17 @@ public class GuestsController : ApiControllerBase
         return Ok(result);
     }
 
+    [HttpGet("departure-flights")]
+    [Authorize(Roles = "Admin,Airport,AirportView,Transport,ControlRoom")]
+    public async Task<ActionResult<List<DepartureFlightGroupDto>>> GetDepartureFlights(
+        [FromServices] AppDbContext db = null!,
+        CancellationToken ct = default)
+    {
+        var activeEventCode = (await db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+        var result = await Mediator.Send(new GetDepartureFlightsQuery(activeEventCode));
+        return Ok(result);
+    }
+
     [HttpGet]
     public async Task<ActionResult<List<GuestSummaryDto>>> GetGuests(
         [FromQuery] GuestStatus? status = null,
