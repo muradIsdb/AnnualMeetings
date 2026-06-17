@@ -39,6 +39,17 @@ public class GuestsController : ApiControllerBase
         return Ok(result);
     }
 
+    [HttpGet("departure-flights")]
+    [Authorize(Roles = "Admin,Airport,AirportView,Transport,ControlRoom")]
+    public async Task<ActionResult<List<DepartureFlightGroupDto>>> GetDepartureFlights(
+        [FromServices] AppDbContext db = null!,
+        CancellationToken ct = default)
+    {
+        var activeEventCode = (await db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
+        var result = await Mediator.Send(new GetDepartureFlightsQuery(activeEventCode));
+        return Ok(result);
+    }
+
     [HttpGet]
     public async Task<ActionResult<List<GuestSummaryDto>>> GetGuests(
         [FromQuery] GuestStatus? status = null,
@@ -1064,8 +1075,11 @@ public class GuestsController : ApiControllerBase
         var guest = await db.Guests.FirstOrDefaultAsync(g => g.Id == id, ct);
         if (guest == null) return NotFound();
 
+        // If guest hasn't reached AtHotel yet, implicitly set it so departure tracking can proceed
         if (guest.InboundStatus != InboundStatus.AtHotel)
-            return BadRequest(new { message = "Outbound tracking is only available after the guest has arrived at the hotel." });
+        {
+            guest.InboundStatus = InboundStatus.AtHotel;
+        }
 
         var callerRole = GetCallerRole();
         var isAdmin = callerRole == UserRole.Admin;
@@ -1079,10 +1093,11 @@ public class GuestsController : ApiControllerBase
         };
         if (!allowed) return Forbid();
 
-        // Sequential progression check
+        // Allow direct status jumps (e.g., AtHotel -> AtAirport) for operational flexibility
+        // Sequential check only enforced for non-admin if going backwards
         var currentOutbound = guest.OutboundStatus ?? OutboundStatus.AtHotel;
-        if ((int)req.Status != (int)currentOutbound + 1 && !isAdmin)
-            return BadRequest(new { message = "Outbound status must progress sequentially." });
+        if ((int)req.Status < (int)currentOutbound && !isAdmin)
+            return BadRequest(new { message = "Cannot revert outbound status to a previous state." });
 
         guest.OutboundStatus = req.Status;
 
