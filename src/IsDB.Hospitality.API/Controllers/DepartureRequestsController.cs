@@ -155,7 +155,7 @@ public class DepartureRequestsController : ApiControllerBase
     }
 
     [HttpGet]
-    [Authorize(Roles = "Admin,Transport,ControlRoom")]
+    [Authorize(Roles = "Admin,Transport,ControlRoom,Vendor")]
     public async Task<ActionResult<PagedResult<DepartureRequestAdminDto>>> GetAll(
         [FromQuery] Guid? hotelId, [FromQuery] Guid? dayId, [FromQuery] Guid? hourId,
         [FromQuery] string? search,
@@ -209,7 +209,7 @@ public class DepartureRequestsController : ApiControllerBase
     }
 
     [HttpGet("export/csv")]
-    [Authorize(Roles = "Admin,Transport,ControlRoom")]
+    [Authorize(Roles = "Admin,Transport,ControlRoom,Vendor")]
     public async Task<IActionResult> ExportCsv(CancellationToken ct)
     {
         var activeEventCodeE = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
@@ -230,7 +230,7 @@ public class DepartureRequestsController : ApiControllerBase
     }
 
     [HttpGet("stats")]
-    [Authorize(Roles = "Admin,Transport,ControlRoom")]
+    [Authorize(Roles = "Admin,Transport,ControlRoom,Vendor")]
     public async Task<ActionResult<DepartureStatsDto>> GetStats(CancellationToken ct)
     {
         var activeEventCodeS = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
