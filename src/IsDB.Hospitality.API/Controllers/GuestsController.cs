@@ -40,7 +40,7 @@ public class GuestsController : ApiControllerBase
     }
 
     [HttpGet("departure-flights")]
-    [Authorize(Roles = "Admin,Airport,AirportView,Transport,ControlRoom")]
+    [Authorize(Roles = "Admin,Airport,AirportView,Transport,ControlRoom,Vendor")]
     public async Task<ActionResult<List<DepartureFlightGroupDto>>> GetDepartureFlights(
         [FromServices] AppDbContext db = null!,
         CancellationToken ct = default)
@@ -1801,6 +1801,10 @@ public class GuestsController : ApiControllerBase
                     .Where(tb => tb.IsArrival)
                     .Select(tb => (DateTime?)tb.Flight.ScheduledArrival)
                     .FirstOrDefault(),
+                DepartureDate = g.TravelBookings
+                    .Where(tb => !tb.IsArrival)
+                    .Select(tb => (DateTime?)tb.Flight.ScheduledDeparture)
+                    .FirstOrDefault(),
                 FlightNumber = g.TravelBookings
                     .Where(tb => tb.IsArrival)
                     .Select(tb => tb.Flight.FlightNumber)
@@ -1856,6 +1860,7 @@ public class GuestsController : ApiControllerBase
     [Authorize(Roles = "Admin,Vendor,Transport,ControlRoom")]
     public async Task<IActionResult> GetVendorCarSummary(
         [FromQuery] DateTime? arrivalDate,
+        [FromQuery] DateTime? departureDate,
         [FromServices] AppDbContext db = null!,
         CancellationToken ct = default)
     {
@@ -1879,6 +1884,10 @@ public class GuestsController : ApiControllerBase
                     .Where(tb => tb.IsArrival)
                     .Select(tb => (DateTime?)tb.Flight.ScheduledArrival)
                     .FirstOrDefault(),
+                DepartureDate = g.TravelBookings
+                    .Where(tb => !tb.IsArrival)
+                    .Select(tb => (DateTime?)tb.Flight.ScheduledDeparture)
+                    .FirstOrDefault(),
                 HasVehicleAssigned = g.VehicleAssignments.Any(va => va.IsActive),
                 // Get the car class of the actively assigned vehicle
                 AssignedVehicleCarClassName = g.VehicleAssignments
@@ -1893,6 +1902,9 @@ public class GuestsController : ApiControllerBase
         if (arrivalDate.HasValue)
             filtered = filtered.Where(g => g.ArrivalDate.HasValue &&
                 g.ArrivalDate.Value.Date == arrivalDate.Value.Date);
+        if (departureDate.HasValue)
+            filtered = filtered.Where(g => g.DepartureDate.HasValue &&
+                g.DepartureDate.Value.Date == departureDate.Value.Date);
 
         // Group guests by car class
         var summary = filtered
