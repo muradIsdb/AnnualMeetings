@@ -2369,8 +2369,8 @@ function VendorCarRequirementsPage(){
     s.jsxs("div",{className:"flex flex-col sm:flex-row items-start sm:items-center gap-3",children:[
       s.jsxs("div",{className:"flex items-center gap-2",children:[
         s.jsx("span",{className:"text-sm text-gray-600",children:"Arrival Date"}),
-        s.jsx("input",{type:"date",value:dateFilter,onChange:e=>setDateFilter(e.target.value),className:"px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-isdb-green"})
-      ]}),s.jsxs("div",{className:"flex items-center gap-2",children:[s.jsx("span",{className:"text-sm text-gray-600",children:"Departure Date"}),s.jsx("input",{type:"date",value:depDateFilter,onChange:e=>setDepDateFilter(e.target.value),className:"px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-isdb-green"})]}),
+        s.jsx("input",{type:"date",value:dateFilter,onChange:e=>{setDateFilter(e.target.value);setDepDateFilter("")},className:"px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-isdb-green"})
+      ]}),s.jsxs("div",{className:"flex items-center gap-2",children:[s.jsx("span",{className:"text-sm text-gray-600",children:"Departure Date"}),s.jsx("input",{type:"date",value:depDateFilter,onChange:e=>{setDepDateFilter(e.target.value);setDateFilter("")},className:"px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-isdb-green"})]}),
       s.jsxs("label",{className:"flex items-center gap-2 cursor-pointer",children:[
         s.jsx("input",{type:"checkbox",id:"hideAssigned",checked:hideAssigned,onChange:e=>setHideAssigned(e.target.checked),className:"w-4 h-4 rounded border-gray-300 text-isdb-green focus:ring-isdb-green"}),
         s.jsx("span",{className:"text-sm text-gray-700",children:"Hide fully assigned"})
