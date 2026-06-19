@@ -37,6 +37,7 @@ public interface IAppDbContext
     DbSet<SystemLog> SystemLogs { get; }
     DbSet<SyncAlert> SyncAlerts { get; }
     DbSet<DropOffTrip> DropOffTrips { get; }
+    DbSet<MonitoredParticipant> MonitoredParticipants { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
