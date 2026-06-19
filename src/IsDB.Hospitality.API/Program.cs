@@ -741,6 +741,23 @@ using (var scope = app.Services.CreateScope())
             ON CONFLICT DO NOTHING;
         ");
 
+        // Pre-create MonitoredParticipants table with correct PostgreSQL types
+        await context.Database.ExecuteSqlRawAsync(@"
+            CREATE TABLE IF NOT EXISTS ""MonitoredParticipants"" (
+                ""Id""              uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+                ""NameOrEmail""     text        NOT NULL,
+                ""IsExactMatch""    boolean     NOT NULL DEFAULT false,
+                ""AddedByUserName"" text        NOT NULL,
+                ""AddedAt""         timestamptz NOT NULL DEFAULT now(),
+                ""CreatedAt""       timestamptz NOT NULL DEFAULT now(),
+                ""UpdatedAt""       timestamptz NOT NULL DEFAULT now()
+            );
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260619095849_AddMonitoredParticipants', '9.0.0')
+            ON CONFLICT DO NOTHING;
+        ");
+        logger.LogInformation("MonitoredParticipants table pre-check complete.");
+
         // Apply all remaining pending migrations
         logger.LogInformation("Applying pending migrations...");
         await context.Database.MigrateAsync();
