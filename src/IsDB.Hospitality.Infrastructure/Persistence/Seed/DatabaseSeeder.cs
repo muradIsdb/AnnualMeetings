@@ -293,30 +293,8 @@ public static class DatabaseSeeder
         var isPostgres = context.Database.ProviderName?.Contains("Npgsql") == true;
 
         // ── Pickup Days ──────────────────────────────────────────────────────────
-        var days = new[]
-        {
-            (Value: "2026-07-19", Label: "Saturday, 19 Jul",  DisplayOrder: 1),
-            (Value: "2026-07-20", Label: "Sunday, 20 Jul",    DisplayOrder: 2),
-            (Value: "2026-07-21", Label: "Monday, 21 Jul",    DisplayOrder: 3),
-        };
-
-        foreach (var day in days)
-        {
-            var exists = await context.PickupDayOptions.AnyAsync(x => x.Value == day.Value);
-            if (!exists)
-            {
-                context.PickupDayOptions.Add(new IsDB.Hospitality.Domain.Entities.PickupDayOption
-                {
-                    Id           = Guid.NewGuid(),
-                    Label        = day.Label,
-                    Value        = day.Value,
-                    IsActive     = true,
-                    DisplayOrder = day.DisplayOrder,
-                    CreatedAt    = DateTime.UtcNow,
-                    UpdatedAt    = DateTime.UtcNow
-                });
-            }
-        }
+        // Removed: Pickup days are now managed exclusively via the Settings UI.
+        // No automatic seeding to avoid creating unwanted entries on deployment.
 
         // ── Pickup Hours ─────────────────────────────────────────────────────────
         // 24 entries: 00:00 → 23:00, labels in 12-hour AM/PM format
