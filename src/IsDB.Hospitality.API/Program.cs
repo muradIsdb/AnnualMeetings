@@ -253,6 +253,24 @@ using (var scope = app.Services.CreateScope())
         ");
         logger.LogInformation("LiaisonOfficerCarNumber column pre-check complete.");
 
+        // ALWAYS fix MonitoredParticipants.IsExactMatch column if it was created as integer by SQLite migration
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'MonitoredParticipants'
+                    AND column_name = 'IsExactMatch'
+                    AND data_type = 'integer'
+                ) THEN
+                    ALTER TABLE ""MonitoredParticipants""
+                        ALTER COLUMN ""IsExactMatch"" DROP DEFAULT,
+                        ALTER COLUMN ""IsExactMatch"" SET DATA TYPE boolean USING (""IsExactMatch""::int::boolean),
+                        ALTER COLUMN ""IsExactMatch"" SET DEFAULT false;
+                END IF;
+            END $$;
+        ");
+        logger.LogInformation("MonitoredParticipants.IsExactMatch type fix complete.");
+
         if (isFreshDatabase || isEfCoreCreatedDb)
         {
             // Fresh or EF Core-managed database: run MigrateAsync() directly.
