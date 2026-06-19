@@ -42,6 +42,7 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<SystemLog> SystemLogs => Set<SystemLog>();
     public DbSet<SyncAlert> SyncAlerts => Set<SyncAlert>();
     public DbSet<DropOffTrip> DropOffTrips => Set<DropOffTrip>();
+    public DbSet<MonitoredParticipant> MonitoredParticipants => Set<MonitoredParticipant>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

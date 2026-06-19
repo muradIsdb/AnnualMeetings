@@ -130,11 +130,14 @@ public enum SyncAlertType
     /// <summary>A guest's data (e.g. FlightNumber or RoomNumber) could not be saved due to a data quality issue.</summary>
     DataQualityIssue = 4,
     /// <summary>A flight number could not be found on AviationStack (likely malformed or missing airline code).</summary>
-    UnrecognizedFlightNumber = 5
+    UnrecognizedFlightNumber = 5,
+    /// <summary>A monitored participant submitted the departure shuttle form.</summary>
+    MonitoredParticipantMatch = 6
 }
 
 public enum SyncAlertSource
 {
     AutoSync = 1,
-    ManualSync = 2
+    ManualSync = 2,
+    DepartureShuttle = 3
 }
