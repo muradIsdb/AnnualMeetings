@@ -253,9 +253,10 @@ using (var scope = app.Services.CreateScope())
         ");
         logger.LogInformation("LiaisonOfficerCarNumber column pre-check complete.");
 
-        // ALWAYS recreate MonitoredParticipants table with correct PostgreSQL types.
-        // The EF migration creates it with SQLite types (TEXT for uuid/timestamps, INTEGER for bool).
-        // Drop and recreate with proper types since this is a new feature with no production data.
+        // ALWAYS ensure MonitoredParticipants table exists with correct PostgreSQL types.
+        // The EF migration was generated with SQLite provider (TEXT/INTEGER types).
+        // This block: fixes any existing table with wrong types, creates if missing,
+        // and marks the migration as applied so MigrateAsync() skips it on ALL paths.
         await context.Database.ExecuteSqlRawAsync(@"
             DO $$ BEGIN
                 IF EXISTS (
@@ -276,8 +277,11 @@ using (var scope = app.Services.CreateScope())
                 ""CreatedAt""       timestamptz NOT NULL DEFAULT now(),
                 ""UpdatedAt""       timestamptz NOT NULL DEFAULT now()
             );
+            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+            VALUES ('20260619095849_AddMonitoredParticipants', '9.0.0')
+            ON CONFLICT DO NOTHING;
         ");
-        logger.LogInformation("MonitoredParticipants table recreated with correct PostgreSQL types.");
+        logger.LogInformation("MonitoredParticipants table pre-check complete.");
 
         if (isFreshDatabase || isEfCoreCreatedDb)
         {
@@ -767,37 +771,8 @@ using (var scope = app.Services.CreateScope())
             ON CONFLICT DO NOTHING;
         ");
 
-        // Pre-create MonitoredParticipants table with correct PostgreSQL types
-        // Also fix the IsExactMatch column if it was created as integer (SQLite migration artifact)
-        await context.Database.ExecuteSqlRawAsync(@"
-            CREATE TABLE IF NOT EXISTS ""MonitoredParticipants"" (
-                ""Id""              uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-                ""NameOrEmail""     text        NOT NULL,
-                ""IsExactMatch""    boolean     NOT NULL DEFAULT false,
-                ""AddedByUserName"" text        NOT NULL,
-                ""AddedAt""         timestamptz NOT NULL DEFAULT now(),
-                ""CreatedAt""       timestamptz NOT NULL DEFAULT now(),
-                ""UpdatedAt""       timestamptz NOT NULL DEFAULT now()
-            );
-            -- Fix IsExactMatch column type if it was created as integer by SQLite migration
-            DO $$ BEGIN
-                IF EXISTS (
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'MonitoredParticipants'
-                    AND column_name = 'IsExactMatch'
-                    AND data_type = 'integer'
-                ) THEN
-                    ALTER TABLE ""MonitoredParticipants""
-                        ALTER COLUMN ""IsExactMatch"" DROP DEFAULT,
-                        ALTER COLUMN ""IsExactMatch"" SET DATA TYPE boolean USING (""IsExactMatch""::int::boolean),
-                        ALTER COLUMN ""IsExactMatch"" SET DEFAULT false;
-                END IF;
-            END $$;
-            INSERT INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
-            VALUES ('20260619095849_AddMonitoredParticipants', '9.0.0')
-            ON CONFLICT DO NOTHING;
-        ");
-        logger.LogInformation("MonitoredParticipants table pre-check complete.");
+        // MonitoredParticipants is handled by the ALWAYS block above (before the if/else).
+        // No additional pre-creation needed here.
 
         // Apply all remaining pending migrations
         logger.LogInformation("Applying pending migrations...");
