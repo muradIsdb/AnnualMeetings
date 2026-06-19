@@ -1,7 +1,6 @@
 using System.Text;
 using IsDB.Hospitality.Application.Common.Interfaces;
 using IsDB.Hospitality.Domain.Entities;
-using IsDB.Hospitality.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -54,9 +53,6 @@ public class DepartureRequestsController : ApiControllerBase
             existing.UpdatedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
 
-            // Check monitored participants and create alert if matched
-            await CheckMonitoredAndAlertAsync(req.FullName, req.Email, hotel.Name, req.RoomNumber, day.Label, hour.Label, ct);
-
             var manageUrl = $"{baseUrl}/departure/manage/{existing.ManageToken}";
             _ = Task.Run(() => _email.SendDepartureUpdateAsync(existing.Email, existing.FullName, hotel.Name, existing.RoomNumber, day.Label, hour.Label, manageUrl), ct);
 
@@ -81,9 +77,6 @@ public class DepartureRequestsController : ApiControllerBase
             };
             _db.DepartureRequests.Add(record);
             await _db.SaveChangesAsync(ct);
-
-            // Check monitored participants and create alert if matched
-            await CheckMonitoredAndAlertAsync(req.FullName, req.Email, hotel.Name, req.RoomNumber, day.Label, hour.Label, ct);
 
             var manageUrl = $"{baseUrl}/departure/manage/{record.ManageToken}";
             _ = Task.Run(() => _email.SendDepartureConfirmationAsync(record.Email, record.FullName, hotel.Name, record.RoomNumber, day.Label, hour.Label, manageUrl), ct);
@@ -162,7 +155,7 @@ public class DepartureRequestsController : ApiControllerBase
     }
 
     [HttpGet]
-    [Authorize(Roles = "Admin,Transport,ControlRoom,Vendor,Hotel")]
+    [Authorize(Roles = "Admin,Transport,ControlRoom,Vendor")]
     public async Task<ActionResult<PagedResult<DepartureRequestAdminDto>>> GetAll(
         [FromQuery] Guid? hotelId, [FromQuery] Guid? dayId, [FromQuery] Guid? hourId,
         [FromQuery] string? search,
@@ -205,26 +198,18 @@ public class DepartureRequestsController : ApiControllerBase
                 SubmittedAt = r.SubmittedAt, UpdatedAt = r.UpdatedAt,
             }).ToListAsync(ct);
 
-        // Check which items match monitored list
-        var monitored = await _db.MonitoredParticipants.ToListAsync(ct);
-        var result = items.Select(i => new {
-            i.Id, i.FullName, i.Email, i.RoomNumber,
-            i.HotelOptionId, i.HotelName,
-            i.PickupDayOptionId, i.PickupDayLabel,
-            i.PickupHourOptionId, i.PickupHourLabel,
-            i.SubmittedAt, i.UpdatedAt,
-            IsMonitored = monitored.Any(m =>
-                m.IsExactMatch
-                    ? (m.NameOrEmail.Equals(i.FullName, StringComparison.OrdinalIgnoreCase) || m.NameOrEmail.Equals(i.Email, StringComparison.OrdinalIgnoreCase))
-                    : (i.FullName.Contains(m.NameOrEmail, StringComparison.OrdinalIgnoreCase) || i.Email.Contains(m.NameOrEmail, StringComparison.OrdinalIgnoreCase))
-            )
-        }).ToList();
-
-        return Ok(new { Items = result, TotalCount = totalCount, Page = page, PageSize = pageSize, TotalPages = (int)Math.Ceiling(totalCount / (double)pageSize) });
+        return Ok(new PagedResult<DepartureRequestAdminDto>
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Page = page,
+            PageSize = pageSize,
+            TotalPages = (int)Math.Ceiling(totalCount / (double)pageSize)
+        });
     }
 
     [HttpGet("export/csv")]
-    [Authorize(Roles = "Admin,Transport,ControlRoom,Vendor,Hotel")]
+    [Authorize(Roles = "Admin,Transport,ControlRoom,Vendor")]
     public async Task<IActionResult> ExportCsv(CancellationToken ct)
     {
         var activeEventCodeE = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
@@ -245,7 +230,7 @@ public class DepartureRequestsController : ApiControllerBase
     }
 
     [HttpGet("stats")]
-    [Authorize(Roles = "Admin,Transport,ControlRoom,Vendor,Hotel")]
+    [Authorize(Roles = "Admin,Transport,ControlRoom,Vendor")]
     public async Task<ActionResult<DepartureStatsDto>> GetStats(CancellationToken ct)
     {
         var activeEventCodeS = (await _db.EventsAirConfigs.FirstOrDefaultAsync(ct))?.EventCode;
@@ -298,63 +283,6 @@ public class DepartureRequestsController : ApiControllerBase
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // DELETE /api/departure-requests/{id}
-    // Admin-only: delete a single departure registration.
-    // ──────────────────────────────────────────────────────────────────────────
-    [HttpDelete("{id:guid}")]
-    [Authorize(Roles = "Admin")]
-    public async Task<ActionResult> DeleteSingle(Guid id, CancellationToken ct)
-    {
-        var record = await _db.DepartureRequests.FindAsync(new object[] { id }, ct);
-        if (record == null) return NotFound(new { message = "Registration not found." });
-        _db.DepartureRequests.Remove(record);
-        await _db.SaveChangesAsync(ct);
-        return Ok(new { message = $"Registration for '{record.FullName}' deleted successfully." });
-    }
-
-    // ─── Monitored Participants Watch List ─────────────────────────────────────
-    [HttpGet("monitored")]
-    [Authorize(Roles = "Admin")]
-    public async Task<ActionResult> GetMonitoredList(CancellationToken ct)
-    {
-        var list = await _db.MonitoredParticipants
-            .OrderByDescending(m => m.AddedAt)
-            .Select(m => new { m.Id, m.NameOrEmail, m.IsExactMatch, m.AddedByUserName, m.AddedAt })
-            .ToListAsync(ct);
-        return Ok(list);
-    }
-
-    [HttpPost("monitored")]
-    [Authorize(Roles = "Admin")]
-    public async Task<ActionResult> AddMonitored([FromBody] AddMonitoredRequest req, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(req.NameOrEmail))
-            return BadRequest(new { message = "Name or email is required." });
-
-        var userName = User.FindFirst("name")?.Value ?? User.FindFirst("sub")?.Value ?? "Unknown";
-        var entry = new MonitoredParticipant
-        {
-            NameOrEmail = req.NameOrEmail.Trim(),
-            IsExactMatch = req.IsExactMatch,
-            AddedByUserName = userName,
-            AddedAt = DateTime.UtcNow
-        };
-        _db.MonitoredParticipants.Add(entry);
-        await _db.SaveChangesAsync(ct);
-        return Ok(new { entry.Id, entry.NameOrEmail, entry.IsExactMatch, entry.AddedByUserName, entry.AddedAt });
-    }
-
-    [HttpDelete("monitored/{id:guid}")]
-    [Authorize(Roles = "Admin")]
-    public async Task<ActionResult> RemoveMonitored(Guid id, CancellationToken ct)
-    {
-        var entry = await _db.MonitoredParticipants.FindAsync(new object[] { id }, ct);
-        if (entry == null) return NotFound();
-        _db.MonitoredParticipants.Remove(entry);
-        await _db.SaveChangesAsync(ct);
-        return NoContent();
-    }
-
     // DELETE /api/departure-requests/all
     // Admin-only: delete ALL departure registrations for the active event.
     // ──────────────────────────────────────────────────────────────────────────
@@ -375,29 +303,6 @@ public class DepartureRequestsController : ApiControllerBase
         await _db.SaveChangesAsync(ct);
 
         return Ok(new { deleted = toDelete.Count, message = $"{toDelete.Count} departure registration(s) deleted successfully." });
-    }
-
-    private async Task CheckMonitoredAndAlertAsync(string fullName, string email, string hotelName, string roomNumber, string dayLabel, string hourLabel, CancellationToken ct)
-    {
-        var monitored = await _db.MonitoredParticipants.ToListAsync(ct);
-        var matched = monitored.Any(m =>
-            m.IsExactMatch
-                ? (m.NameOrEmail.Equals(fullName, StringComparison.OrdinalIgnoreCase) || m.NameOrEmail.Equals(email, StringComparison.OrdinalIgnoreCase))
-                : (fullName.Contains(m.NameOrEmail, StringComparison.OrdinalIgnoreCase) || email.Contains(m.NameOrEmail, StringComparison.OrdinalIgnoreCase))
-        );
-
-        if (matched)
-        {
-            _db.SyncAlerts.Add(new SyncAlert
-            {
-                AlertType = SyncAlertType.MonitoredParticipantMatch,
-                GuestName = fullName,
-                SyncSource = SyncAlertSource.DepartureShuttle,
-                DetectedAt = DateTime.UtcNow,
-                Notes = $"Monitored participant submitted departure shuttle: {fullName} — {hotelName} — Room {roomNumber} — Pickup: {dayLabel} {hourLabel}"
-            });
-            await _db.SaveChangesAsync(ct);
-        }
     }
 
     private async Task<bool> ValidateTurnstileAsync(string? token, CancellationToken ct)
@@ -487,12 +392,6 @@ public record DepartureStatsDto
 public record HotelStat { public Guid HotelId { get; init; } public string HotelName { get; init; } = string.Empty; public int Count { get; init; } }
 public record DayStat { public Guid DayId { get; init; } public string DayLabel { get; init; } = string.Empty; public int DisplayOrder { get; init; } public int Count { get; init; } public List<HourStat> ByHour { get; init; } = new(); }
 public record HourStat { public Guid HourId { get; init; } public string HourLabel { get; init; } = string.Empty; public int DisplayOrder { get; init; } public int Count { get; init; } public List<HotelStat> ByHotel { get; init; } = new(); }
-
-public record AddMonitoredRequest
-{
-    public string NameOrEmail { get; init; } = string.Empty;
-    public bool IsExactMatch { get; init; }
-}
 
 public class PagedResult<T>
 {
