@@ -253,23 +253,31 @@ using (var scope = app.Services.CreateScope())
         ");
         logger.LogInformation("LiaisonOfficerCarNumber column pre-check complete.");
 
-        // ALWAYS fix MonitoredParticipants.IsExactMatch column if it was created as integer by SQLite migration
+        // ALWAYS recreate MonitoredParticipants table with correct PostgreSQL types.
+        // The EF migration creates it with SQLite types (TEXT for uuid/timestamps, INTEGER for bool).
+        // Drop and recreate with proper types since this is a new feature with no production data.
         await context.Database.ExecuteSqlRawAsync(@"
             DO $$ BEGIN
                 IF EXISTS (
                     SELECT 1 FROM information_schema.columns
                     WHERE table_name = 'MonitoredParticipants'
-                    AND column_name = 'IsExactMatch'
-                    AND data_type = 'integer'
+                    AND column_name = 'Id'
+                    AND data_type = 'text'
                 ) THEN
-                    ALTER TABLE ""MonitoredParticipants""
-                        ALTER COLUMN ""IsExactMatch"" DROP DEFAULT,
-                        ALTER COLUMN ""IsExactMatch"" SET DATA TYPE boolean USING (""IsExactMatch""::int::boolean),
-                        ALTER COLUMN ""IsExactMatch"" SET DEFAULT false;
+                    DROP TABLE ""MonitoredParticipants"";
                 END IF;
             END $$;
+            CREATE TABLE IF NOT EXISTS ""MonitoredParticipants"" (
+                ""Id""              uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+                ""NameOrEmail""     text        NOT NULL,
+                ""IsExactMatch""    boolean     NOT NULL DEFAULT false,
+                ""AddedByUserName"" text        NOT NULL,
+                ""AddedAt""         timestamptz NOT NULL DEFAULT now(),
+                ""CreatedAt""       timestamptz NOT NULL DEFAULT now(),
+                ""UpdatedAt""       timestamptz NOT NULL DEFAULT now()
+            );
         ");
-        logger.LogInformation("MonitoredParticipants.IsExactMatch type fix complete.");
+        logger.LogInformation("MonitoredParticipants table recreated with correct PostgreSQL types.");
 
         if (isFreshDatabase || isEfCoreCreatedDb)
         {
