@@ -187,3 +187,13 @@ public class SyncRecordConfiguration : IEntityTypeConfiguration<SyncRecord>
         builder.Property(sr => sr.Details).HasMaxLength(4000);
     }
 }
+
+public class MonitoredParticipantConfiguration : IEntityTypeConfiguration<MonitoredParticipant>
+{
+    public void Configure(EntityTypeBuilder<MonitoredParticipant> builder)
+    {
+        builder.HasKey(mp => mp.Id);
+        builder.Property(mp => mp.NameOrEmail).IsRequired().HasMaxLength(300);
+        builder.Property(mp => mp.AddedByUserName).IsRequired().HasMaxLength(200);
+    }
+}
