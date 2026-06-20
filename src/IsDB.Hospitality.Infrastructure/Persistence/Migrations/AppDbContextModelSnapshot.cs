@@ -976,39 +976,6 @@ namespace IsDB.Hospitality.Infrastructure.Persistence.Migrations
                     b.ToTable("HotelOptions");
                 });
 
-            modelBuilder.Entity("IsDB.Hospitality.Domain.Entities.MonitoredParticipant", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("AddedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AddedByUserName")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool>("IsExactMatch")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("NameOrEmail")
-                        .IsRequired()
-                        .HasMaxLength(300)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("MonitoredParticipants");
-                });
-
             modelBuilder.Entity("IsDB.Hospitality.Domain.Entities.Notification", b =>
                 {
                     b.Property<Guid>("Id")
