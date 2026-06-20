@@ -16,7 +16,6 @@ public static class DatabaseSeeder
         await SeedCarClassesAsync(context);
         await SeedVehiclesAsync(context);
         await SeedSyncFieldMappingsAsync(context);
-        await SeedPickupOptionsAsync(context);
             await ApplyProductionSeedAsync(context, logger);
             logger.LogInformation("Database seeded successfully.");
         }
@@ -288,42 +287,6 @@ public static class DatabaseSeeder
         await context.SaveChangesAsync();
     }
 
-    private static async Task SeedPickupOptionsAsync(AppDbContext context)
-    {
-        var isPostgres = context.Database.ProviderName?.Contains("Npgsql") == true;
-
-        // ── Pickup Days ──────────────────────────────────────────────────────────
-        // Removed: Pickup days are now managed exclusively via the Settings UI.
-        // No automatic seeding to avoid creating unwanted entries on deployment.
-
-        // ── Pickup Hours ─────────────────────────────────────────────────────────
-        // 24 entries: 00:00 → 23:00, labels in 12-hour AM/PM format
-        for (int h = 0; h < 24; h++)
-        {
-            var value = $"{h:D2}:00";
-            var label = h == 0  ? "12:00 AM"
-                      : h < 12 ? $"{h:D2}:00 AM"
-                      : h == 12 ? "12:00 PM"
-                      : $"{(h - 12):D2}:00 PM";
-
-            var exists = await context.PickupHourOptions.AnyAsync(x => x.Value == value);
-            if (!exists)
-            {
-                context.PickupHourOptions.Add(new IsDB.Hospitality.Domain.Entities.PickupHourOption
-                {
-                    Id           = Guid.NewGuid(),
-                    Label        = label,
-                    Value        = value,
-                    IsActive     = true,
-                    DisplayOrder = h,
-                    CreatedAt    = DateTime.UtcNow,
-                    UpdatedAt    = DateTime.UtcNow
-                });
-            }
-        }
-
-        await context.SaveChangesAsync();
-    }
 
     private static string ConvertToPostgresUpsert(string sqliteInsert)
     {
