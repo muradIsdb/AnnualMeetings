@@ -165,10 +165,10 @@ public class SettingsController : ApiControllerBase
     public async Task<ActionResult<List<HotelOptionDto>>> GetHotels()
     {
         var hotels = await _db.HotelOptions
-            .Where(h => h.IsActive)
+            .Where(h => h.IsActive && h.ShowInDepartureForm)
             .OrderBy(h => h.DisplayOrder)
             .ThenBy(h => h.Name)
-            .Select(h => new HotelOptionDto { Id = h.Id, Name = h.Name, IsActive = h.IsActive, DisplayOrder = h.DisplayOrder, ContractedRoomsIsDB = h.ContractedRoomsIsDB, ContractedRoomsGuest = h.ContractedRoomsGuest, ActualOccupiedIsDB = h.ActualOccupiedIsDB, ActualOccupiedGuest = h.ActualOccupiedGuest })
+            .Select(h => new HotelOptionDto { Id = h.Id, Name = h.Name, IsActive = h.IsActive, ShowInDepartureForm = h.ShowInDepartureForm, DisplayOrder = h.DisplayOrder, ContractedRoomsIsDB = h.ContractedRoomsIsDB, ContractedRoomsGuest = h.ContractedRoomsGuest, ActualOccupiedIsDB = h.ActualOccupiedIsDB, ActualOccupiedGuest = h.ActualOccupiedGuest })
             .ToListAsync();
         return Ok(hotels);
     }
@@ -180,7 +180,7 @@ public class SettingsController : ApiControllerBase
         var hotels = await _db.HotelOptions
             .OrderBy(h => h.DisplayOrder)
             .ThenBy(h => h.Name)
-            .Select(h => new HotelOptionDto { Id = h.Id, Name = h.Name, IsActive = h.IsActive, DisplayOrder = h.DisplayOrder, ContractedRoomsIsDB = h.ContractedRoomsIsDB, ContractedRoomsGuest = h.ContractedRoomsGuest, ActualOccupiedIsDB = h.ActualOccupiedIsDB, ActualOccupiedGuest = h.ActualOccupiedGuest })
+            .Select(h => new HotelOptionDto { Id = h.Id, Name = h.Name, IsActive = h.IsActive, ShowInDepartureForm = h.ShowInDepartureForm, DisplayOrder = h.DisplayOrder, ContractedRoomsIsDB = h.ContractedRoomsIsDB, ContractedRoomsGuest = h.ContractedRoomsGuest, ActualOccupiedIsDB = h.ActualOccupiedIsDB, ActualOccupiedGuest = h.ActualOccupiedGuest })
             .ToListAsync();
         return Ok(hotels);
     }
@@ -193,11 +193,12 @@ public class SettingsController : ApiControllerBase
         {
             Name = req.Name.Trim(),
             IsActive = req.IsActive,
+            ShowInDepartureForm = req.ShowInDepartureForm,
             DisplayOrder = req.DisplayOrder
         };
         _db.HotelOptions.Add(hotel);
         await _db.SaveChangesAsync();
-        return CreatedAtAction(nameof(GetHotels), new HotelOptionDto { Id = hotel.Id, Name = hotel.Name, IsActive = hotel.IsActive, DisplayOrder = hotel.DisplayOrder, ContractedRoomsIsDB = hotel.ContractedRoomsIsDB, ContractedRoomsGuest = hotel.ContractedRoomsGuest, ActualOccupiedIsDB = hotel.ActualOccupiedIsDB, ActualOccupiedGuest = hotel.ActualOccupiedGuest });
+        return CreatedAtAction(nameof(GetHotels), new HotelOptionDto { Id = hotel.Id, Name = hotel.Name, IsActive = hotel.IsActive, ShowInDepartureForm = hotel.ShowInDepartureForm, DisplayOrder = hotel.DisplayOrder, ContractedRoomsIsDB = hotel.ContractedRoomsIsDB, ContractedRoomsGuest = hotel.ContractedRoomsGuest, ActualOccupiedIsDB = hotel.ActualOccupiedIsDB, ActualOccupiedGuest = hotel.ActualOccupiedGuest });
     }
 
     [HttpPut("hotels/{id:guid}")]
@@ -208,9 +209,10 @@ public class SettingsController : ApiControllerBase
         if (hotel == null) return NotFound();
         hotel.Name = req.Name.Trim();
         hotel.IsActive = req.IsActive;
+        hotel.ShowInDepartureForm = req.ShowInDepartureForm;
         hotel.DisplayOrder = req.DisplayOrder;
         await _db.SaveChangesAsync();
-        return Ok(new HotelOptionDto { Id = hotel.Id, Name = hotel.Name, IsActive = hotel.IsActive, DisplayOrder = hotel.DisplayOrder, ContractedRoomsIsDB = hotel.ContractedRoomsIsDB, ContractedRoomsGuest = hotel.ContractedRoomsGuest, ActualOccupiedIsDB = hotel.ActualOccupiedIsDB, ActualOccupiedGuest = hotel.ActualOccupiedGuest });
+        return Ok(new HotelOptionDto { Id = hotel.Id, Name = hotel.Name, IsActive = hotel.IsActive, ShowInDepartureForm = hotel.ShowInDepartureForm, DisplayOrder = hotel.DisplayOrder, ContractedRoomsIsDB = hotel.ContractedRoomsIsDB, ContractedRoomsGuest = hotel.ContractedRoomsGuest, ActualOccupiedIsDB = hotel.ActualOccupiedIsDB, ActualOccupiedGuest = hotel.ActualOccupiedGuest });
     }
 
     /// <summary>Hotel team: update contracted rooms and actual occupancy only.</summary>
@@ -710,6 +712,7 @@ public record HotelOptionDto
     public Guid Id { get; init; }
     public string Name { get; init; } = string.Empty;
     public bool IsActive { get; init; }
+    public bool ShowInDepartureForm { get; init; }
     public int DisplayOrder { get; init; }
     public int ContractedRoomsIsDB { get; init; }
     public int ContractedRoomsGuest { get; init; }
@@ -729,6 +732,7 @@ public record CreateHotelRequest
 {
     public string Name { get; init; } = string.Empty;
     public bool IsActive { get; init; } = true;
+    public bool ShowInDepartureForm { get; init; } = true;
     public int DisplayOrder { get; init; } = 0;
 }
 
