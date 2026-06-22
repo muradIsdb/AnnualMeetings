@@ -603,19 +603,27 @@ public static class EventsAirSyncHelpers
                     if (result.Errors.Count < 5)
                         result.Errors.Add($"ContactId={tb.ContactId}: {alertMsg}");
                     // Create a SyncAlert so the issue is visible in the admin UI
+                    // Check ALL alerts (open + resolved) to prevent re-creating after resolution.
                     if (guestsByContactId.TryGetValue(tb.ContactId, out var alertGuest))
                     {
-                        db.SyncAlerts.Add(new SyncAlert
+                        var alreadyHasAlert = await db.SyncAlerts.AnyAsync(a =>
+                            a.AlertType == SyncAlertType.DataQualityIssue &&
+                            a.GuestId == alertGuest.Id &&
+                            a.OldValue == tb.FlightNumber);
+                        if (!alreadyHasAlert)
                         {
-                            AlertType          = SyncAlertType.DataQualityIssue,
-                            GuestId            = alertGuest.Id,
-                            GuestName          = $"{alertGuest.FirstName} {alertGuest.LastName}".Trim(),
-                            EventsAirContactId = tb.ContactId,
-                            OldValue           = tb.FlightNumber,
-                            NewValue           = $"Too long ({tb.FlightNumber.Length} chars, max 50)",
-                            SyncSource         = SyncAlertSource.AutoSync,
-                            DetectedAt         = DateTime.UtcNow
-                        });
+                            db.SyncAlerts.Add(new SyncAlert
+                            {
+                                AlertType          = SyncAlertType.DataQualityIssue,
+                                GuestId            = alertGuest.Id,
+                                GuestName          = $"{alertGuest.FirstName} {alertGuest.LastName}".Trim(),
+                                EventsAirContactId = tb.ContactId,
+                                OldValue           = tb.FlightNumber,
+                                NewValue           = $"Too long ({tb.FlightNumber.Length} chars, max 50)",
+                                SyncSource         = SyncAlertSource.AutoSync,
+                                DetectedAt         = DateTime.UtcNow
+                            });
+                        }
                     }
                     continue;
                 }

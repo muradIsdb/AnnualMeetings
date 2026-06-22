@@ -243,14 +243,16 @@ public class EventsAirSyncService : BackgroundService
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
             // ── Pre-load open alert guest IDs for deduplication (Pass 1 & 2) ──
-            var openAlertsBg = await db.SyncAlerts
-                .Where(a => !a.IsResolved && a.GuestId != null)
+            // Deduplication: check ALL alerts (open AND resolved) to prevent re-creating
+            // alerts for the same guest+type after an admin resolves them.
+            var existingAlertsBg = await db.SyncAlerts
+                .Where(a => a.GuestId != null)
                 .Select(a => new { a.GuestId, a.AlertType })
                 .ToListAsync(cancellationToken);
-            var openGuestRemovedIdsBg = new HashSet<Guid>(openAlertsBg
+            var openGuestRemovedIdsBg = new HashSet<Guid>(existingAlertsBg
                 .Where(a => a.AlertType == SyncAlertType.GuestRemoved)
                 .Select(a => a.GuestId!.Value));
-            var openRegTypeChangedIdsBg = new HashSet<Guid>(openAlertsBg
+            var openRegTypeChangedIdsBg = new HashSet<Guid>(existingAlertsBg
                 .Where(a => a.AlertType == SyncAlertType.RegTypeChanged)
                 .Select(a => a.GuestId!.Value));
 
@@ -468,11 +470,13 @@ public class EventsAirSyncService : BackgroundService
                     .GroupBy(v => v.CurrentGuestId!.Value)
                     .ToDictionary(g => g.Key, g => g.First());
 
-                // Load all open CarClassMismatch alerts (full entity for auto-resolution)
-                var existingOpenMismatches = await db.SyncAlerts
-                    .Where(a => a.AlertType == SyncAlertType.CarClassMismatch && !a.IsResolved && a.GuestId != null)
+                // Load all CarClassMismatch alerts (open AND resolved) for deduplication
+                // Also load open ones separately for auto-resolution
+                var allMismatchAlertsBg = await db.SyncAlerts
+                    .Where(a => a.AlertType == SyncAlertType.CarClassMismatch && a.GuestId != null)
                     .ToListAsync(cancellationToken);
-                var existingOpenMismatchGuestIds = new HashSet<Guid>(existingOpenMismatches.Select(a => a.GuestId!.Value));
+                var existingOpenMismatches = allMismatchAlertsBg.Where(a => !a.IsResolved).ToList();
+                var existingMismatchGuestIds = new HashSet<Guid>(allMismatchAlertsBg.Select(a => a.GuestId!.Value));
 
                 // AUTO-RESOLVE: close open alerts where the mismatch is no longer present
                 var guestLookup = guestsWithClass.ToDictionary(g => g.Id);
@@ -486,7 +490,7 @@ public class EventsAirSyncService : BackgroundService
                         alert.ResolvedAt = DateTime.UtcNow;
                         alert.ResolvedByUserName = "System (auto-resolved: vehicle unassigned)";
                         autoResolved++;
-                        existingOpenMismatchGuestIds.Remove(gid);
+                        existingMismatchGuestIds.Remove(gid);
                         continue;
                     }
                     if (guestLookup.TryGetValue(gid, out var gd)
@@ -497,7 +501,7 @@ public class EventsAirSyncService : BackgroundService
                         alert.ResolvedAt = DateTime.UtcNow;
                         alert.ResolvedByUserName = "System (auto-resolved: class now matches)";
                         autoResolved++;
-                        existingOpenMismatchGuestIds.Remove(gid);
+                        existingMismatchGuestIds.Remove(gid);
                     }
                 }
                 if (autoResolved > 0)
@@ -508,8 +512,8 @@ public class EventsAirSyncService : BackgroundService
 
                 foreach (var guest in guestsWithClass)
                 {
-                    // Skip if already has an open mismatch alert
-                    if (existingOpenMismatchGuestIds.Contains(guest.Id)) continue;
+                    // Skip if already has a mismatch alert (open or resolved)
+                    if (existingMismatchGuestIds.Contains(guest.Id)) continue;
 
                     // Skip if no assigned vehicle found via either source
                     if (!vehicleByGuest.TryGetValue(guest.Id, out var assignedVehicle)) continue;

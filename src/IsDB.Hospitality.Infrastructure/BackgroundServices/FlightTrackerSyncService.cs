@@ -148,12 +148,12 @@ public class FlightTrackerSyncService : BackgroundService
                 {
                     // Create a deduplicated SyncAlert for unrecognized flight numbers so the team
                     // knows which entries need manual correction in EventsAir.
+                    // Check ALL alerts (open + resolved) to prevent re-creating after resolution.
                     if (!string.IsNullOrWhiteSpace(flight.FlightNumber))
                     {
                         var alreadyAlerted = await context.SyncAlerts.AnyAsync(a =>
                             a.AlertType == SyncAlertType.UnrecognizedFlightNumber &&
-                            a.OldValue == flight.FlightNumber &&
-                            !a.IsResolved, cancellationToken);
+                            a.OldValue == flight.FlightNumber, cancellationToken);
                         if (!alreadyAlerted)
                         {
                             var guestName = flight.TravelBookings.FirstOrDefault()?.Guest is { } g
@@ -362,12 +362,12 @@ public class FlightTrackerSyncService : BackgroundService
                 if (status == null)
                 {
                     // Create a deduplicated SyncAlert for unrecognized flight numbers
+                    // Check ALL alerts (open + resolved) to prevent re-creating after resolution.
                     if (!string.IsNullOrWhiteSpace(flight.FlightNumber))
                     {
                         var alreadyAlerted = await context.SyncAlerts.AnyAsync(a =>
                             a.AlertType == SyncAlertType.UnrecognizedFlightNumber &&
-                            a.OldValue == flight.FlightNumber &&
-                            !a.IsResolved, cancellationToken);
+                            a.OldValue == flight.FlightNumber, cancellationToken);
                         if (!alreadyAlerted)
                         {
                             var guestName = flight.TravelBookings.FirstOrDefault()?.Guest is { } g
