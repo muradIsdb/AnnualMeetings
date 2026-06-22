@@ -283,6 +283,18 @@ using (var scope = app.Services.CreateScope())
         ");
         logger.LogInformation("MonitoredParticipants table pre-check complete.");
 
+        // Add ShowInDepartureForm column to HotelOptions if it doesn't exist
+        await context.Database.ExecuteSqlRawAsync(@"
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'HotelOptions' AND column_name = 'ShowInDepartureForm'
+                ) THEN
+                    ALTER TABLE ""HotelOptions"" ADD COLUMN ""ShowInDepartureForm"" boolean NOT NULL DEFAULT true;
+                END IF;
+            END $$;
+        ");
+
         if (isFreshDatabase || isEfCoreCreatedDb)
         {
             // Fresh or EF Core-managed database: run MigrateAsync() directly.
