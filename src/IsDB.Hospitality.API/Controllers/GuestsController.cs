@@ -302,15 +302,17 @@ public class GuestsController : ApiControllerBase
                 int vehicleTypeMatched = 0, vehicleTypeUnmatched = 0;
                 var vehicleTypeUnmatchedValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-                // ── Pre-load open alert guest IDs for deduplication (Pass 1 & 2) ──
-                var openAlertGuestIds = await bgDb.SyncAlerts
-                    .Where(a => !a.IsResolved && a.GuestId != null)
+                // ── Pre-load alert guest IDs for deduplication (Pass 1 & 2) ──
+                // Check ALL alerts (open AND resolved) to prevent re-creating
+                // alerts for the same guest+type after an admin resolves them.
+                var existingAlertGuestIds = await bgDb.SyncAlerts
+                    .Where(a => a.GuestId != null)
                     .Select(a => new { a.GuestId, a.AlertType })
                     .ToListAsync();
-                var openGuestRemovedIds = new HashSet<Guid>(openAlertGuestIds
+                var openGuestRemovedIds = new HashSet<Guid>(existingAlertGuestIds
                     .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.GuestRemoved)
                     .Select(a => a.GuestId!.Value));
-                var openRegTypeChangedIds = new HashSet<Guid>(openAlertGuestIds
+                var openRegTypeChangedIds = new HashSet<Guid>(existingAlertGuestIds
                     .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.RegTypeChanged)
                     .Select(a => a.GuestId!.Value));
 
@@ -564,12 +566,14 @@ public class GuestsController : ApiControllerBase
                         .GroupBy(v => v.CurrentGuestId!.Value)
                         .ToDictionary(g => g.Key, g => g.First());
 
-                    // Load all open CarClassMismatch alerts (full entity for auto-resolution)
-                    var existingOpenMismatches = await bgDb.SyncAlerts
+                    // Load all CarClassMismatch alerts (open AND resolved) for deduplication
+                    // Also load open ones separately for auto-resolution
+                    var allMismatchAlerts = await bgDb.SyncAlerts
                         .Where(a => a.AlertType == IsDB.Hospitality.Domain.Enums.SyncAlertType.CarClassMismatch
-                                 && !a.IsResolved && a.GuestId != null)
+                                 && a.GuestId != null)
                         .ToListAsync();
-                    var existingOpenMismatchIds = new HashSet<Guid>(existingOpenMismatches.Select(a => a.GuestId!.Value));
+                    var existingOpenMismatches = allMismatchAlerts.Where(a => !a.IsResolved).ToList();
+                    var existingMismatchIds = new HashSet<Guid>(allMismatchAlerts.Select(a => a.GuestId!.Value));
 
                     // AUTO-RESOLVE: close open alerts where the mismatch is no longer present
                     // (vehicle unassigned, or vehicle class now matches DeservedCarClassId)
@@ -585,7 +589,7 @@ public class GuestsController : ApiControllerBase
                             alert.ResolvedAt = DateTime.UtcNow;
                             alert.ResolvedByUserName = "System (auto-resolved: vehicle unassigned)";
                             autoResolved++;
-                            existingOpenMismatchIds.Remove(guestId);
+                            existingMismatchIds.Remove(guestId);
                             continue;
                         }
                         // If vehicle class now matches DeservedCarClassId → resolve
@@ -597,7 +601,7 @@ public class GuestsController : ApiControllerBase
                             alert.ResolvedAt = DateTime.UtcNow;
                             alert.ResolvedByUserName = "System (auto-resolved: class now matches)";
                             autoResolved++;
-                            existingOpenMismatchIds.Remove(guestId);
+                            existingMismatchIds.Remove(guestId);
                         }
                     }
                     if (autoResolved > 0)
@@ -608,7 +612,7 @@ public class GuestsController : ApiControllerBase
 
                     foreach (var guest in guestsWithClassP4)
                     {
-                        if (existingOpenMismatchIds.Contains(guest.Id)) continue;
+                        if (existingMismatchIds.Contains(guest.Id)) continue;
                         if (!vehicleByGuestP4.TryGetValue(guest.Id, out var assignedVehicle)) continue;
                         var vehicleCarClassId = assignedVehicle.CarClassId;
                         if (vehicleCarClassId == null) continue;
