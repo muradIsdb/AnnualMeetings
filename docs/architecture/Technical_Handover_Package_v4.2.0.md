@@ -1,11 +1,10 @@
 # IsDB Annual Meetings Hospitality System
-# Technical Handover Package — v4.1.0
+# Technical Handover Package — v4.2.0
 
 **Prepared by:** Manus AI  
 **Date:** June 2026  
 **Repository:** [muradIsdb/AnnualMeetings](https://github.com/muradIsdb/AnnualMeetings)  
-**Production Release:** v4.1.0  
-**UAT Release:** v4.2.0-uat-stable
+**Production Release:** v4.2.0 (v89)  
 
 ---
 
@@ -22,6 +21,7 @@
 9. [AI Review Package](#9-ai-review-package)
 10. [Diagrams](#10-diagrams)
 11. [Integration Architecture & Interface Documentation](#11-integration-architecture--interface-documentation)
+12. [Changelog (v4.1.0 → v4.2.0)](#12-changelog-v410--v420)
 
 ---
 
@@ -39,12 +39,15 @@ The system manages six core business processes. **Guest Synchronization** provid
 
 | Feature | Description |
 |---|---|
-| Real-Time Dashboards | Role-specific dashboards for Airport, Transport, Hotel, Control Room, and Liaison |
+| Real-Time Dashboards | Role-specific dashboards for Airport, Transport, Hotel, Control Room, Liaison, AirportView, and Vendor roles |
 | Automated Sync & Alerting | Background services polling EventsAir and Aviationstack with anomaly detection |
-| Dynamic RBAC | JWT-based authentication with granular role-based access control |
+| Dynamic RBAC | JWT-based authentication with granular role-based access control (8 roles) |
 | Placard Generation | Automated welcome placards with configurable event logos |
 | Audit Trail | Comprehensive logging of status changes, assignments, and system events |
 | Departure Portal | Public-facing self-service shuttle booking with token-based management |
+| Vehicle Allocation Summary | Dedicated VA Summary dashboard for real-time fleet utilization tracking |
+| Drop-off Trip Tracking | Specialized tracking for single-use drop-off trips where vehicles return to the pool |
+| Monitored Participants | Watch list system that auto-alerts the Control Room when specific VIPs book a departure shuttle |
 
 ---
 
@@ -52,7 +55,7 @@ The system manages six core business processes. **Guest Synchronization** provid
 
 ### 2.1 High-Level Architecture Diagram
 
-![High-Level Architecture](diagrams/rendered/architecture.png)
+![High-Level Architecture](diagrams/architecture.png)
 
 The system follows a three-tier architecture: a **Client Tier** (React SPA), an **Application Tier** (ASP.NET Core 8 API running on Railway), and a **Data Tier** (PostgreSQL). Two external systems — EventsAir and Aviationstack — are consumed exclusively by background services in the Application Tier, ensuring the API remains responsive to user requests regardless of external API latency.
 
@@ -81,9 +84,19 @@ Entity Framework Core 8 manages the schema via code-first migrations. The produc
 
 ### 2.6 Authentication and Authorization Flow
 
-![Authentication Flow](diagrams/rendered/auth_flow.png)
+![Authentication Flow](diagrams/auth_flow.png)
 
 The authentication flow is as follows: the user submits credentials to `/api/auth/login`, the system verifies the BCrypt password hash, and `JwtService` generates an access token (containing `ClaimTypes.Role`) and a cryptographically random refresh token. The frontend Axios interceptor attaches the Bearer token to all outbound requests. Controllers enforce `[Authorize(Roles = "...")]` attributes. A global `ActiveUserFilter` verifies the user hasn't been deactivated mid-session, using a 60-second in-memory cache to minimize database round-trips.
+
+The system enforces 8 distinct roles:
+1. `Admin`
+2. `Airport`
+3. `Transport`
+4. `Hotel`
+5. `ControlRoom`
+6. `Liaison`
+7. `AirportView` (read-only airport access)
+8. `Vendor` (external transport vendor access to departure requirements)
 
 ### 2.7 External Integrations
 
@@ -132,12 +145,12 @@ The codebase employs several well-established patterns. **Clean Architecture** e
 | Module | Key Files | Responsibility |
 |---|---|---|
 | Guest Management | `GuestsController.cs`, `Guest.cs` | Profiles, journey status, registration types |
-| Fleet Management | `FleetController.cs`, `VehiclesController.cs` | Vehicles, drivers, car classes, assignments |
+| Fleet Management | `FleetController.cs`, `VehiclesController.cs` | Vehicles, drivers, car classes, assignments, drop-off trips |
 | Flight Management | `FlightTrackerSyncService.cs`, `Flight.cs` | Schedules, real-time tracking, delay alerts |
 | Sync & Alerts | `EventsAirSyncService.cs`, `SyncAlert.cs` | Data ingestion, anomaly detection |
 | Notifications | `NotificationTemplateService.cs` | Role-based messaging with read receipts |
 | Auth | `AuthController.cs`, `JwtService.cs` | Login, token management, RBAC |
-| Departure Portal | `DepartureRequestsController.cs` | Public shuttle booking, token-based access |
+| Departure Portal | `DepartureRequestsController.cs` | Public shuttle booking, token-based access, watch list monitoring |
 
 ### 3.4 Error Handling Strategy
 
@@ -186,6 +199,13 @@ AnnualMeetingsRepo/
 │   │   ├── api/                           # client.ts (Axios), services.ts
 │   │   ├── components/                    # Reusable UI components
 │   │   ├── pages/                         # Route-level page components (by module)
+│   │   │   ├── airport/                   # Airport Dashboard, Guest Detail
+│   │   │   ├── departure/                 # Departure Form, Manage, Stats
+│   │   │   ├── fleet/                     # Fleet, Car Classes, Requirements
+│   │   │   ├── hotel/                     # Hotel Dashboard, Arrivals Queue, Directory
+│   │   │   ├── liaison/                   # Liaison Dashboard, Guest List
+│   │   │   ├── settings/                  # Settings, Access Control, Notifications
+│   │   │   └── transport/                 # Transport Dashboard, VA Summary, Drop-off Trips
 │   │   ├── store/                         # authStore.ts (Zustand)
 │   │   └── types/                         # index.ts (TypeScript types and enums)
 │   ├── package.json
@@ -252,7 +272,7 @@ The deployment pipeline is fully automated via Railway's GitHub integration. On 
 
 ### 5.1 Entity Relationship Diagram (ERD)
 
-![Entity Relationship Diagram](diagrams/rendered/erd.png)
+![Entity Relationship Diagram](diagrams/erd.png)
 
 ### 5.2 Table Descriptions
 
@@ -265,19 +285,24 @@ The deployment pipeline is fully automated via Railway's GitHub integration. On 
 | `Drivers` | Driver profiles linked to vehicles |
 | `CarClasses` | Vehicle classification tiers (e.g., VIP, Standard) with color coding |
 | `VehicleAssignments` | Historical record of all guest-to-vehicle assignments |
+| `DropOffTrips` | Historical and active records of single-use drop-off trips |
 | `StaffUsers` | Authentication records for all operational staff |
 | `StaffUserRoles` | Many-to-many join table enabling multi-role users |
 | `SyncAlerts` | Anomalies detected during EventsAir sync requiring manual review |
 | `Notifications` | Internal broadcast messages with role targeting |
 | `NotificationReads` | Read receipts per user per notification |
 | `SystemLogs` | Persistent application event and error log |
-| `AppConfig` | Singleton platform configuration (Aviationstack key, placard settings) |
+| `AppConfig` | Singleton platform configuration (Aviationstack key, placard settings, live event clock) |
 | `EventsAirConfig` | EventsAir connection settings and sync parameters |
 | `DepartureRequests` | Public shuttle booking requests with token-based access |
+| `MonitoredParticipants` | Watch list of names/emails that auto-trigger Control Room alerts upon departure booking |
+| `HotelOptions` | Configurable hotel list with `ShowInDepartureForm` flag and room allocation stats |
+| `PickupDayOptions` / `PickupHourOptions` | Configurable pickup schedule for the departure portal |
+| `CarClassRules`, `ChecklistItems`, `RegistrationTypes` | Additional configuration tables for business rules |
 
 ### 5.3 Relationships
 
-The `Guest` entity is the central hub of the schema. It has one-to-many relationships with `TravelBookings`, `VehicleAssignments`, `GuestStatusHistory`, `ChecklistCompletions`, and `SyncAlerts`. The `TravelBooking` entity bridges `Guest` and `Flight`, allowing multiple guests to share a flight record while maintaining individual booking details. The `Vehicle` entity maintains a direct foreign key to `CarClass` and an optional foreign key to `Driver`. Deleting a guest cascades to their bookings and assignments, but sets `GuestId` to null on `SyncAlerts` to preserve the audit trail.
+The `Guest` entity is the central hub of the schema. It has one-to-many relationships with `TravelBookings`, `VehicleAssignments`, `DropOffTrips`, `GuestStatusHistory`, `ChecklistCompletions`, and `SyncAlerts`. The `TravelBooking` entity bridges `Guest` and `Flight`, allowing multiple guests to share a flight record while maintaining individual booking details. The `Vehicle` entity maintains a direct foreign key to `CarClass` and an optional foreign key to `Driver`. Deleting a guest cascades to their bookings and assignments, but sets `GuestId` to null on `SyncAlerts` to preserve the audit trail.
 
 ### 5.4 Indexes and Performance Considerations
 
@@ -300,15 +325,16 @@ The `Guest` entity is the central hub of the schema. It has one-to-many relation
 | Controller | Base Route | Key Endpoints |
 |---|---|---|
 | Auth | `/api/auth` | `POST /login`, `POST /change-password`, `POST /refresh` |
-| Guests | `/api/guests` | `GET /`, `GET /{id}`, `POST /{id}/inbound-status`, `POST /sync-from-eventsair` |
+| Guests | `/api/guests` | `GET /`, `GET /{id}`, `GET /departure-flights`, `POST /sync-from-eventsair` |
 | Fleet/Vehicles | `/api/vehicles` | `GET /`, `POST /assign`, `DELETE /{id}/unassign` |
+| Fleet (Drop-offs) | `/api/fleet` | `GET /dropoff-trips`, `POST /dropoff-trips`, `POST /dropoff-trips/{id}/complete` |
 | Car Classes | `/api/car-classes` | `GET /`, `POST /`, `PUT /{id}`, `DELETE /{id}` |
 | Dashboard | `/api/dashboard` | `GET /summary`, `GET /hotel-summary`, `GET /control-room` |
 | Sync Alerts | `/api/transport-actions` | `GET /`, `POST /{id}/resolve` |
 | Notifications | `/api/notifications` | `GET /`, `POST /{id}/read` |
-| Settings | `/api/settings` | `GET /config`, `PUT /config`, `GET /eventsair-config` |
+| Settings | `/api/settings` | `GET /config`, `GET /hotels`, `GET /pickup-days`, `GET /pickup-hours` |
 | EventsAir | `/api/eventsair` | `POST /sync`, `GET /sync-status`, `POST /deactivate-canceled-guests` |
-| Departure Requests | `/api/departure-requests` | `POST /` (public), `GET /manage/{token}` (public), `GET /` (Admin) |
+| Departure Requests | `/api/departure-requests` | `POST /` (public), `GET /manage/{token}` (public), `GET /monitored` (Admin) |
 | System Logs | `/api/system-logs` | `GET /` (Admin only) |
 | Health | `/api/health` | `GET /` (public) |
 
@@ -363,7 +389,7 @@ Validation errors return HTTP 400 with a `errors` dictionary mapping field names
 
 **Strengths:** Granular `[Authorize(Roles = "...")]` attributes are applied consistently across all sensitive endpoints. The frontend `ProtectedRoute` wrapper provides a secondary layer of access control at the UI level.
 
-**Observations:** A small number of EventsAir controller endpoints use `[Authorize]` without a role restriction (lines 938, 1000, 1060), allowing any authenticated user to access them. These should be reviewed to confirm whether role restriction is intentional.
+**Observations:** A small number of EventsAir controller endpoints use `[Authorize]` without a role restriction, allowing any authenticated user to access them. These should be reviewed to confirm whether role restriction is intentional.
 
 ### 7.3 Input Validation Review
 
@@ -455,7 +481,6 @@ The following questions should be addressed during a formal architecture review 
 | `Guest.cs` | Central domain entity; growing complexity warrants review |
 | `ActiveUserFilter.cs` | Security-critical component; cache invalidation logic is subtle |
 | `GuestConfiguration.cs` | Defines all DB indexes and cascade rules; performance-critical |
-| `App.tsx` (frontend) | Defines all role-based routing; must stay in sync with backend |
 
 ---
 
@@ -463,23 +488,23 @@ The following questions should be addressed during a formal architecture review 
 
 ### 10.1 High-Level Architecture
 
-![High-Level Architecture](diagrams/rendered/architecture.png)
+![High-Level Architecture](diagrams/architecture.png)
 
 ### 10.2 Authentication Flow
 
-![Authentication Flow](diagrams/rendered/auth_flow.png)
+![Authentication Flow](diagrams/auth_flow.png)
 
 ### 10.3 EventsAir Sync Sequence
 
-![EventsAir Sync](diagrams/rendered/eventsair_sync.png)
+![EventsAir Sync](diagrams/eventsair_sync.png)
 
 ### 10.4 Vehicle Assignment Data Flow
 
-![Vehicle Assignment](diagrams/rendered/vehicle_assignment.png)
+![Vehicle Assignment](diagrams/vehicle_assignment.png)
 
 ### 10.5 Entity Relationship Diagram
 
-![ERD](diagrams/rendered/erd.png)
+![ERD](diagrams/erd.png)
 
 ---
 
@@ -610,4 +635,25 @@ graph LR
 
 ---
 
-*End of Technical Handover Package — v4.1.0*
+## 12. Changelog (v4.1.0 → v4.2.0)
+
+Since the original v4.1.0 handover document was generated, the application has progressed through several minor feature releases up to **v89**. The following major updates are now reflected in this v4.2.0 document:
+
+### 12.1 Role-Based Access Control (RBAC) Expansion
+- **AirportView Role Added:** A new read-only role (`AirportView`) was introduced to allow specific staff to monitor the Airport Arrivals dashboard without permission to modify inbound statuses or assign vehicles.
+- **Vendor Role Added:** An external `Vendor` role was introduced, granting access to the new Car Requirements and Transport Departure pages, enabling third-party transport vendors to view departure flight schedules without accessing sensitive VIP profile data.
+
+### 12.2 New Core Features & Pages
+- **Vehicle Allocation Summary (VASummary):** A new dashboard (`/transport/va-summary`) providing a high-level, real-time overview of fleet utilization and vehicle allocation.
+- **Drop-off Trip Tracking:** Introduced the `DropOffTrips` entity and corresponding UI to track single-use vehicle assignments. Unlike dedicated assignments, vehicles assigned to drop-off trips automatically return to the available pool upon trip completion.
+- **Monitored Participants Watch List:** A new security feature allowing the Control Room to maintain a list of monitored names/emails. If a monitored individual submits a departure shuttle request, the system automatically generates a `SyncAlert` for immediate review.
+- **Enhanced Departure Management:** The Departure Shuttle workflow was expanded with a confirmation popup displaying the hotel, pickup day, and pickup hour (with explicit AM/PM formatting). Hotel configuration was expanded with a `ShowInDepartureForm` flag to dynamically control dropdown options.
+- **Transport Guests & Airport Departures:** Added flight-grouped accordion layouts for Transport Guests, and a dedicated Airport Departures page featuring placard buttons and multi-stat summary cards.
+- **Live Event Clock:** Added a configurable `EventTimezone` and live event clock to the Platform Settings to ensure all users operate on the event's local time regardless of their physical location.
+
+### 12.3 Integration Hardening
+- **EventsAir Sync Resilience:** Hardened the sync engine with per-guest error isolation, `ChangeTracker` resets to prevent dirty entity leakage, and defensive handling against OAuth token rate-limiting.
+- **Aviationstack Guardrails:** Tightened date guards and added status-downgrade protection to prevent the Aviationstack API from inadvertently reverting a flight's landed status due to upstream data latency.
+
+---
+*End of Technical Handover Package — v4.2.0*
